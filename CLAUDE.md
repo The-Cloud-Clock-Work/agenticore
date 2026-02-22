@@ -12,10 +12,10 @@ Claude Code does the heavy lifting (coding, worktrees, telemetry).
 # Install
 pip install -e .
 
-# Run (SSE transport)
-AGENTICORE_TRANSPORT=sse python -m agenticore
+# Start server (SSE transport)
+AGENTICORE_TRANSPORT=sse agenticore serve
 
-# Run (stdio — for Claude Code CLI)
+# Start server (stdio — for Claude Code CLI)
 python -m agenticore
 
 # Docker (full stack)
@@ -47,7 +47,7 @@ Request → Router → Clone repo → claude --worktree -p "task" → OTEL → P
 |--------|---------|
 | `server.py` | FastMCP server (5 tools) + REST routes |
 | `config.py` | YAML config loader + env var overrides |
-| `profiles.py` | Load profile YAML → CLI flags |
+| `profiles.py` | Load profile packages → CLI flags |
 | `repos.py` | Git clone/fetch with flock |
 | `jobs.py` | Job store (Redis + file fallback) |
 | `runner.py` | Spawn Claude subprocess with OTEL env |
@@ -65,8 +65,8 @@ Request → Router → Clone repo → claude --worktree -p "task" → OTEL → P
 
 ## Profile System
 
-Profiles live in `~/.agenticore/profiles/` as YAML files.
-Default profiles bundled in `defaults/profiles/`.
+Profiles are directory-based packages with `profile.yml` + `.claude/` config.
+Default profiles bundled in `defaults/profiles/`. Custom profiles in `~/.agenticore/profiles/`.
 
 ## Redis + File Fallback
 

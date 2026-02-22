@@ -2,8 +2,9 @@
 
 Usage::
 
-    agenticore run                          Start the server
-    agenticore submit "fix the auth bug" --repo https://github.com/org/repo
+    agenticore run "fix the auth bug" --repo https://github.com/org/repo
+    agenticore run "add tests" --wait       Submit and wait for completion
+    agenticore serve                        Start the server
     agenticore jobs                         List recent jobs
     agenticore job <job_id>                 Get job details
     agenticore cancel <job_id>              Cancel a job
@@ -53,7 +54,7 @@ def _print_json(data: dict):
     print(json.dumps(data, indent=2))
 
 
-def _cmd_run(args):
+def _cmd_serve(args):
     """Start the server."""
     import os
 
@@ -67,7 +68,7 @@ def _cmd_run(args):
     main()
 
 
-def _cmd_submit(args):
+def _cmd_run(args):
     """Submit a task."""
     payload = {
         "task": args.task,
@@ -270,20 +271,20 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     # run
-    p_run = sub.add_parser("run", help="Start the server")
-    p_run.add_argument("--port", type=int, help="Server port")
-    p_run.add_argument("--host", help="Bind address")
+    p_run = sub.add_parser("run", help="Submit a task")
+    p_run.add_argument("task", help="Task description")
+    p_run.add_argument("--repo", "-r", help="GitHub repo URL")
+    p_run.add_argument("--profile", "-p", help="Execution profile")
+    p_run.add_argument("--base-ref", default="main", help="Base branch (default: main)")
+    p_run.add_argument("--wait", "-w", action="store_true", help="Wait for completion")
+    p_run.add_argument("--session-id", help="Claude session ID to resume")
     p_run.set_defaults(func=_cmd_run)
 
-    # submit
-    p_submit = sub.add_parser("submit", help="Submit a task")
-    p_submit.add_argument("task", help="Task description")
-    p_submit.add_argument("--repo", "-r", help="GitHub repo URL")
-    p_submit.add_argument("--profile", "-p", help="Execution profile")
-    p_submit.add_argument("--base-ref", default="main", help="Base branch (default: main)")
-    p_submit.add_argument("--wait", "-w", action="store_true", help="Wait for completion")
-    p_submit.add_argument("--session-id", help="Claude session ID to resume")
-    p_submit.set_defaults(func=_cmd_submit)
+    # serve
+    p_serve = sub.add_parser("serve", help="Start the server")
+    p_serve.add_argument("--port", type=int, help="Server port")
+    p_serve.add_argument("--host", help="Bind address")
+    p_serve.set_defaults(func=_cmd_serve)
 
     # jobs
     p_jobs = sub.add_parser("jobs", help="List recent jobs")

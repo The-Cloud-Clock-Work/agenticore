@@ -45,12 +45,15 @@ async def run_task(
 ) -> str:
     """Submit a task for Claude Code execution.
 
+    Async (fire and forget) by default — returns job ID immediately.
+    Pass wait=true to block until completion.
+
     Args:
         task: What Claude should do
         repo_url: GitHub repo URL to clone (optional — omit for local tasks)
         profile: Execution profile name (default: auto-routed)
         base_ref: Base branch (default: main)
-        wait: If true, wait for completion before returning
+        wait: Block until completion (default: false)
         session_id: Claude session ID to resume (optional)
 
     Returns:

@@ -30,8 +30,8 @@ Request (MCP or REST)
 ```bash
 pip install -e .
 
-# Run with SSE transport (HTTP server on :8200)
-AGENTICORE_TRANSPORT=sse python -m agenticore
+# Start server with SSE transport (HTTP server on :8200)
+AGENTICORE_TRANSPORT=sse agenticore serve
 
 # Or stdio transport (for use as an MCP server in Claude Code)
 python -m agenticore
@@ -155,11 +155,11 @@ All configuration is loaded from `~/.agenticore/config.yml` with environment var
 
 ## MCP Tools
 
-Connect agenticore as an MCP server in Claude Code or any MCP client.
+Connect agenticore as an MCP server in Claude Code or any MCP client. All task submissions are async (fire and forget) by default — pass `wait=true` to block until completion.
 
 | Tool | Description |
 |------|-------------|
-| `run_task` | Submit a task with `repo_url`, `task`, `profile`, `wait`, `session_id` |
+| `run_task` | Submit a task (async by default, `wait=true` to block) |
 | `get_job` | Get job status, output, artifacts, and PR URL |
 | `list_jobs` | List recent jobs with status |
 | `cancel_job` | Cancel a running job |
@@ -167,13 +167,18 @@ Connect agenticore as an MCP server in Claude Code or any MCP client.
 
 ## REST API
 
-When running with `AGENTICORE_TRANSPORT=sse`, the same operations are available over HTTP.
+When running with `AGENTICORE_TRANSPORT=sse`, the same operations are available over HTTP. Same semantics: async by default, `"wait": true` to block.
 
 ```bash
-# Submit a job
+# Submit a job (async — returns job ID immediately)
 curl -X POST http://localhost:8200/jobs \
   -H "Content-Type: application/json" \
-  -d '{"task": "fix the auth bug", "repo_url": "https://github.com/org/repo", "profile": "code"}'
+  -d '{"task": "fix the auth bug", "repo_url": "https://github.com/org/repo"}'
+
+# Submit and wait for completion
+curl -X POST http://localhost:8200/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"task": "fix the auth bug", "repo_url": "https://github.com/org/repo", "wait": true}'
 
 # Check status
 curl http://localhost:8200/jobs/{job_id}
@@ -195,9 +200,27 @@ If `AGENTICORE_API_KEYS` is set, include `X-API-Key: <key>` header or `?api_key=
 
 ## Profiles
 
-Profiles define how Claude Code runs. They map to CLI flags, prompt templates, and behavior settings.
+Profiles are directory-based packages that define how Claude Code runs. Each profile is a directory containing a `profile.yml` for agenticore-specific metadata, plus native Claude Code config files (`.claude/` directory and `.mcp.json`).
 
 **Default profiles** are bundled in `defaults/profiles/`. **Custom profiles** go in `~/.agenticore/profiles/` and override defaults with the same name.
+
+### Directory Structure
+
+```
+profiles/
+  code/
+    profile.yml              # Agenticore metadata
+    .claude/
+      CLAUDE.md              # Profile-specific instructions
+      settings.json          # Tool permissions
+    .mcp.json                # MCP server config (optional)
+  review/
+    profile.yml
+    .claude/
+      CLAUDE.md
+      settings.json
+    .mcp.json
+```
 
 ### `code` (default)
 
@@ -209,10 +232,12 @@ description: "Autonomous coding worker"
 claude:
   model: sonnet
   max_turns: 80
+  permission_mode: bypassPermissions
+  no_session_persistence: true
   output_format: json
-  permission_mode: dangerously-skip-permissions
-  timeout: 3600
   worktree: true
+  effort: high
+  timeout: 3600
 auto_pr: true
 ```
 
@@ -226,9 +251,11 @@ description: "Code review analyst"
 claude:
   model: haiku
   max_turns: 20
+  permission_mode: bypassPermissions
+  no_session_persistence: true
   output_format: json
-  permission_mode: dangerously-skip-permissions
   worktree: true
+  timeout: 1800
 auto_pr: false
 ```
 
@@ -240,23 +267,14 @@ auto_pr: false
 | `claude.max_turns` | Maximum agentic turns |
 | `claude.output_format` | Output format (`json`, `text`, `stream-json`) |
 | `claude.permission_mode` | Permission mode for tool use |
+| `claude.no_session_persistence` | Disable session persistence (default: true) |
+| `claude.effort` | Effort level (e.g. `high`) |
 | `claude.timeout` | Job timeout in seconds |
 | `claude.worktree` | Use git worktree (isolates from main branch) |
-| `append_prompt` | Template appended to the task prompt |
+| `claude.max_budget_usd` | Optional max budget in USD |
+| `claude.fallback_model` | Optional fallback model |
 | `auto_pr` | Create PR on successful completion |
-| `settings.permissions` | Tool permission allow/deny lists |
-
-### Template Variables
-
-Prompts support these placeholders:
-
-| Variable | Value |
-|----------|-------|
-| `{{TASK}}` | The submitted task text |
-| `{{REPO_URL}}` | Repository URL |
-| `{{BASE_REF}}` | Base branch name |
-| `{{JOB_ID}}` | Job identifier |
-| `{{PROFILE}}` | Profile name |
+| `extends` | Inherit from another profile |
 
 ## Architecture
 
@@ -266,13 +284,13 @@ Prompts support these placeholders:
 |--------|---------|
 | `server.py` | FastMCP server (5 tools) + REST routes + SSE |
 | `config.py` | YAML config loader with env var overrides |
-| `profiles.py` | Load profile YAML into CLI flags |
+| `profiles.py` | Load profile packages into CLI flags |
 | `repos.py` | Git clone/fetch with flock serialization |
 | `jobs.py` | Job store — Redis hash or JSON file fallback |
 | `runner.py` | Spawn Claude subprocess with OTEL env vars |
 | `router.py` | Profile selection (explicit or default) |
 | `pr.py` | Auto-PR via `git push` + `gh pr create` |
-| `cli.py` | CLI client (`agenticore run`, `agenticore jobs`, etc.) |
+| `cli.py` | CLI client (`agenticore run`, `agenticore serve`, etc.) |
 
 ### Container
 
@@ -300,16 +318,17 @@ Claude Code has native OTEL support. Agenticore sets the OTEL env vars on the su
 ## CLI
 
 ```bash
-agenticore version              # Print version
-agenticore status               # Server health check
-agenticore run "fix the bug" \  # Submit and wait
+agenticore run "fix the bug" \  # Submit task (async, returns job ID)
   --repo https://github.com/org/repo \
   --profile code
-agenticore submit "add tests"   # Submit async (returns job ID)
+agenticore run "add tests" --wait  # Submit and wait for completion
 agenticore jobs                 # List recent jobs
 agenticore job <id>             # Get job details
 agenticore cancel <id>          # Cancel a running job
 agenticore profiles             # List available profiles
+agenticore serve                # Start the server (SSE mode)
+agenticore status               # Server health check
+agenticore version              # Print version
 ```
 
 ## Development
