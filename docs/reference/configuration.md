@@ -110,8 +110,8 @@ github:
 |------|---------|
 | `~/.agenticore/config.yml` | Main configuration file |
 | `~/.agenticore/jobs/{id}.json` | Job data (file fallback) |
-| `~/.agenticore/profiles/*.yml` | Custom user profiles |
+| `~/.agenticore/profiles/*/profile.yml` | Custom user profiles |
 | `~/agenticore-repos/` | Default cloned repos root |
 | `~/agenticore-repos/{hash}/.lock` | Per-repo flock file |
 | `~/agenticore-repos/{hash}/repo/` | Cloned repository |
-| `defaults/profiles/*.yml` | Bundled default profiles |
+| `defaults/profiles/*/profile.yml` | Bundled default profiles |

@@ -88,7 +88,7 @@ List available execution profiles.
       "max_turns": 80,
       "worktree": true,
       "auto_pr": true,
-      "permission_mode": "dangerously-skip-permissions"
+      "permission_mode": "bypassPermissions"
     }
   ]
 }

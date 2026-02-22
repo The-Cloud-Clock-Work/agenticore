@@ -102,7 +102,7 @@ All configuration is loaded from `~/.agenticore/config.yml` with environment var
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENTICORE_TRANSPORT` | `stdio` | `sse` for HTTP server, `stdio` for MCP pipe |
+| `AGENTICORE_TRANSPORT` | `sse` | `sse` for HTTP server, `stdio` for MCP pipe |
 | `AGENTICORE_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` in Docker) |
 | `AGENTICORE_PORT` | `8200` | Server port |
 | `AGENTICORE_API_KEYS` | _(empty)_ | Comma-separated API keys for auth (optional) |
@@ -209,10 +209,12 @@ description: "Autonomous coding worker"
 claude:
   model: sonnet
   max_turns: 80
+  permission_mode: bypassPermissions
+  no_session_persistence: true
   output_format: json
-  permission_mode: dangerously-skip-permissions
-  timeout: 3600
   worktree: true
+  effort: high
+  timeout: 3600
 auto_pr: true
 ```
 
@@ -226,9 +228,11 @@ description: "Code review analyst"
 claude:
   model: haiku
   max_turns: 20
+  permission_mode: bypassPermissions
+  no_session_persistence: true
   output_format: json
-  permission_mode: dangerously-skip-permissions
   worktree: true
+  timeout: 1800
 auto_pr: false
 ```
 
@@ -302,9 +306,10 @@ Claude Code has native OTEL support. Agenticore sets the OTEL env vars on the su
 ```bash
 agenticore version              # Print version
 agenticore status               # Server health check
-agenticore run "fix the bug" \  # Submit and wait
+agenticore submit "fix the bug" \  # Submit and wait
   --repo https://github.com/org/repo \
-  --profile code
+  --profile code \
+  --wait
 agenticore submit "add tests"   # Submit async (returns job ID)
 agenticore jobs                 # List recent jobs
 agenticore job <id>             # Get job details

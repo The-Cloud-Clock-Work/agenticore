@@ -1,26 +1,30 @@
 # Profile System
 
-Profiles map to Claude Code CLI flags. Each profile is a YAML file that specifies
-the model, turn limits, permissions, prompt additions, and auto-PR behavior. The
+Profiles are directory-based packages that contain native Claude Code config files
+(`.claude/`, `.mcp.json`) plus a `profile.yml` for Agenticore metadata. They
+specify the model, turn limits, permissions, and auto-PR behavior. The
 repo's own `CLAUDE.md` stays untouched; profiles add behavior on top via
-`--append-system-prompt` and `--settings`.
+`--append-system-prompt` and the `.claude/` package materialized into the working directory.
 
 ## Profile YAML Schema
 
 | Field | Type | Default | CLI Flag | Description |
 |-------|------|---------|----------|-------------|
-| `name` | string | file stem | | Profile identifier |
+| `name` | string | dir name | | Profile identifier |
 | `description` | string | `""` | | Human-readable description |
 | `claude.model` | string | `sonnet` | `--model` | Claude model |
 | `claude.max_turns` | int | `80` | `--max-turns` | Max agentic turns |
 | `claude.output_format` | string | `json` | `--output-format` | Output format |
-| `claude.permission_mode` | string | `dangerously-skip-permissions` | `--dangerously-skip-permissions` | Permission mode |
+| `claude.permission_mode` | string | `bypassPermissions` | `--permission-mode` | Permission mode |
+| `claude.no_session_persistence` | bool | `true` | `--no-session-persistence` | Disable session persistence |
 | `claude.timeout` | int | `3600` | (process timeout) | Max seconds |
 | `claude.worktree` | bool | `true` | `--worktree` | Use worktree isolation |
-| `append_prompt` | string | `""` | `--append-system-prompt` | Additional system prompt (supports templates) |
-| `settings.permissions` | object | `{}` | `--settings` | Permission allowlist |
-| `claude_md` | string/null | `null` | | Custom CLAUDE.md content (reserved) |
+| `claude.effort` | string/null | `null` | `--effort` | Effort level (e.g. `high`) |
+| `claude.max_budget_usd` | float/null | `null` | `--max-budget-usd` | Cost ceiling in USD |
+| `claude.fallback_model` | string/null | `null` | `--fallback-model` | Fallback model on primary failure |
+| `extends` | string/null | `null` | | Inherit from another profile |
 | `auto_pr` | bool | `true` | | Create PR on success |
+| `append_prompt` | string | `""` | `--append-system-prompt` | Additional system prompt (legacy profiles only) |
 
 ## Bundled Profiles
 
@@ -35,28 +39,12 @@ description: "Autonomous coding worker"
 claude:
   model: sonnet
   max_turns: 80
+  permission_mode: bypassPermissions
+  no_session_persistence: true
   output_format: json
-  permission_mode: dangerously-skip-permissions
-  timeout: 3600
   worktree: true
-
-append_prompt: |
-  ## Job Context
-  Task: {{TASK}}
-  Repository: {{REPO_URL}}
-  Base branch: {{BASE_REF}}
-
-  ## Guidelines
-  - Commit with descriptive messages
-  - Do NOT create PRs — the system handles that
-
-settings:
-  permissions:
-    allow:
-      - "Bash(*)"
-      - "Read(*)"
-      - "Write(*)"
-      - "Edit(*)"
+  effort: high
+  timeout: 3600
 
 auto_pr: true
 ```
@@ -72,34 +60,37 @@ description: "Code review analyst"
 claude:
   model: haiku
   max_turns: 20
+  permission_mode: bypassPermissions
+  no_session_persistence: true
   output_format: json
-  permission_mode: dangerously-skip-permissions
   worktree: true
-
-append_prompt: |
-  ## Task
-  {{TASK}}
-
-  ## Guidelines
-  - Do NOT modify files
-  - Provide structured feedback
+  timeout: 1800
 
 auto_pr: false
 ```
 
 ## Custom Profiles
 
-Place custom profile YAML files in `~/.agenticore/profiles/`. User profiles
-override bundled defaults with the same name.
+Place custom profile directories in `~/.agenticore/profiles/`. Each profile is a
+directory containing a `profile.yml` (and optionally `.claude/`, `.mcp.json`).
+User profiles override bundled defaults with the same name.
 
 ```
 defaults/profiles/          <-- bundled (shipped with package)
-    code.yml
-    review.yml
+    code/
+        profile.yml
+        .claude/
+            CLAUDE.md
+    review/
+        profile.yml
+        .claude/
+            CLAUDE.md
 
 ~/.agenticore/profiles/     <-- user overrides
-    code.yml                <-- overrides bundled code.yml
-    deploy.yml              <-- new custom profile
+    code/                   <-- overrides bundled code/
+        profile.yml
+    deploy/                 <-- new custom profile
+        profile.yml
 ```
 
 Loading order: bundled defaults first, then user profiles. Same-name user
@@ -124,8 +115,9 @@ Templates use simple string replacement (`{{KEY}}` to value).
 
 ```
 +------------------+
-|  Profile YAML    |
-|  code.yml        |
+|  Profile dir     |
+|  code/           |
+|  profile.yml     |
 +--------+---------+
          |
          v
@@ -140,9 +132,10 @@ Templates use simple string replacement (`{{KEY}}` to value).
 |         --model sonnet                            |
 |         --max-turns 80                            |
 |         --output-format json                      |
-|         --dangerously-skip-permissions            |
-|         --append-system-prompt "## Job Context..."|
-|         --settings '{"permissions":{...}}'        |
+|         --permission-mode bypassPermissions       |
+|         --no-session-persistence                  |
+|         --effort high                             |
+|         --append-system-prompt "Job: ... | ..."   |
 |         -p "fix the auth bug"                     |
 +---------------------------------------------------+
 ```
