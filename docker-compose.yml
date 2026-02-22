@@ -1,76 +1,89 @@
+# Agenticore — local development stack.
+#
+# Runs agenticore alongside Redis, PostgreSQL, and an OTEL Collector.
+# All config lives in .env (copy .env.example to get started).
+#
+# Usage:
+#   cp .env.example .env
+#   docker compose up --build -d
+
 services:
   agenticore:
+    container_name: agenticore
     build: .
+    image: agenticore:latest
     ports:
-      - "${AGENTICORE_PORT:-8200}:8200"
-    environment:
-      - AGENTICORE_TRANSPORT=sse
-      - AGENTICORE_HOST=0.0.0.0
-      - AGENTICORE_PORT=8200
-      - AGENTICORE_API_KEYS=${AGENTICORE_API_KEYS:-}
-      - REDIS_URL=redis://redis:6379/0
-      - REDIS_KEY_PREFIX=agenticore
-      - AGENTICORE_REPOS_ROOT=/root/agenticore-repos
-      - AGENTICORE_DEFAULT_PROFILE=${AGENTICORE_DEFAULT_PROFILE:-code}
-      - AGENTICORE_CLAUDE_BINARY=${AGENTICORE_CLAUDE_BINARY:-claude}
-      - AGENTICORE_CLAUDE_CONFIG_DIR=${AGENTICORE_CLAUDE_CONFIG_DIR:-}
-      - AGENTICORE_OTEL_ENABLED=${AGENTICORE_OTEL_ENABLED:-true}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - POSTGRES_URL=postgresql://agenticore:agenticore@postgres:5432/agenticore
+      - "8200:8200"
     volumes:
-      - repos-data:/root/agenticore-repos
-      - jobs-data:/root/.agenticore/jobs
+      - ac_repos_data:/root/agenticore-repos
+      - ac_jobs_data:/root/.agenticore/jobs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file: .env
+    networks:
+      - ac-network
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8200/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
   redis:
+    container_name: agenticore-redis
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    command: redis-server --appendonly yes
     volumes:
-      - redis-data:/data
+      - ac_redis_data:/data
+    networks:
+      - ac-network
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
-    restart: unless-stopped
 
   postgres:
+    container_name: agenticore-postgres
     image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: agenticore
-      POSTGRES_USER: agenticore
-      POSTGRES_PASSWORD: agenticore
-    ports:
-      - "5432:5432"
+    env_file: .env
     volumes:
-      - pg-data:/var/lib/postgresql/data
+      - ac_postgres_data:/var/lib/postgresql/data
+    networks:
+      - ac-network
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agenticore"]
-      interval: 5s
-      timeout: 3s
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
       retries: 5
-    restart: unless-stopped
 
   otel-collector:
+    container_name: agenticore-otel
     image: otel/opentelemetry-collector-contrib:latest
-    ports:
-      - "4317:4317"   # gRPC
-      - "4318:4318"   # HTTP
     volumes:
       - ./otel-collector-config.yml:/etc/otelcol-contrib/config.yaml
+    networks:
+      - ac-network
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  redis-data:
-  pg-data:
-  repos-data:
-  jobs-data:
+  ac_redis_data:
+  ac_postgres_data:
+  ac_repos_data:
+  ac_jobs_data:
+
+networks:
+  ac-network:
+    driver: bridge
