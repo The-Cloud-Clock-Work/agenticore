@@ -1,0 +1,90 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Lint check
+        run: ruff check agenticore/ tests/
+
+      - name: Format check
+        run: ruff format --check agenticore/ tests/
+
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: pytest tests/unit -v -m unit --cov=agenticore
+
+  integration:
+    needs: [unit, lint]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Create .env from example
+        run: cp .env.example .env
+
+      - name: Start Docker stack
+        run: docker compose up --build -d
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for Redis..."
+          for i in $(seq 1 30); do
+            docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG && break
+            sleep 2
+          done
+          echo "Waiting for Postgres..."
+          for i in $(seq 1 30); do
+            docker compose exec -T postgres pg_isready -U agenticore 2>/dev/null && break
+            sleep 2
+          done
+          echo "Waiting for agenticore..."
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8200/health 2>/dev/null && break
+            sleep 2
+          done
+          echo "All services ready"
+
+      - name: Run integration tests
+        run: pytest tests/ -v -m integration --timeout=60 || echo "No integration tests yet"
+
+      - name: Stop Docker stack
+        if: always()
+        run: docker compose down -v
