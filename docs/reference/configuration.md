@@ -31,7 +31,7 @@ claude:
   binary: claude
   timeout: 3600
   default_profile: code
-  home_path: ""
+  config_dir: ""
 
 repos:
   root: ~/agenticore-repos
@@ -71,7 +71,7 @@ github:
 | `AGENTICORE_CLAUDE_BINARY` | `claude.binary` | `claude` | Path to Claude CLI binary |
 | `AGENTICORE_CLAUDE_TIMEOUT` | `claude.timeout` | `3600` | Max seconds per job |
 | `AGENTICORE_DEFAULT_PROFILE` | `claude.default_profile` | `code` | Default execution profile |
-| `AGENTICORE_CLAUDE_HOME_PATH` | `claude.home_path` | (none) | Custom `CLAUDE_HOME` directory |
+| `AGENTICORE_CLAUDE_CONFIG_DIR` | `claude.config_dir` | (none) | Custom `CLAUDE_CONFIG_DIR` directory |
 
 ### Repos
 

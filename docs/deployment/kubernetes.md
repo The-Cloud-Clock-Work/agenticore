@@ -56,7 +56,7 @@ helm/agenticore/
 | `claude.binary` | `claude` | Claude CLI binary |
 | `claude.timeout` | `3600` | Max seconds per job |
 | `claude.defaultProfile` | `code` | Default profile |
-| `claude.homePath` | `""` | Custom CLAUDE_HOME |
+| `claude.configDir` | `""` | Custom CLAUDE_CONFIG_DIR |
 
 ### Redis
 
@@ -179,7 +179,7 @@ Sensitive values are stored in a Kubernetes Secret:
 |-----|--------|-------------|
 | `AGENTICORE_API_KEYS` | `server.apiKeys` | API authentication keys |
 | `GITHUB_TOKEN` | `github.token` | GitHub token for auto-PR |
-| `AGENTICORE_CLAUDE_HOME_PATH` | `claude.homePath` | Claude home path |
+| `AGENTICORE_CLAUDE_CONFIG_DIR` | `claude.configDir` | Claude config directory |
 
 All values are base64-encoded. The pod loads them via `secretRef` in `envFrom`.
 

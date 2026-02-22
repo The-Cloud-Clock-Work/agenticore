@@ -13,10 +13,12 @@ services:
       - AGENTICORE_REPOS_ROOT=/root/agenticore-repos
       - AGENTICORE_DEFAULT_PROFILE=${AGENTICORE_DEFAULT_PROFILE:-code}
       - AGENTICORE_CLAUDE_BINARY=${AGENTICORE_CLAUDE_BINARY:-claude}
+      - AGENTICORE_CLAUDE_CONFIG_DIR=${AGENTICORE_CLAUDE_CONFIG_DIR:-}
       - AGENTICORE_OTEL_ENABLED=${AGENTICORE_OTEL_ENABLED:-true}
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - POSTGRES_URL=postgresql://agenticore:agenticore@postgres:5432/agenticore
     volumes:
       - repos-data:/root/agenticore-repos
       - jobs-data:/root/.agenticore/jobs

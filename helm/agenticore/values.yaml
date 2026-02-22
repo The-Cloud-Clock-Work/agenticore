@@ -21,7 +21,7 @@ claude:
   binary: claude
   timeout: 3600
   defaultProfile: code
-  homePath: ""
+  configDir: ""
 
 redis:
   url: "redis://redis:6379/0"

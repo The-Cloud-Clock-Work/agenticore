@@ -77,7 +77,7 @@ The `run_job()` function in `runner.py` executes the following steps:
  5. Build CLI args from profile (build_cli_args)
  6. Construct command: [claude_binary] + cli_args
  7. Append --resume session_id (if session_id provided)
- 8. Build environment (inherit + OTEL vars + CLAUDE_HOME + GITHUB_TOKEN)
+ 8. Build environment (inherit + OTEL vars + CLAUDE_CONFIG_DIR + GITHUB_TOKEN)
  9. Spawn subprocess (asyncio.create_subprocess_exec)
 10. Store PID in job record
 11. Wait for completion with timeout (profile.claude.timeout)

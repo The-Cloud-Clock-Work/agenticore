@@ -45,8 +45,8 @@ def _build_env(cwd: Optional[Path] = None) -> dict:
     env.update(_build_otel_env())
 
     cfg = get_config()
-    if cfg.claude.home_path:
-        env["CLAUDE_HOME"] = cfg.claude.home_path
+    if cfg.claude.config_dir:
+        env["CLAUDE_CONFIG_DIR"] = cfg.claude.config_dir
 
     if cfg.github.token:
         env["GITHUB_TOKEN"] = cfg.github.token

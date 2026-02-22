@@ -39,7 +39,7 @@ class ClaudeConfig:
     binary: str = "claude"
     timeout: int = 3600
     default_profile: str = "code"
-    home_path: str = ""
+    config_dir: str = ""
 
 
 @dataclass
@@ -127,7 +127,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         binary=_env("AGENTICORE_CLAUDE_BINARY", claude_raw.get("binary", "claude")),
         timeout=_env_int("AGENTICORE_CLAUDE_TIMEOUT", str(claude_raw.get("timeout", 3600))),
         default_profile=_env("AGENTICORE_DEFAULT_PROFILE", claude_raw.get("default_profile", "code")),
-        home_path=_env("AGENTICORE_CLAUDE_HOME_PATH", claude_raw.get("home_path", "")),
+        config_dir=_env("AGENTICORE_CLAUDE_CONFIG_DIR", claude_raw.get("config_dir", "")),
     )
 
     # Server — env overrides
