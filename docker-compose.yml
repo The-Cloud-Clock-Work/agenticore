@@ -1,0 +1,74 @@
+services:
+  agenticore:
+    build: .
+    ports:
+      - "${AGENTICORE_PORT:-8200}:8200"
+    environment:
+      - AGENTICORE_TRANSPORT=sse
+      - AGENTICORE_HOST=0.0.0.0
+      - AGENTICORE_PORT=8200
+      - AGENTICORE_API_KEYS=${AGENTICORE_API_KEYS:-}
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_KEY_PREFIX=agenticore
+      - AGENTICORE_REPOS_ROOT=/root/agenticore-repos
+      - AGENTICORE_DEFAULT_PROFILE=${AGENTICORE_DEFAULT_PROFILE:-code}
+      - AGENTICORE_CLAUDE_BINARY=${AGENTICORE_CLAUDE_BINARY:-claude}
+      - AGENTICORE_OTEL_ENABLED=${AGENTICORE_OTEL_ENABLED:-true}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    volumes:
+      - repos-data:/root/agenticore-repos
+      - jobs-data:/root/.agenticore/jobs
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agenticore
+      POSTGRES_USER: agenticore
+      POSTGRES_PASSWORD: agenticore
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agenticore"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    ports:
+      - "4317:4317"   # gRPC
+      - "4318:4318"   # HTTP
+    volumes:
+      - ./otel-collector-config.yml:/etc/otelcol-contrib/config.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  pg-data:
+  repos-data:
+  jobs-data:

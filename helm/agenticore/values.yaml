@@ -1,0 +1,84 @@
+# Agenticore Helm values
+
+replicaCount: 1
+
+image:
+  repository: agenticore
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8200
+
+server:
+  host: "0.0.0.0"
+  port: 8200
+  transport: sse
+  apiKeys: ""
+
+claude:
+  binary: claude
+  timeout: 3600
+  defaultProfile: code
+  homePath: ""
+
+redis:
+  url: "redis://redis:6379/0"
+  keyPrefix: agenticore
+
+otel:
+  enabled: true
+  endpoint: "http://otel-collector:4317"
+  protocol: grpc
+  logPrompts: false
+  logToolDetails: true
+
+github:
+  token: ""
+
+repos:
+  root: /data/repos
+  maxParallelJobs: 3
+  jobTtlSeconds: 86400
+
+persistence:
+  repos:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+  jobs:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Deploy Redis as a subchart dependency
+redis-standalone:
+  enabled: true
+  image: redis:7-alpine
+  port: 6379
+
+# Deploy OTEL collector
+otelCollector:
+  enabled: true
+  image: otel/opentelemetry-collector-contrib:latest
+
+# Deploy Postgres for OTEL sink
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  database: agenticore
+  user: agenticore
+  password: agenticore

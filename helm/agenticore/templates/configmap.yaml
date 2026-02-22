@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agenticore.fullname" . }}
+  labels:
+    {{- include "agenticore.labels" . | nindent 4 }}
+data:
+  AGENTICORE_TRANSPORT: {{ .Values.server.transport | quote }}
+  AGENTICORE_HOST: {{ .Values.server.host | quote }}
+  AGENTICORE_PORT: {{ .Values.server.port | quote }}
+  AGENTICORE_REPOS_ROOT: {{ .Values.repos.root | quote }}
+  AGENTICORE_MAX_PARALLEL_JOBS: {{ .Values.repos.maxParallelJobs | quote }}
+  AGENTICORE_JOB_TTL: {{ .Values.repos.jobTtlSeconds | quote }}
+  AGENTICORE_CLAUDE_BINARY: {{ .Values.claude.binary | quote }}
+  AGENTICORE_CLAUDE_TIMEOUT: {{ .Values.claude.timeout | quote }}
+  AGENTICORE_DEFAULT_PROFILE: {{ .Values.claude.defaultProfile | quote }}
+  AGENTICORE_OTEL_ENABLED: {{ .Values.otel.enabled | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.otel.endpoint | quote }}
+  OTEL_EXPORTER_OTLP_PROTOCOL: {{ .Values.otel.protocol | quote }}
+  AGENTICORE_OTEL_LOG_PROMPTS: {{ .Values.otel.logPrompts | quote }}
+  AGENTICORE_OTEL_LOG_TOOL_DETAILS: {{ .Values.otel.logToolDetails | quote }}
+  REDIS_URL: {{ .Values.redis.url | quote }}
+  REDIS_KEY_PREFIX: {{ .Values.redis.keyPrefix | quote }}

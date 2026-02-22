@@ -1,0 +1,11 @@
+apiVersion: v2
+name: agenticore
+description: Claude Code runner and orchestrator
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - claude
+  - ai
+  - orchestrator
+  - mcp

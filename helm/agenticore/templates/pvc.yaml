@@ -1,0 +1,35 @@
+{{- if .Values.persistence.repos.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "agenticore.fullname" . }}-repos
+  labels:
+    {{- include "agenticore.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.repos.size }}
+  {{- if .Values.persistence.repos.storageClass }}
+  storageClassName: {{ .Values.persistence.repos.storageClass | quote }}
+  {{- end }}
+{{- end }}
+---
+{{- if .Values.persistence.jobs.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "agenticore.fullname" . }}-jobs
+  labels:
+    {{- include "agenticore.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.jobs.size }}
+  {{- if .Values.persistence.jobs.storageClass }}
+  storageClassName: {{ .Values.persistence.jobs.storageClass | quote }}
+  {{- end }}
+{{- end }}

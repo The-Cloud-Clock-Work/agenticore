@@ -1,0 +1,19 @@
+name: review
+description: "Code review analyst"
+
+claude:
+  model: haiku
+  max_turns: 20
+  output_format: json
+  permission_mode: dangerously-skip-permissions
+  worktree: true
+
+append_prompt: |
+  ## Task
+  {{TASK}}
+
+  ## Guidelines
+  - Do NOT modify files
+  - Provide structured feedback
+
+auto_pr: false
