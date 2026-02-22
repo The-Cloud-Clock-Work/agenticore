@@ -14,7 +14,7 @@ from typing import Optional
 
 from agenticore.config import get_config
 from agenticore.jobs import Job, create_job, update_job
-from agenticore.profiles import build_cli_args, get_profile
+from agenticore.profiles import build_cli_args, get_profile, materialize_profile
 from agenticore.repos import ensure_clone, get_default_branch
 
 
@@ -79,6 +79,15 @@ async def run_job(job: Job) -> Job:
             base_ref = base_ref or get_default_branch(cwd)
         except Exception as e:
             return update_job(job.id, status="failed", error=f"Clone failed: {e}", ended_at=_now_iso())
+
+    # Materialize profile's .claude/ package into working directory
+    if cwd:
+        try:
+            materialize_profile(profile, Path(cwd) if not isinstance(cwd, Path) else cwd)
+        except Exception as e:
+            return update_job(
+                job.id, status="failed", error=f"Profile materialization failed: {e}", ended_at=_now_iso()
+            )
 
     # Build template variables
     variables = {

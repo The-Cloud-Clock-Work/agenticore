@@ -1,0 +1,13 @@
+name: review
+description: "Code review analyst"
+
+claude:
+  model: haiku
+  max_turns: 20
+  permission_mode: bypassPermissions
+  no_session_persistence: true
+  output_format: json
+  worktree: true
+  timeout: 1800
+
+auto_pr: false

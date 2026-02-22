@@ -1,0 +1,14 @@
+name: code
+description: "Autonomous coding worker"
+
+claude:
+  model: sonnet
+  max_turns: 80
+  permission_mode: bypassPermissions
+  no_session_persistence: true
+  output_format: json
+  worktree: true
+  effort: high
+  timeout: 3600
+
+auto_pr: true
