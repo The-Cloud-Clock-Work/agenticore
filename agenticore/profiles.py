@@ -20,6 +20,7 @@ warning and auto-converted to the new structure in memory.
 
 import json
 import logging
+import os
 import shutil
 import warnings
 from dataclasses import dataclass, field
@@ -77,6 +78,14 @@ def _defaults_dir() -> Path:
 def _user_profiles_dir() -> Path:
     """User profile directory: ~/.agenticore/profiles/"""
     return Path.home() / ".agenticore" / "profiles"
+
+
+def _agentihooks_profiles_dir() -> Optional[Path]:
+    """External agentihooks profiles dir, set via AGENTICORE_AGENTIHOOKS_PATH."""
+    p = os.getenv("AGENTICORE_AGENTIHOOKS_PATH", "")
+    if p:
+        return Path(p) / "profiles"
+    return None
 
 
 # ── Loading ───────────────────────────────────────────────────────────────
@@ -205,7 +214,13 @@ def load_profiles() -> Dict[str, Profile]:
     """
     profiles: Dict[str, Profile] = {}
 
-    for base_dir in (_defaults_dir(), _user_profiles_dir()):
+    search_dirs = [_defaults_dir()]
+    agentihooks_dir = _agentihooks_profiles_dir()
+    if agentihooks_dir:
+        search_dirs.append(agentihooks_dir)
+    search_dirs.append(_user_profiles_dir())
+
+    for base_dir in search_dirs:
         if not base_dir.exists():
             continue
 

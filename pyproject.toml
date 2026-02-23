@@ -22,6 +22,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "httpx>=0.25",
     "pyyaml>=6.0",
+    "langfuse>=2.0,<3",
 ]
 
 [project.urls]

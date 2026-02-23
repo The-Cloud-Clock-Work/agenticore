@@ -6,7 +6,6 @@ error handling, and the arg→API translation layer.
 
 import json
 import subprocess
-import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -130,12 +129,17 @@ class TestArgParsing:
 
     def test_run_all_flags_combined(self):
         args = _parse(
-            "run", "do it",
-            "-r", "https://github.com/org/repo",
-            "-p", "code",
-            "--base-ref", "staging",
+            "run",
+            "do it",
+            "-r",
+            "https://github.com/org/repo",
+            "-p",
+            "code",
+            "--base-ref",
+            "staging",
             "--wait",
-            "--session-id", "s123",
+            "--session-id",
+            "s123",
         )
         assert args.task == "do it"
         assert args.repo == "https://github.com/org/repo"
@@ -318,7 +322,12 @@ class TestCmdRun:
             "job": {"id": "job-003", "status": "succeeded", "profile": "code", "output": "Done!"},
         }
         args = SimpleNamespace(
-            task="deploy", repo=None, profile=None, base_ref="main", wait=True, session_id=None,
+            task="deploy",
+            repo=None,
+            profile=None,
+            base_ref="main",
+            wait=True,
+            session_id=None,
         )
         _cmd_run(args)
 
@@ -336,7 +345,12 @@ class TestCmdRun:
             "job": {"id": "job-004", "status": "succeeded", "profile": "code"},
         }
         args = SimpleNamespace(
-            task="task", repo=None, profile=None, base_ref="main", wait=True, session_id=None,
+            task="task",
+            repo=None,
+            profile=None,
+            base_ref="main",
+            wait=True,
+            session_id=None,
         )
         _cmd_run(args)
         out = capsys.readouterr().out
@@ -346,7 +360,12 @@ class TestCmdRun:
     def test_submit_api_error(self, mock_post, capsys):
         mock_post.return_value = {"success": False, "error": "bad request"}
         args = SimpleNamespace(
-            task="task", repo=None, profile=None, base_ref="main", wait=False, session_id=None,
+            task="task",
+            repo=None,
+            profile=None,
+            base_ref="main",
+            wait=False,
+            session_id=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             _cmd_run(args)
@@ -356,7 +375,12 @@ class TestCmdRun:
     @patch("agenticore.cli._api_post", side_effect=ConnectionError("refused"))
     def test_submit_connection_error(self, mock_post, capsys):
         args = SimpleNamespace(
-            task="task", repo=None, profile=None, base_ref="main", wait=False, session_id=None,
+            task="task",
+            repo=None,
+            profile=None,
+            base_ref="main",
+            wait=False,
+            session_id=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             _cmd_run(args)
@@ -372,7 +396,12 @@ class TestCmdRun:
             "job": {"id": "job-005", "status": "queued", "profile": "code"},
         }
         args = SimpleNamespace(
-            task="task", repo=None, profile=None, base_ref="main", wait=False, session_id=None,
+            task="task",
+            repo=None,
+            profile=None,
+            base_ref="main",
+            wait=False,
+            session_id=None,
         )
         _cmd_run(args)
         payload = mock_post.call_args[0][1]
@@ -385,7 +414,12 @@ class TestCmdRun:
             "job": {"id": "job-006", "status": "queued", "profile": "code"},
         }
         args = SimpleNamespace(
-            task="task", repo=None, profile=None, base_ref="main", wait=False, session_id="s-abc",
+            task="task",
+            repo=None,
+            profile=None,
+            base_ref="main",
+            wait=False,
+            session_id="s-abc",
         )
         _cmd_run(args)
         payload = mock_post.call_args[0][1]
@@ -398,7 +432,12 @@ class TestCmdRun:
             "job": {"id": "j", "status": "queued", "profile": "code"},
         }
         args = SimpleNamespace(
-            task="t", repo=None, profile=None, base_ref="main", wait=False, session_id=None,
+            task="t",
+            repo=None,
+            profile=None,
+            base_ref="main",
+            wait=False,
+            session_id=None,
         )
         _cmd_run(args)
         payload = mock_post.call_args[0][1]
@@ -417,6 +456,7 @@ class TestCmdServe:
                 args = SimpleNamespace(port=9000, host=None)
                 _cmd_serve(args)
                 import os
+
                 assert os.environ["AGENTICORE_PORT"] == "9000"
                 mock_main.assert_called_once()
 
@@ -426,6 +466,7 @@ class TestCmdServe:
                 args = SimpleNamespace(port=None, host="0.0.0.0")
                 _cmd_serve(args)
                 import os
+
                 assert os.environ["AGENTICORE_HOST"] == "0.0.0.0"
                 mock_main.assert_called_once()
 
@@ -680,7 +721,13 @@ class TestCmdProfiles:
         mock_get.return_value = {
             "success": True,
             "profiles": [
-                {"name": "code", "description": "Autonomous coding", "model": "sonnet", "max_turns": 80, "auto_pr": True},
+                {
+                    "name": "code",
+                    "description": "Autonomous coding",
+                    "model": "sonnet",
+                    "max_turns": 80,
+                    "auto_pr": True,
+                },
                 {"name": "review", "description": "Code reviewer", "model": "haiku", "max_turns": 20, "auto_pr": False},
             ],
         }

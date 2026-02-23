@@ -8,20 +8,24 @@ to PostgreSQL, where data can be queried by Grafana or Langfuse.
 
 ```
 +-------------------+     +-------------------+     +-------------------+
-|  Claude Code      |     |  OTEL Collector   |     |  PostgreSQL       |
-|  (subprocess)     |---->|  :4317 (gRPC)     |---->|  :5432            |
-|                   |     |  :4318 (HTTP)     |     |  agenticore db    |
-|  OTEL env vars    |     |  batch processor  |     |                   |
-|  injected by      |     |                   |     |  Queryable with   |
-|  runner.py        |     |                   |     |  standard SQL     |
-+-------------------+     +-------------------+     +-------------------+
-                                                            |
-                                                            v
-                                                    +-------+-------+
-                                                    |  Grafana /    |
-                                                    |  Langfuse     |
-                                                    +---------------+
+|  Claude Code      |     |  OTEL Collector   |---->|  Langfuse         |
+|  (subprocess)     |---->|  :4317 (gRPC)     |     |  (otlphttp)       |
+|                   |     |  :4318 (HTTP)     |     +-------------------+
+|  OTEL env vars    |     |  batch processor  |
+|  injected by      |     |                   |---->+-------------------+
+|  runner.py        |     |                   |     |  PostgreSQL       |
++-------------------+     +-------------------+     |  :5432            |
+                                                    +-------------------+
++-------------------+
+|  runner.py        |     (Langfuse SDK — direct)
+|  telemetry.py     |---->  Job traces + session transcript spans
++-------------------+
 ```
+
+There are **two paths** into Langfuse:
+
+1. **OTEL Collector** exports Claude's native OTEL data (traces, metrics, logs) via `otlphttp/langfuse`
+2. **Langfuse SDK** (in `telemetry.py`) creates job-level traces and ships Claude session transcripts as spans
 
 ## Collector Configuration
 
@@ -64,10 +68,22 @@ exporters:
 
   debug:
     verbosity: basic
+
+  otlphttp/langfuse:
+    endpoint: ${env:LANGFUSE_HOST}/api/public/otel
+    headers:
+      Authorization: "Basic ${env:LANGFUSE_BASIC_AUTH}"
 ```
 
 - **postgresql** — Writes telemetry to PostgreSQL tables
 - **debug** — Logs telemetry to collector stdout (for development)
+- **otlphttp/langfuse** — Exports to Langfuse's OTEL ingestion endpoint
+
+The Langfuse exporter requires two environment variables on the collector container:
+- `LANGFUSE_HOST` — e.g. `https://cloud.langfuse.com`
+- `LANGFUSE_BASIC_AUTH` — Base64 encoding of `public_key:secret_key`
+
+The collector service has `env_file: .env` so these are sourced from the project `.env` file.
 
 ### Service Pipelines
 
@@ -77,19 +93,20 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlphttp/langfuse]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlphttp/langfuse]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlphttp/langfuse]
 ```
 
-All three signal types (traces, metrics, logs) use the same receive-process-export
-pipeline. Switch exporters from `debug` to `postgresql` for production.
+All three signal types (traces, metrics, logs) are exported to both `debug` (stdout)
+and `otlphttp/langfuse`. Add `postgresql` to the exporters list when you want SQL-queryable
+storage.
 
 ## OTEL Configuration
 
@@ -119,10 +136,36 @@ User: agenticore
 Password: agenticore
 ```
 
-## Connecting Langfuse
+## Langfuse Integration
 
-Langfuse can consume OTEL data from the same PostgreSQL instance or be configured
-as an additional exporter in the collector config.
+Langfuse receives data through two channels:
+
+### 1. OTEL Collector (native Claude telemetry)
+
+The `otlphttp/langfuse` exporter sends traces, metrics, and logs from Claude Code's
+native OTEL output directly to Langfuse. This is configured in `otel-collector-config.yml`
+and requires `LANGFUSE_HOST` + `LANGFUSE_BASIC_AUTH` in `.env`.
+
+### 2. Langfuse SDK (job traces + transcripts)
+
+The `telemetry.py` module uses the Langfuse Python SDK to:
+
+- **Create a trace** for each job (`start_job_trace`) with task, profile, and repo metadata
+- **Ship the Claude session transcript** as individual spans (`ship_transcript`) — each user/assistant turn becomes a span on the trace
+- **Finalize the trace** (`end_job_trace`) with exit code, status, PR URL, and timing
+
+This requires `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` in `.env`. The SDK is
+non-fatal: if credentials are missing or Langfuse is unreachable, the runner continues
+normally.
+
+### Environment variables
+
+| Variable | Used by | Description |
+|----------|---------|-------------|
+| `LANGFUSE_HOST` | Collector + SDK | Langfuse API host |
+| `LANGFUSE_PUBLIC_KEY` | SDK | Enables SDK tracing |
+| `LANGFUSE_SECRET_KEY` | SDK | SDK authentication |
+| `LANGFUSE_BASIC_AUTH` | Collector | Base64(`public_key:secret_key`) for OTLP auth |
 
 ## Disabling OTEL
 

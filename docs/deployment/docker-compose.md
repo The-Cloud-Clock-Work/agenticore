@@ -35,7 +35,7 @@ The server is available at `http://localhost:8200`.
 | `agenticore` | Built from `Dockerfile` | 8200 | `repos-data`, `jobs-data` | (none) |
 | `redis` | `redis:7-alpine` | 6379 | `redis-data` | `redis-cli ping` |
 | `postgres` | `postgres:16-alpine` | 5432 | `pg-data` | `pg_isready -U agenticore` |
-| `otel-collector` | `otel/opentelemetry-collector-contrib:latest` | 4317, 4318 | config mount | (none) |
+| `otel-collector` | `otel/opentelemetry-collector-contrib:latest` | 4317, 4318 | config mount, `env_file: .env` | (none) |
 
 ### Startup Order
 
@@ -92,6 +92,14 @@ The compose file passes these to the `agenticore` service:
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-collector:4317` | Collector endpoint |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | OTLP protocol |
 | `GITHUB_TOKEN` | from `.env` | GitHub token for auto-PR |
+| `LANGFUSE_HOST` | from `.env` | Langfuse API host |
+| `LANGFUSE_PUBLIC_KEY` | from `.env` | Langfuse public key (SDK) |
+| `LANGFUSE_SECRET_KEY` | from `.env` | Langfuse secret key (SDK) |
+| `LANGFUSE_BASIC_AUTH` | from `.env` | Base64 auth for OTEL collector |
+| `AGENTICORE_AGENTIHOOKS_PATH` | from `.env` | Path to agentihooks repo |
+
+The `otel-collector` service also reads from `.env` (via `env_file: .env`) to
+get `LANGFUSE_HOST` and `LANGFUSE_BASIC_AUTH` for the Langfuse OTEL exporter.
 
 Variables with `${VAR:-default}` syntax are sourced from a `.env` file at the
 project root. The `.env` file must exist (even if empty).

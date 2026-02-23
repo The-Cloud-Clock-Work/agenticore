@@ -71,6 +71,13 @@ class GithubConfig:
 
 
 @dataclass
+class LangfuseConfig:
+    host: str = "https://cloud.langfuse.com"
+    public_key: str = ""
+    secret_key: str = ""
+
+
+@dataclass
 class Config:
     repos: ReposConfig = field(default_factory=ReposConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
@@ -78,6 +85,8 @@ class Config:
     redis: RedisConfig = field(default_factory=RedisConfig)
     otel: OtelConfig = field(default_factory=OtelConfig)
     github: GithubConfig = field(default_factory=GithubConfig)
+    langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
+    agentihooks_path: str = ""
 
 
 def _default_repos_root() -> str:
@@ -166,6 +175,16 @@ def load_config(config_path: Optional[str] = None) -> Config:
         token=_env("GITHUB_TOKEN", github_raw.get("token", "")),
     )
 
+    # Langfuse — env overrides
+    langfuse_raw = raw.get("langfuse", {})
+    langfuse = LangfuseConfig(
+        host=_env("LANGFUSE_HOST", langfuse_raw.get("host", "https://cloud.langfuse.com")),
+        public_key=_env("LANGFUSE_PUBLIC_KEY", langfuse_raw.get("public_key", "")),
+        secret_key=_env("LANGFUSE_SECRET_KEY", langfuse_raw.get("secret_key", "")),
+    )
+
+    agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
+
     return Config(
         repos=repos,
         claude=claude,
@@ -173,6 +192,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
         redis=redis,
         otel=otel,
         github=github,
+        langfuse=langfuse,
+        agentihooks_path=agentihooks_path,
     )
 
 

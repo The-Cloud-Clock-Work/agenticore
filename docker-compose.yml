@@ -15,8 +15,8 @@ services:
     ports:
       - "8200:8200"
     volumes:
-      - ac_repos_data:/root/agenticore-repos
-      - ac_jobs_data:/root/.agenticore/jobs
+      - ac_repos_data:/home/agenticore/agenticore-repos
+      - ac_jobs_data:/home/agenticore/.agenticore/jobs
     extra_hosts:
       - "host.docker.internal:host-gateway"
     env_file: .env
@@ -69,6 +69,7 @@ services:
   otel-collector:
     container_name: agenticore-otel
     image: otel/opentelemetry-collector-contrib:latest
+    env_file: .env
     volumes:
       - ./otel-collector-config.yml:/etc/otelcol-contrib/config.yaml
     networks:

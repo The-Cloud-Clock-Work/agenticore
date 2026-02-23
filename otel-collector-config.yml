@@ -12,30 +12,29 @@ processors:
     send_batch_size: 100
 
 exporters:
-  otlphttp/postgres:
-    endpoint: http://postgres:5432
-    tls:
-      insecure: true
-
   # Debug exporter for development
   debug:
     verbosity: basic
 
-  # PostgreSQL via SQL exporter
-  postgresql:
-    datasource: "host=postgres port=5432 user=agenticore password=agenticore dbname=agenticore sslmode=disable"
+  # Langfuse OTEL ingestion
+  otlphttp/langfuse:
+    endpoint: ${env:LANGFUSE_HOST}/api/public/otel
+    headers:
+      Authorization: "Basic ${env:LANGFUSE_BASIC_AUTH}"
+      CF-Access-Client-Id: "${env:CF_ACCESS_CLIENT_ID}"
+      CF-Access-Client-Secret: "${env:CF_ACCESS_CLIENT_SECRET}"
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlphttp/langfuse]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlphttp/langfuse]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, otlphttp/langfuse]

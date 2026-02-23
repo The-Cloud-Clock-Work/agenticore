@@ -18,7 +18,7 @@ already provides natively:
 | Repo cloning + caching | Agenticore |
 | Profile to CLI flags | Agenticore |
 | Auto-PR creation | Agenticore |
-| OTEL pipeline to PostgreSQL | Agenticore (collector config) |
+| OTEL pipeline to Langfuse + PostgreSQL | Agenticore (collector config + SDK) |
 
 This separation means Agenticore stays small. When Claude Code adds new features
 (like `--worktree`), Agenticore adopts them by passing flags rather than
@@ -41,6 +41,7 @@ simpler job-centric model.
 | `repos.py` | Git clone/fetch with flock | `ensure_clone()`, `repo_dir()` |
 | `jobs.py` | Job store (Redis + file) | `create_job()`, `get_job()`, `update_job()` |
 | `runner.py` | Spawn Claude subprocess | `submit_job()`, `run_job()` |
+| `telemetry.py` | Langfuse trace lifecycle + transcripts | `start_job_trace()`, `ship_transcript()` |
 | `router.py` | Profile routing (code + AI) | `route()`, `ai_route()` |
 | `pr.py` | Auto-PR via `gh` CLI | `create_auto_pr()` |
 | `cli.py` | CLI entrypoint | `main()`, 9 subcommands |
@@ -85,11 +86,12 @@ simpler job-centric model.
               +-------------+-------------+
               |             |             |
               v             v             v
-     +--------+--+  +-------+------+  +---+----------+
-     |  jobs.py   |  |   pr.py      |  |  OTEL        |
-     | update_job |  | auto-PR      |  |  Collector   |
-     | Redis+file |  | gh pr create |  |  -> Postgres |
-     +------------+  +--------------+  +--------------+
+     +--------+--+  +-------+------+  +---+----------+  +-------------+
+     |  jobs.py   |  |   pr.py      |  |  OTEL        |  | telemetry.py|
+     | update_job |  | auto-PR      |  |  Collector   |  | Langfuse SDK|
+     | Redis+file |  | gh pr create |  |  -> Langfuse |  | job traces  |
+     +------------+  +--------------+  |  -> Postgres |  | + transcripts|
+                                       +--------------+  +-------------+
 ```
 
 ## Redis + File Fallback

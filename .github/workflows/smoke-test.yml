@@ -1,0 +1,93 @@
+name: Smoke Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test deps
+        run: pip install httpx pytest pytest-timeout langfuse
+
+      - name: Create .env
+        run: |
+          cp .env.example .env
+          cat >> .env <<EOF
+          LANGFUSE_HOST=${{ secrets.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY=${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY=${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_BASIC_AUTH=${{ secrets.LANGFUSE_BASIC_AUTH }}
+          CF_ACCESS_CLIENT_ID=${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET=${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_TOKEN_BASE }}
+          GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          EOF
+
+      - name: Start Docker stack
+        run: docker compose up --build -d
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for Redis..."
+          for i in $(seq 1 30); do
+            docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG && break
+            sleep 2
+          done
+          echo "Waiting for Postgres..."
+          for i in $(seq 1 30); do
+            docker compose exec -T postgres pg_isready -U agenticore 2>/dev/null && break
+            sleep 2
+          done
+          echo "Waiting for agenticore..."
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8200/health && break || sleep 2
+          done
+          echo "All services ready"
+
+      - name: Run smoke test
+        env:
+          SMOKE_AGENTICORE_URL: http://localhost:8200
+          SMOKE_DATASET_REPO: https://github.com/The-Cloud-Clock-Work/bridge-smoke-dataset
+          LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          SMOKE_REPORT_PATH: smoke-report.md
+        run: pytest tests/smoke/test_pipeline.py -v --timeout=300
+
+      - name: Publish test report
+        if: always()
+        run: |
+          if [ -f smoke-report.md ]; then
+            cat smoke-report.md >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-report
+          path: smoke-report.md
+          if-no-files-found: ignore
+
+      - name: Check OTEL collector logs
+        if: always()
+        run: docker compose logs otel-collector 2>&1 | tail -50
+
+      - name: Dump agenticore logs on failure
+        if: failure()
+        run: docker compose logs agenticore 2>&1 | tail -100
+
+      - name: Teardown
+        if: always()
+        run: docker compose down -v

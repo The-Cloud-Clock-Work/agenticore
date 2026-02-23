@@ -51,6 +51,13 @@ otel:
 
 github:
   token: ""
+
+langfuse:
+  host: "https://cloud.langfuse.com"
+  public_key: ""
+  secret_key: ""
+
+agentihooks_path: ""
 ```
 
 ## Environment Variables
@@ -104,6 +111,21 @@ github:
 |----------|----------|---------|-------------|
 | `GITHUB_TOKEN` | `github.token` | (none) | GitHub token for auto-PR creation |
 
+### Langfuse
+
+| Variable | YAML Key | Default | Description |
+|----------|----------|---------|-------------|
+| `LANGFUSE_HOST` | `langfuse.host` | `https://cloud.langfuse.com` | Langfuse API host |
+| `LANGFUSE_PUBLIC_KEY` | `langfuse.public_key` | (none) | Enables Langfuse SDK tracing |
+| `LANGFUSE_SECRET_KEY` | `langfuse.secret_key` | (none) | Langfuse SDK authentication |
+| `LANGFUSE_BASIC_AUTH` | (env only) | (none) | Base64(`public_key:secret_key`) for OTEL collector |
+
+### Agentihooks
+
+| Variable | YAML Key | Default | Description |
+|----------|----------|---------|-------------|
+| `AGENTICORE_AGENTIHOOKS_PATH` | `agentihooks_path` | (none) | Path to cloned agentihooks repo. Adds `{path}/profiles/` as a profile search directory |
+
 ## File Paths
 
 | Path | Purpose |
@@ -114,4 +136,5 @@ github:
 | `~/agenticore-repos/` | Default cloned repos root |
 | `~/agenticore-repos/{hash}/.lock` | Per-repo flock file |
 | `~/agenticore-repos/{hash}/repo/` | Cloned repository |
-| `defaults/profiles/*.yml` | Bundled default profiles |
+| `defaults/profiles/*/` | Bundled default profiles (directory-based) |
+| `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/*/` | External agentihooks profiles |

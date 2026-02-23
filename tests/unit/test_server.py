@@ -535,7 +535,7 @@ class TestRestApi:
             patch("agenticore.runner.submit_job", new_callable=AsyncMock, return_value=mock_job) as mock_submit,
         ):
             client = TestClient(rest_app)
-            resp = client.post("/jobs", json={"task": "test"})
+            client.post("/jobs", json={"task": "test"})
 
         call_kwargs = mock_submit.call_args[1]
         assert call_kwargs["wait"] is False
@@ -553,7 +553,7 @@ class TestRestApi:
             patch("agenticore.runner.submit_job", new_callable=AsyncMock, return_value=mock_job) as mock_submit,
         ):
             client = TestClient(rest_app)
-            resp = client.post("/jobs", json={"task": "test"})
+            client.post("/jobs", json={"task": "test"})
 
         call_kwargs = mock_submit.call_args[1]
         assert call_kwargs["base_ref"] == "main"

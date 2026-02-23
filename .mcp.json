@@ -1,0 +1,86 @@
+{
+    "mcpServers": {
+        "anton": {
+            "command": "/home/iamroot/dev/antoncore/.venv/bin/python3",
+            "args": [
+                "/home/iamroot/dev/antoncore/mcp/anton_server.py"
+            ],
+            "env": {
+                "ANTON_HOST": "${ANTON_HOST}",
+                "ANTON_USER": "${ANTON_USER}",
+                "ANTON_SSH_KEY": "${ANTON_SSH_KEY}",
+                "ANTON_API_KEY": "${ANTON_API_KEY}"
+            }
+        },
+        "litellm": {
+            "command": "/home/iamroot/dev/antoncore/.venv/bin/python3",
+            "args": [
+                "/home/iamroot/dev/antoncore/mcp/litellm_server.py"
+            ],
+            "env": {
+                "ANTON_HOST": "${ANTON_HOST}",
+                "ANTON_SSH_KEY": "${ANTON_SSH_KEY}",
+                "LITELLM_URL": "${LITELLM_URL}",
+                "LITELLM_MASTER_KEY": "${LITELLM_MASTER_KEY}"
+            }
+        },
+        "matrix": {
+            "command": "/home/iamroot/dev/antoncore/.venv/bin/python3",
+            "args": [
+                "/home/iamroot/dev/antoncore/mcp/matrix_server.py"
+            ],
+            "env": {
+                "MATRIX_URL": "${MATRIX_URL}",
+                "MATRIX_API_KEY": "${MATRIX_API_KEY}"
+            }
+        },
+        "github": {
+            "command": "docker",
+            "args": [
+                "run",
+                "-i",
+                "--rm",
+                "-e",
+                "GITHUB_PERSONAL_ACCESS_TOKEN",
+                "-e",
+                "GITHUB_TOOLSETS",
+                "ghcr.io/github/github-mcp-server"
+            ],
+            "env": {
+                "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}",
+                "GITHUB_TOOLSETS": "${GITHUB_TOOLSETS:-repos}"
+            }
+        },
+        "langfuse": {
+            "command": "/home/iamroot/dev/antoncore/.venv/bin/python3",
+            "args": [
+                "/home/iamroot/dev/antoncore/mcp/langfuse_server.py"
+            ],
+            "env": {
+                "LANGFUSE_PUBLIC_KEY": "${LANGFUSE_PUBLIC_KEY}",
+                "LANGFUSE_SECRET_KEY": "${LANGFUSE_SECRET_KEY}",
+                "LANGFUSE_HOST": "${LANGFUSE_HOST:-http://10.10.30.130:3001}"
+            }
+        },
+        "grafana": {
+            "command": "/home/iamroot/dev/antoncore/.venv/bin/python3",
+            "args": [
+                "/home/iamroot/dev/antoncore/mcp/grafana_server.py"
+            ],
+            "env": {
+                "GRAFANA_URL": "${GRAFANA_URL:-http://10.10.30.130:3000}",
+                "GRAFANA_API_KEY": "${GRAFANA_API_KEY}"
+            }
+        },
+        "sonar": {
+            "command": "/home/iamroot/dev/antoncore/.venv/bin/python3",
+            "args": [
+                "/home/iamroot/dev/antoncore/mcp/sonar_server.py"
+            ],
+            "env": {
+                "SONAR_MANAGER_URL": "${SONAR_MANAGER_URL:-http://10.10.30.130:8093}",
+                "SONAR_MANAGER_API_KEY": "${SONAR_MANAGER_API_KEY}"
+            }
+        }
+    }
+}

@@ -2,9 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# System deps for git operations
+# System deps for git operations + Node.js for Claude CLI
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git curl && \
+    apt-get install -y --no-install-recommends git curl gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
 # Install gh CLI
@@ -16,18 +18,29 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     apt-get install -y gh && \
     rm -rf /var/lib/apt/lists/*
 
+# Install Claude CLI
+RUN npm install -g @anthropic-ai/claude-code && claude --version
+
 COPY pyproject.toml .
 COPY agenticore/ agenticore/
 COPY defaults/ defaults/
 
 RUN pip install --no-cache-dir -e .
 
-# Create dirs
-RUN mkdir -p /app/logs /root/.agenticore/jobs /root/.agenticore/profiles /root/agenticore-repos
+# Create non-root user (Claude CLI refuses bypassPermissions as root)
+RUN useradd -m -s /bin/bash agenticore && \
+    mkdir -p /home/agenticore/.agenticore/jobs \
+             /home/agenticore/.agenticore/profiles \
+             /home/agenticore/agenticore-repos \
+             /app/logs && \
+    chown -R agenticore:agenticore /app /home/agenticore
 
 ENV AGENTICORE_TRANSPORT=sse
 ENV AGENTICORE_HOST=0.0.0.0
 ENV AGENTICORE_PORT=8200
+ENV AGENTICORE_REPOS_ROOT=/home/agenticore/agenticore-repos
+
+USER agenticore
 
 EXPOSE 8200
 

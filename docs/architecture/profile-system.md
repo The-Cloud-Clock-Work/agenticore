@@ -89,21 +89,33 @@ auto_pr: false
 
 ## Custom Profiles
 
-Place custom profile YAML files in `~/.agenticore/profiles/`. User profiles
-override bundled defaults with the same name.
+Profiles are loaded from up to three directories, in priority order (highest wins):
 
 ```
-defaults/profiles/          <-- bundled (shipped with package)
-    code.yml
-    review.yml
+defaults/profiles/                        <-- bundled (shipped with package)
+    code/profile.yml
+    review/profile.yml
 
-~/.agenticore/profiles/     <-- user overrides
-    code.yml                <-- overrides bundled code.yml
-    deploy.yml              <-- new custom profile
+{AGENTICORE_AGENTIHOOKS_PATH}/profiles/   <-- external (agentihooks repo)
+    default/profile.yml                   <-- loaded only if env var is set
+    review/profile.yml
+
+~/.agenticore/profiles/                   <-- user overrides (always checked)
+    code/profile.yml                      <-- overrides bundled code
+    deploy/profile.yml                    <-- new custom profile
 ```
 
-Loading order: bundled defaults first, then user profiles. Same-name user
-profiles replace the bundled version entirely.
+Loading order: bundled defaults first, then agentihooks (if `AGENTICORE_AGENTIHOOKS_PATH`
+is set), then user profiles. Same-name profiles from a higher-priority directory
+replace the lower-priority version entirely.
+
+### Agentihooks Integration
+
+Set `AGENTICORE_AGENTIHOOKS_PATH` to the root of a cloned agentihooks repo (e.g. `/app`).
+Agenticore will load profiles from `{path}/profiles/`. These profiles can include
+pre-wired hook events in their `settings.json` — agenticore materializes `settings.json`
+into the working directory as-is, and Claude Code picks up the hooks automatically.
+No hook-specific logic exists in agenticore.
 
 ## Template Variables
 

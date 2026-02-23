@@ -6,6 +6,7 @@ OTEL environment variables. Manages the full job lifecycle: queued → running
 """
 
 import asyncio
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -13,9 +14,10 @@ from pathlib import Path
 from typing import Optional
 
 from agenticore.config import get_config
-from agenticore.jobs import Job, create_job, update_job
+from agenticore.jobs import Job, create_job, get_job, update_job
 from agenticore.profiles import build_cli_args, get_profile, materialize_profile
 from agenticore.repos import ensure_clone, get_default_branch
+from agenticore.telemetry import end_job_trace, ship_transcript, start_job_trace
 
 
 def _now_iso() -> str:
@@ -68,6 +70,7 @@ async def run_job(job: Job) -> Job:
 
     # Mark as running
     update_job(job.id, status="running", started_at=_now_iso())
+    trace = start_job_trace(job)
 
     cwd = None
     base_ref = job.base_ref
@@ -142,6 +145,19 @@ async def run_job(job: Job) -> Job:
         output_text = stdout.decode("utf-8", errors="replace") if stdout else ""
         error_text = stderr.decode("utf-8", errors="replace") if stderr else ""
 
+        # Extract session_id from Claude's JSON output (last JSON line containing session_id)
+        for line in reversed(output_text.splitlines()):
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    data = json.loads(line)
+                    sid = data.get("session_id") or data.get("sessionId")
+                    if sid:
+                        update_job(job.id, session_id=sid)
+                        break
+                except json.JSONDecodeError:
+                    pass
+
         status = "succeeded" if exit_code == 0 else "failed"
 
         job = update_job(
@@ -175,6 +191,10 @@ async def run_job(job: Job) -> Job:
         )
     except Exception as e:
         return update_job(job.id, status="failed", error=str(e), ended_at=_now_iso())
+    finally:
+        final_job = get_job(job.id)
+        ship_transcript(trace, getattr(final_job, "session_id", None), cwd=str(cwd) if cwd else None)
+        end_job_trace(trace, final_job)
 
 
 async def submit_job(

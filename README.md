@@ -12,7 +12,8 @@ Request (MCP or REST)
   ├─ Router selects profile
   ├─ Clone/fetch repo (flock-protected cache)
   ├─ Spawn: claude --worktree -p "task" (with profile flags + OTEL env)
-  ├─ Collect telemetry → OTEL Collector → PostgreSQL
+  ├─ Collect telemetry → OTEL Collector → Langfuse + PostgreSQL
+  ├─ Ship Claude session transcript → Langfuse (via SDK)
   ├─ Auto-PR on success (when profile enables it)
   └─ Job result → Redis (or file fallback)
 ```
@@ -20,8 +21,9 @@ Request (MCP or REST)
 1. **Takes a task** via MCP tool or REST API
 2. **Clones the repo** into a cached directory (flock-serialized, reuses on subsequent runs)
 3. **Runs Claude Code** as a subprocess with profile-derived CLI flags and OTEL environment
-4. **Streams telemetry** through Claude's native OTEL support to a collector
-5. **Creates a PR** automatically if the profile has `auto_pr: true` and the job succeeds
+4. **Streams telemetry** through Claude's native OTEL support to a collector (exported to Langfuse and/or PostgreSQL)
+5. **Ships transcripts** from the Claude session to Langfuse as spans for full visibility
+6. **Creates a PR** automatically if the profile has `auto_pr: true` and the job succeeds
 
 ## Quick Start
 
@@ -55,7 +57,7 @@ This starts:
 | **agenticore** | The runner server | 8200 |
 | **redis** | Job store | 6379 |
 | **postgres** | OTEL telemetry sink | 5432 |
-| **otel-collector** | Receives OTEL from Claude, exports to Postgres | 4317 (gRPC), 4318 (HTTP) |
+| **otel-collector** | Receives OTEL from Claude, exports to Langfuse + Postgres | 4317 (gRPC), 4318 (HTTP) |
 
 All services are wired together automatically — agenticore points at `redis://redis:6379/0` and the OTEL collector at `http://otel-collector:4317`.
 
@@ -147,6 +149,21 @@ All configuration is loaded from `~/.agenticore/config.yml` with environment var
 |----------|---------|-------------|
 | `GITHUB_TOKEN` | _(empty)_ | GitHub token for auto-PR (uses `gh` CLI) |
 
+#### Langfuse
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Langfuse API host |
+| `LANGFUSE_PUBLIC_KEY` | _(empty)_ | Langfuse public key (enables SDK tracing) |
+| `LANGFUSE_SECRET_KEY` | _(empty)_ | Langfuse secret key |
+| `LANGFUSE_BASIC_AUTH` | _(empty)_ | Base64(`public_key:secret_key`) for OTEL collector |
+
+#### Agentihooks
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENTICORE_AGENTIHOOKS_PATH` | _(empty)_ | Path to cloned agentihooks repo (e.g. `/app`) |
+
 #### PostgreSQL
 
 | Variable | Default | Description |
@@ -202,7 +219,9 @@ If `AGENTICORE_API_KEYS` is set, include `X-API-Key: <key>` header or `?api_key=
 
 Profiles are directory-based packages that define how Claude Code runs. Each profile is a directory containing a `profile.yml` for agenticore-specific metadata, plus native Claude Code config files (`.claude/` directory and `.mcp.json`).
 
-**Default profiles** are bundled in `defaults/profiles/`. **Custom profiles** go in `~/.agenticore/profiles/` and override defaults with the same name.
+**Default profiles** are bundled in `defaults/profiles/`. **External profiles** can be loaded from an agentihooks repo via `AGENTICORE_AGENTIHOOKS_PATH`. **Custom profiles** go in `~/.agenticore/profiles/` and override everything with the same name.
+
+Profile priority (highest wins): user (`~/.agenticore/profiles/`) > agentihooks > defaults.
 
 ### Directory Structure
 
@@ -288,6 +307,7 @@ auto_pr: false
 | `repos.py` | Git clone/fetch with flock serialization |
 | `jobs.py` | Job store — Redis hash or JSON file fallback |
 | `runner.py` | Spawn Claude subprocess with OTEL env vars |
+| `telemetry.py` | Langfuse trace lifecycle + transcript shipping |
 | `router.py` | Profile selection (explicit or default) |
 | `pr.py` | Auto-PR via `git push` + `gh pr create` |
 | `cli.py` | CLI client (`agenticore run`, `agenticore serve`, etc.) |
@@ -309,11 +329,13 @@ Claude Code (subprocess)
   ▼
 OTEL Collector
   │ batch processor
-  ▼
-PostgreSQL (traces, metrics, logs)
+  ├──► Langfuse (otlphttp/langfuse)
+  └──► PostgreSQL / debug
 ```
 
-Claude Code has native OTEL support. Agenticore sets the OTEL env vars on the subprocess so telemetry flows to whatever collector endpoint you configure. In local dev this is the bundled `otel-collector-contrib` container; in production it's your hosted collector.
+Claude Code has native OTEL support. Agenticore sets the OTEL env vars on the subprocess so telemetry flows to the OTEL Collector, which exports to both Langfuse (via OTLP HTTP) and PostgreSQL/debug. Additionally, the runner ships Claude session transcripts directly to Langfuse via the SDK as spans on the job trace.
+
+Set `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` to enable SDK-level tracing. Set `LANGFUSE_BASIC_AUTH` for the OTEL collector export path.
 
 ## CLI
 
