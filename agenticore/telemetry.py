@@ -37,19 +37,25 @@ def _get_langfuse():
 
         host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 
-        # Pass Cloudflare Access headers if configured
-        headers = {}
+        # Pass Cloudflare Access headers via custom httpx client
+        httpx_client = None
         cf_id = os.getenv("CF_ACCESS_CLIENT_ID", "")
         cf_secret = os.getenv("CF_ACCESS_CLIENT_SECRET", "")
         if cf_id and cf_secret:
-            headers["CF-Access-Client-Id"] = cf_id
-            headers["CF-Access-Client-Secret"] = cf_secret
+            import httpx
+
+            httpx_client = httpx.Client(
+                headers={
+                    "CF-Access-Client-Id": cf_id,
+                    "CF-Access-Client-Secret": cf_secret,
+                }
+            )
 
         _langfuse = Langfuse(
             public_key=public_key,
             secret_key=secret_key,
             host=host,
-            request_headers=headers if headers else None,
+            httpx_client=httpx_client,
         )
     except Exception as exc:
         print(f"[telemetry] Langfuse init failed: {exc}", file=sys.stderr)

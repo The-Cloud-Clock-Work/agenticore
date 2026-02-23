@@ -82,6 +82,22 @@ jobs:
           path: smoke-report.md
           if-no-files-found: ignore
 
+      - name: Dump job details
+        if: always()
+        run: |
+          JOB_ID=$(curl -sf http://localhost:8200/jobs 2>/dev/null | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          jobs = data.get('jobs', [])
+          if jobs: print(jobs[0].get('id', ''))
+          " 2>/dev/null)
+          if [ -n "$JOB_ID" ]; then
+            echo "=== Job $JOB_ID ==="
+            curl -sf "http://localhost:8200/jobs/$JOB_ID" | python3 -m json.tool
+          else
+            echo "No jobs found"
+          fi
+
       - name: Check OTEL collector logs
         if: always()
         run: docker compose logs otel-collector 2>&1 | tail -50
