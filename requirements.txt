@@ -24,7 +24,7 @@ MarkupSafe==3.0.3
 mcp==1.26.0
 multidict==6.7.1
 packaging==26.0
-parse==1.21.0
+parse==1.21.1
 parse_type==0.6.6
 pluggy==1.6.0
 propcache==0.4.1
