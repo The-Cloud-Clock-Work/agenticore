@@ -29,6 +29,8 @@ jobs:
           CF_ACCESS_CLIENT_ID=${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET=${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_TOKEN_BASE }}
+          ANTHROPIC_BASE_URL=https://llm.homeofanton.com
+          ANTHROPIC_CUSTOM_HEADERS={"CF-Access-Client-Id":"${{ secrets.CF_ACCESS_CLIENT_ID }}","CF-Access-Client-Secret":"${{ secrets.CF_ACCESS_CLIENT_SECRET }}"}
           GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
           EOF
 
@@ -84,8 +86,8 @@ jobs:
         if: always()
         run: docker compose logs otel-collector 2>&1 | tail -50
 
-      - name: Dump agenticore logs on failure
-        if: failure()
+      - name: Dump agenticore logs
+        if: always()
         run: docker compose logs agenticore 2>&1 | tail -100
 
       - name: Teardown
