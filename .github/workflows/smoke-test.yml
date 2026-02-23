@@ -24,30 +24,35 @@ jobs:
         env:
           BASE_URL: ${{ vars.ANTHROPIC_URL_BASE }}
           FALLBACK_URL: ${{ vars.ANTHROPIC_URL_FALLBACK }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           echo "Probing BASE: ${BASE_URL}"
-          HTTP_CODE=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" "${BASE_URL}" 2>/dev/null || true)
+          HTTP_CODE=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" \
+            -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET}" \
+            "${BASE_URL}" 2>/dev/null || true)
           echo "  HTTP status: ${HTTP_CODE}"
 
-          if [[ "$HTTP_CODE" != "000" && -n "$HTTP_CODE" ]]; then
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
             echo "BASE endpoint reachable"
             echo "selected=base" >> "$GITHUB_OUTPUT"
             echo "url=${BASE_URL}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "BASE unreachable, trying FALLBACK: ${FALLBACK_URL}"
+          echo "BASE returned ${HTTP_CODE}, trying FALLBACK: ${FALLBACK_URL}"
           HTTP_CODE=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" "${FALLBACK_URL}" 2>/dev/null || true)
           echo "  HTTP status: ${HTTP_CODE}"
 
-          if [[ "$HTTP_CODE" != "000" && -n "$HTTP_CODE" ]]; then
+          if [[ "$HTTP_CODE" =~ ^2 ]]; then
             echo "FALLBACK endpoint reachable"
             echo "selected=fallback" >> "$GITHUB_OUTPUT"
             echo "url=${FALLBACK_URL}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "::error::Both Anthropic endpoints unreachable"
+          echo "::error::Both Anthropic endpoints unreachable (BASE: ${HTTP_CODE})"
           exit 1
 
       - name: Resolve API key
@@ -76,6 +81,11 @@ jobs:
           ANTHROPIC_BASE_URL=${{ steps.anthropic.outputs.url }}
           GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
           EOF
+
+          # Build ANTHROPIC_CUSTOM_HEADERS for Claude CLI when using CF Access-protected proxy
+          if [ "${{ steps.anthropic.outputs.selected }}" = "base" ]; then
+            echo 'ANTHROPIC_CUSTOM_HEADERS={"CF-Access-Client-Id":"${{ secrets.CF_ACCESS_CLIENT_ID }}","CF-Access-Client-Secret":"${{ secrets.CF_ACCESS_CLIENT_SECRET }}"}' >> .env
+          fi
 
       - name: Start Docker stack
         run: docker compose up --build -d

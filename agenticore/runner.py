@@ -53,6 +53,17 @@ def _build_env(cwd: Optional[Path] = None) -> dict:
     if cfg.github.token:
         env["GITHUB_TOKEN"] = cfg.github.token
 
+    # Auto-build ANTHROPIC_CUSTOM_HEADERS for CF Access-protected proxies
+    cf_id = env.get("CF_ACCESS_CLIENT_ID", "")
+    cf_secret = env.get("CF_ACCESS_CLIENT_SECRET", "")
+    if cf_id and cf_secret and "ANTHROPIC_CUSTOM_HEADERS" not in env:
+        env["ANTHROPIC_CUSTOM_HEADERS"] = json.dumps(
+            {
+                "CF-Access-Client-Id": cf_id,
+                "CF-Access-Client-Secret": cf_secret,
+            }
+        )
+
     return env
 
 
