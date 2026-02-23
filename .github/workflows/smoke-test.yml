@@ -18,6 +18,50 @@ jobs:
       - name: Install test deps
         run: pip install httpx pytest pytest-timeout langfuse
 
+      # ── Probe Anthropic endpoints (BASE → FALLBACK → fail) ──────────────
+      - name: Probe Anthropic endpoints
+        id: anthropic
+        env:
+          BASE_URL: ${{ vars.ANTHROPIC_URL_BASE }}
+          FALLBACK_URL: ${{ vars.ANTHROPIC_URL_FALLBACK }}
+        run: |
+          echo "Probing BASE: ${BASE_URL}"
+          HTTP_CODE=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" "${BASE_URL}" 2>/dev/null || true)
+          echo "  HTTP status: ${HTTP_CODE}"
+
+          if [[ "$HTTP_CODE" != "000" && -n "$HTTP_CODE" ]]; then
+            echo "BASE endpoint reachable"
+            echo "selected=base" >> "$GITHUB_OUTPUT"
+            echo "url=${BASE_URL}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "BASE unreachable, trying FALLBACK: ${FALLBACK_URL}"
+          HTTP_CODE=$(curl -s --max-time 10 -o /dev/null -w "%{http_code}" "${FALLBACK_URL}" 2>/dev/null || true)
+          echo "  HTTP status: ${HTTP_CODE}"
+
+          if [[ "$HTTP_CODE" != "000" && -n "$HTTP_CODE" ]]; then
+            echo "FALLBACK endpoint reachable"
+            echo "selected=fallback" >> "$GITHUB_OUTPUT"
+            echo "url=${FALLBACK_URL}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "::error::Both Anthropic endpoints unreachable"
+          exit 1
+
+      - name: Resolve API key
+        id: resolve_key
+        env:
+          TOKEN_BASE: ${{ secrets.ANTHROPIC_TOKEN_BASE }}
+          TOKEN_FALLBACK: ${{ secrets.ANTHROPIC_TOKEN_FALLBACK }}
+        run: |
+          if [ "${{ steps.anthropic.outputs.selected }}" = "base" ]; then
+            echo "api_key=${TOKEN_BASE}" >> "$GITHUB_OUTPUT"
+          else
+            echo "api_key=${TOKEN_FALLBACK}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create .env
         run: |
           cp .env.example .env
@@ -28,9 +72,8 @@ jobs:
           LANGFUSE_BASIC_AUTH=${{ secrets.LANGFUSE_BASIC_AUTH }}
           CF_ACCESS_CLIENT_ID=${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET=${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_TOKEN_BASE }}
-          ANTHROPIC_BASE_URL=https://llm.homeofanton.com
-          ANTHROPIC_CUSTOM_HEADERS={"CF-Access-Client-Id":"${{ secrets.CF_ACCESS_CLIENT_ID }}","CF-Access-Client-Secret":"${{ secrets.CF_ACCESS_CLIENT_SECRET }}"}
+          ANTHROPIC_API_KEY=${{ steps.resolve_key.outputs.api_key }}
+          ANTHROPIC_BASE_URL=${{ steps.anthropic.outputs.url }}
           GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
           EOF
 
