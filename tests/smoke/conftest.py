@@ -12,17 +12,20 @@ def pytest_runtest_logreport(report):
     """Hook: called after each test phase (setup/call/teardown)."""
     if report.when != "call":
         return
+    if report.failed:
+        message = str(report.longrepr)[:200]
+    elif report.skipped:
+        message = getattr(report, "wasxfail", "") or ""
+    else:
+        message = ""
+
     _results.append(
         {
             "nodeid": report.nodeid,
             "name": report.nodeid.split("::")[-1],
             "outcome": report.outcome,  # "passed", "failed", "skipped"
             "duration": round(report.duration, 2),
-            "message": str(report.longrepr)[:200]
-            if report.failed
-            else (report.wasxfail or "")
-            if report.skipped
-            else "",
+            "message": message,
         }
     )
 
