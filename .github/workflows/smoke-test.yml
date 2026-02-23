@@ -79,7 +79,7 @@ jobs:
           CF_ACCESS_CLIENT_SECRET=${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           ANTHROPIC_API_KEY=${{ steps.resolve_key.outputs.api_key }}
           ANTHROPIC_BASE_URL=${{ steps.anthropic.outputs.url }}
-          GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN=${{ secrets.ORG_GITHUB_TOKEN }}
           EOF
 
           # Build ANTHROPIC_CUSTOM_HEADERS for Claude CLI when using CF Access-protected proxy
