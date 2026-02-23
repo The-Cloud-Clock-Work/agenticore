@@ -35,6 +35,15 @@ def repo_dir(repo_url: str) -> Path:
     return _repos_root() / _repo_key(repo_url) / "repo"
 
 
+def _authenticated_url(repo_url: str) -> str:
+    """Inject GITHUB_TOKEN into HTTPS clone URLs for private repo access."""
+    cfg = get_config()
+    token = cfg.github.token
+    if token and repo_url.startswith("https://github.com/"):
+        return repo_url.replace("https://github.com/", f"https://x-access-token:{token}@github.com/")
+    return repo_url
+
+
 def ensure_clone(repo_url: str) -> Path:
     """Clone or fetch a repository, flock-protected.
 
@@ -57,8 +66,9 @@ def ensure_clone(repo_url: str) -> Path:
                 # Repo exists — fetch latest
                 _run_git(["git", "fetch", "--all", "--prune"], cwd=rdir)
             else:
-                # Fresh clone
-                _run_git(["git", "clone", repo_url, str(rdir)])
+                # Fresh clone — use authenticated URL for private repos
+                clone_url = _authenticated_url(repo_url)
+                _run_git(["git", "clone", clone_url, str(rdir)])
         finally:
             fcntl.flock(lockfile, fcntl.LOCK_UN)
 
