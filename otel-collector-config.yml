@@ -16,8 +16,8 @@ exporters:
   debug:
     verbosity: basic
 
-  # Langfuse OTEL ingestion
-  otlphttp/langfuse:
+  # Langfuse OTEL ingestion (traces only — Langfuse does not support metrics/logs)
+  otlp_http/langfuse:
     endpoint: ${env:LANGFUSE_HOST}/api/public/otel
     headers:
       Authorization: "Basic ${env:LANGFUSE_BASIC_AUTH}"
@@ -29,12 +29,12 @@ service:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug, otlphttp/langfuse]
+      exporters: [debug, otlp_http/langfuse]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug, otlphttp/langfuse]
+      exporters: [debug]
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug, otlphttp/langfuse]
+      exporters: [debug]

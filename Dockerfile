@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 
+LABEL org.opencontainers.image.source="https://github.com/The-Cloud-Clock-Work/agenticore"
+LABEL org.opencontainers.image.description="Claude Code runner and orchestrator"
+LABEL org.opencontainers.image.licenses="MIT"
+
 WORKDIR /app
 
 # System deps for git operations + Node.js for Claude CLI

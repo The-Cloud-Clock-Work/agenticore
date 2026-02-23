@@ -14,6 +14,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Software Development :: Build Tools",
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -29,6 +32,8 @@ dependencies = [
 Homepage = "https://github.com/The-Cloud-Clock-Work/agenticore"
 Repository = "https://github.com/The-Cloud-Clock-Work/agenticore"
 Issues = "https://github.com/The-Cloud-Clock-Work/agenticore/issues"
+Documentation = "https://github.com/The-Cloud-Clock-Work/agenticore/tree/main/docs"
+Changelog = "https://github.com/The-Cloud-Clock-Work/agenticore/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
