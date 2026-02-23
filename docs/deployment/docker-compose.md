@@ -1,3 +1,8 @@
+---
+title: Docker Compose
+nav_order: 1
+---
+
 # Docker Compose Deployment
 
 Agenticore ships a Docker Compose stack with four services: the Agenticore server,

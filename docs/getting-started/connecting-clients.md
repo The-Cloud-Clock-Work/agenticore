@@ -1,3 +1,8 @@
+---
+title: Connecting Clients
+nav_order: 2
+---
+
 # Connecting Clients
 
 Agenticore supports three client interfaces: MCP for AI agents, REST for

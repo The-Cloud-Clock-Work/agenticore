@@ -1,3 +1,8 @@
+---
+title: Dual Interface
+nav_order: 2
+---
+
 # Dual Interface: MCP + REST
 
 Agenticore serves two interfaces from a single ASGI application: MCP for AI clients

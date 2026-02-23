@@ -1,3 +1,8 @@
+---
+title: CLI Commands
+nav_order: 1
+---
+
 # CLI Reference
 
 Agenticore provides a CLI for server management, job submission, and status queries.

@@ -26,3 +26,8 @@ env/
 Thumbs.db
 .swp
 .claude
+
+# Jekyll
+_site/
+.jekyll-cache/
+Gemfile.lock

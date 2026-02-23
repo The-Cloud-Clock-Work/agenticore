@@ -1,3 +1,8 @@
+---
+title: Profile System
+nav_order: 3
+---
+
 # Profile System
 
 Profiles map to Claude Code CLI flags. Each profile is a YAML file that specifies

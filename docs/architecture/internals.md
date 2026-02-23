@@ -1,3 +1,8 @@
+---
+title: Internals
+nav_order: 1
+---
+
 # Architecture Internals
 
 Agenticore is a thin orchestration layer for Claude Code. It manages job lifecycle,

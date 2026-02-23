@@ -1,3 +1,8 @@
+---
+title: Configuration
+nav_order: 2
+---
+
 # Configuration Reference
 
 Agenticore loads configuration from a YAML file with environment variable overrides.

@@ -1,3 +1,8 @@
+---
+title: Job Execution
+nav_order: 4
+---
+
 # Job Execution
 
 Jobs are the core unit of work in Agenticore. Each job represents a single Claude

@@ -1,3 +1,8 @@
+---
+title: Quickstart
+nav_order: 1
+---
+
 # Quickstart
 
 Get Agenticore running and submit your first job in under 5 minutes.

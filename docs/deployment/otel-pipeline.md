@@ -1,3 +1,8 @@
+---
+title: OTEL Pipeline
+nav_order: 3
+---
+
 # OTEL Observability Pipeline
 
 Agenticore uses OpenTelemetry to collect traces, metrics, and logs from Claude Code

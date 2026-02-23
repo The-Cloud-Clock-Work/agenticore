@@ -1,3 +1,8 @@
+---
+title: Releases
+nav_order: 4
+---
+
 # Releases and CI/CD
 
 Agenticore follows semantic versioning and provides multiple distribution methods:

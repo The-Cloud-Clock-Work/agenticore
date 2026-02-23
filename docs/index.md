@@ -1,3 +1,9 @@
+---
+title: Documentation
+nav_order: 2
+has_children: true
+---
+
 # Agenticore Documentation
 
 Agenticore is a Claude Code runner and orchestrator that manages job lifecycle,

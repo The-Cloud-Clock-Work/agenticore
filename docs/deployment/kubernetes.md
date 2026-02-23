@@ -1,3 +1,8 @@
+---
+title: Kubernetes
+nav_order: 2
+---
+
 # Kubernetes Deployment
 
 Agenticore includes a Helm chart for Kubernetes deployment with configurable

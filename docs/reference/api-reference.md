@@ -1,3 +1,8 @@
+---
+title: API Reference
+nav_order: 3
+---
+
 # API Reference
 
 Agenticore exposes the same functionality through two interfaces: 5 MCP tools for
