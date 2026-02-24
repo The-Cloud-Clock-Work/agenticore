@@ -110,8 +110,8 @@ def _build_job_cmd(cfg, profile, job, base_ref, cwd):
     return cmd, env
 
 
-async def _run_subprocess(job_id, cmd, cwd, env, timeout):
-    """Run Claude subprocess with timeout. Returns (proc, stdout, stderr) or raises."""
+async def _run_subprocess(job_id, cmd, cwd, env):
+    """Run Claude subprocess. Returns (proc, stdout, stderr)."""
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
@@ -120,8 +120,7 @@ async def _run_subprocess(job_id, cmd, cwd, env, timeout):
         stderr=asyncio.subprocess.PIPE,
     )
     update_job(job_id, pid=proc.pid)
-    async with asyncio.timeout(timeout):
-        stdout, stderr = await proc.communicate()
+    stdout, stderr = await proc.communicate()
     return proc, stdout, stderr
 
 
@@ -185,7 +184,8 @@ async def run_job(job: Job) -> Job:
 async def _execute_claude(job, cmd, cwd, env, profile, cfg):
     """Execute Claude subprocess and process results."""
     try:
-        proc, stdout, stderr = await _run_subprocess(job.id, cmd, cwd, env, profile.claude.timeout)
+        async with asyncio.timeout(profile.claude.timeout):
+            proc, stdout, stderr = await _run_subprocess(job.id, cmd, cwd, env)
     except asyncio.TimeoutError:
         return update_job(
             job.id,
