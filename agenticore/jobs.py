@@ -152,24 +152,21 @@ def create_job(
     return job
 
 
+def _coerce_redis_types(data: dict) -> dict:
+    """Convert Redis string values to proper Python types."""
+    for key, convert in [("exit_code", int), ("ttl_seconds", int), ("pid", int)]:
+        if key in data:
+            data[key] = convert(data[key]) if data[key] != "None" else None
+    return data
+
+
 def get_job(job_id: str) -> Optional[Job]:
     """Retrieve a job by ID."""
     r = _get_redis()
     if r is not None:
         data = r.hgetall(_redis_key(job_id))
         if data:
-            # Convert redis string values
-            if "exit_code" in data and data["exit_code"] != "None":
-                data["exit_code"] = int(data["exit_code"])
-            elif "exit_code" in data:
-                data["exit_code"] = None
-            if "ttl_seconds" in data:
-                data["ttl_seconds"] = int(data["ttl_seconds"])
-            if "pid" in data and data["pid"] != "None":
-                data["pid"] = int(data["pid"])
-            elif "pid" in data:
-                data["pid"] = None
-            return Job.from_dict(data)
+            return Job.from_dict(_coerce_redis_types(data))
 
     # File fallback
     path = _job_file(job_id)
@@ -194,50 +191,48 @@ def update_job(job_id: str, **kwargs) -> Optional[Job]:
     return job
 
 
+def _scan_redis_keys(r, prefix: str) -> list:
+    """Scan Redis for all job keys."""
+    cursor = 0
+    keys = []
+    while True:
+        cursor, batch = r.scan(cursor, match=f"{prefix}:job:*", count=100)
+        keys.extend(batch)
+        if cursor == 0:
+            break
+    return keys
+
+
+def _load_jobs_from_redis(r) -> List[Job]:
+    """Load all jobs from Redis."""
+    prefix = os.getenv("REDIS_KEY_PREFIX", "agenticore")
+    keys = _scan_redis_keys(r, prefix)
+    jobs = []
+    for key in keys:
+        data = r.hgetall(key)
+        if data:
+            jobs.append(Job.from_dict(_coerce_redis_types(data)))
+    return jobs
+
+
+def _load_jobs_from_files() -> List[Job]:
+    """Load all jobs from filesystem fallback."""
+    jobs = []
+    for path in _jobs_dir().glob("*.json"):
+        with open(path) as f:
+            jobs.append(Job.from_dict(json.load(f)))
+    return jobs
+
+
 def list_jobs(limit: int = 20, status: Optional[str] = None) -> List[Job]:
     """List recent jobs, optionally filtered by status."""
     r = _get_redis()
-    jobs: List[Job] = []
+    jobs = _load_jobs_from_redis(r) if r is not None else _load_jobs_from_files()
 
-    if r is not None:
-        prefix = os.getenv("REDIS_KEY_PREFIX", "agenticore")
-        # Scan for job keys
-        cursor = 0
-        keys = []
-        while True:
-            cursor, batch = r.scan(cursor, match=f"{prefix}:job:*", count=100)
-            keys.extend(batch)
-            if cursor == 0:
-                break
-
-        for key in keys:
-            data = r.hgetall(key)
-            if data:
-                if "exit_code" in data and data["exit_code"] != "None":
-                    data["exit_code"] = int(data["exit_code"])
-                elif "exit_code" in data:
-                    data["exit_code"] = None
-                if "ttl_seconds" in data:
-                    data["ttl_seconds"] = int(data["ttl_seconds"])
-                if "pid" in data and data["pid"] != "None":
-                    data["pid"] = int(data["pid"])
-                elif "pid" in data:
-                    data["pid"] = None
-                jobs.append(Job.from_dict(data))
-    else:
-        # File fallback
-        jobs_dir = _jobs_dir()
-        for path in jobs_dir.glob("*.json"):
-            with open(path) as f:
-                jobs.append(Job.from_dict(json.load(f)))
-
-    # Filter by status
     if status:
         jobs = [j for j in jobs if j.status == status]
 
-    # Sort by created_at descending
     jobs.sort(key=lambda j: j.created_at, reverse=True)
-
     return jobs[:limit]
 
 

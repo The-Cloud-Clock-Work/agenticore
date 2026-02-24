@@ -162,6 +162,19 @@ def end_job_trace(trace, job) -> None:
 _SKIP_TYPES = {"queue-operation", "file-history-snapshot", "progress"}
 
 
+def _extract_block_text(block: dict) -> Optional[str]:
+    """Extract text from a single content block."""
+    if not isinstance(block, dict):
+        return None
+    btype = block.get("type", "")
+    if btype == "text":
+        text = block.get("text", "").strip()
+        return text or None
+    if btype == "tool_use":
+        return f"[tool_use: {block.get('name', 'tool')}]"
+    return None  # Skip tool_result, thinking, etc.
+
+
 def _extract_turn_text(entry: dict) -> Optional[str]:
     """Extract readable text from a Claude transcript entry."""
     message = entry.get("message", {})
@@ -173,28 +186,56 @@ def _extract_turn_text(entry: dict) -> Optional[str]:
     if isinstance(content, str):
         return content.strip() or None
 
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            btype = block.get("type", "")
-            if btype == "text":
-                text = block.get("text", "").strip()
-                if text:
-                    parts.append(text)
-            elif btype == "tool_use":
-                tool_name = block.get("name", "tool")
-                parts.append(f"[tool_use: {tool_name}]")
-            elif btype == "tool_result":
-                # Skip raw tool results — too noisy
-                pass
-            elif btype == "thinking":
-                # Skip thinking blocks
-                pass
-        return "\n".join(parts) if parts else None
+    if not isinstance(content, list):
+        return None
 
-    return None
+    parts = [t for block in content if (t := _extract_block_text(block))]
+    return "\n".join(parts) if parts else None
+
+
+def _is_tool_result_only(entry: dict) -> bool:
+    """Check if entry contains only tool_result blocks."""
+    message = entry.get("message", {})
+    if not isinstance(message, dict):
+        return False
+    content = message.get("content", [])
+    if not isinstance(content, list):
+        return False
+    return all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content if isinstance(b, dict))
+
+
+def _parse_transcript_entry(line: str):
+    """Parse a JSONL line into (entry, entry_type) or None if skippable."""
+    line = line.strip()
+    if not line or not line.startswith("{"):
+        return None
+    try:
+        entry = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+
+    entry_type = entry.get("type", "")
+    if entry_type in _SKIP_TYPES or entry_type not in ("user", "assistant"):
+        return None
+    if _is_tool_result_only(entry):
+        return None
+    return entry, entry_type
+
+
+def _ship_turn(trace, entry: dict, entry_type: str, index: int) -> None:
+    """Ship a single transcript turn as a Langfuse span."""
+    text = _extract_turn_text(entry)
+    if not text:
+        return
+    try:
+        trace.span(
+            name=f"turn-{entry_type}-{index}",
+            input=text if entry_type == "user" else None,
+            output=text if entry_type == "assistant" else None,
+            metadata={"turn_index": index, "role": entry_type},
+        )
+    except Exception:
+        pass
 
 
 def ship_transcript(trace, session_id: str, cwd: Optional[str] = None) -> None:
@@ -210,42 +251,11 @@ def ship_transcript(trace, session_id: str, cwd: Optional[str] = None) -> None:
             lines = f.readlines()
 
         for i, line in enumerate(lines):
-            line = line.strip()
-            if not line or not line.startswith("{"):
+            parsed = _parse_transcript_entry(line)
+            if parsed is None:
                 continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            entry_type = entry.get("type", "")
-            if entry_type in _SKIP_TYPES:
-                continue
-            if entry_type not in ("user", "assistant"):
-                continue
-
-            # Skip tool_result-only user turns
-            message = entry.get("message", {})
-            if isinstance(message, dict):
-                content = message.get("content", [])
-                if isinstance(content, list) and all(
-                    isinstance(b, dict) and b.get("type") == "tool_result" for b in content if isinstance(b, dict)
-                ):
-                    continue
-
-            text = _extract_turn_text(entry)
-            if not text:
-                continue
-
-            try:
-                trace.span(
-                    name=f"turn-{entry_type}-{i}",
-                    input=text if entry_type == "user" else None,
-                    output=text if entry_type == "assistant" else None,
-                    metadata={"turn_index": i, "role": entry_type},
-                )
-            except Exception:
-                pass
+            entry, entry_type = parsed
+            _ship_turn(trace, entry, entry_type, i)
 
     except Exception as exc:
         print(f"[telemetry] ship_transcript failed: {exc}", file=sys.stderr)

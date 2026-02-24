@@ -188,7 +188,7 @@ def _build_rest_app():
     from starlette.responses import JSONResponse
     from starlette.routing import Route
 
-    async def health(request: Request):
+    def health(request: Request):  # noqa: ARG001 — Starlette requires request param
         return JSONResponse({"status": "ok", "service": "agenticore"})
 
     async def post_jobs(request: Request):
@@ -244,6 +244,36 @@ def _build_rest_app():
 # ── Transport ─────────────────────────────────────────────────────────────
 
 
+async def _handle_lifespan(scope, receive, send, lifespan_factory):
+    """Handle ASGI lifespan events (startup/shutdown)."""
+    lifespan_cm = None
+    message = await receive()
+    if message["type"] == "lifespan.startup":
+        try:
+            lifespan_cm = lifespan_factory()
+            await lifespan_cm.__aenter__()
+            await send({"type": "lifespan.startup.complete"})
+        except Exception:
+            await send({"type": "lifespan.startup.failed"})
+            return
+    message = await receive()
+    if message["type"] == "lifespan.shutdown":
+        if lifespan_cm:
+            await lifespan_cm.__aexit__(None, None, None)
+        await send({"type": "lifespan.shutdown.complete"})
+
+
+async def _route_request(scope, receive, send, http_app, sse_app, rest_app):
+    """Route an HTTP/WebSocket request to the appropriate sub-app."""
+    path = scope.get("path", "")
+    if path.startswith("/mcp"):
+        await http_app(scope, receive, send)
+    elif path in ("/sse", "/messages") or path.startswith("/messages"):
+        await sse_app(scope, receive, send)
+    else:
+        await rest_app(scope, receive, send)
+
+
 def _build_asgi_app():
     """Build the full ASGI app: MCP + REST + auth + health."""
     from contextlib import asynccontextmanager
@@ -259,40 +289,12 @@ def _build_asgi_app():
         async with session_manager.run():
             yield
 
-    _lifespan_cm = None
-
     async def combined_app(scope, receive, send):
-        nonlocal _lifespan_cm
-
         if scope["type"] == "lifespan":
-            message = await receive()
-            if message["type"] == "lifespan.startup":
-                try:
-                    _lifespan_cm = lifespan()
-                    await _lifespan_cm.__aenter__()
-                    await send({"type": "lifespan.startup.complete"})
-                except Exception:
-                    await send({"type": "lifespan.startup.failed"})
-                    return
-            message = await receive()
-            if message["type"] == "lifespan.shutdown":
-                if _lifespan_cm:
-                    await _lifespan_cm.__aexit__(None, None, None)
-                await send({"type": "lifespan.shutdown.complete"})
+            await _handle_lifespan(scope, receive, send, lifespan)
             return
+        await _route_request(scope, receive, send, http_app, sse_app, rest_app)
 
-        path = scope.get("path", "")
-
-        # MCP endpoints
-        if path.startswith("/mcp"):
-            await http_app(scope, receive, send)
-        elif path in ("/sse", "/messages") or path.startswith("/messages"):
-            await sse_app(scope, receive, send)
-        else:
-            # REST API
-            await rest_app(scope, receive, send)
-
-    # Wrap with API key auth
     cfg = get_config()
     if cfg.server.api_keys:
         return _ApiKeyMiddleware(combined_app, cfg.server.api_keys)

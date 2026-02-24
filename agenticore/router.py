@@ -35,7 +35,7 @@ def route(profile: str = "", repo_url: str = "") -> str:
     return cfg.claude.default_profile
 
 
-async def ai_route(task: str, repo_url: str = "") -> str:
+def ai_route(_task: str, repo_url: str = "") -> str:
     """AI router stub — analyzes the request and picks a profile.
 
     Future implementation: spawn a lightweight Claude session to examine

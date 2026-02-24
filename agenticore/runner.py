@@ -19,6 +19,9 @@ from agenticore.profiles import build_cli_args, get_profile, materialize_profile
 from agenticore.repos import ensure_clone, get_default_branch
 from agenticore.telemetry import end_job_trace, ship_transcript, start_job_trace
 
+# Set to prevent GC of fire-and-forget background tasks
+_background_tasks: set = set()
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -41,7 +44,7 @@ def _build_otel_env() -> dict:
     }
 
 
-def _build_env(cwd: Optional[Path] = None) -> dict:
+def _build_env(_cwd: Optional[Path] = None) -> dict:
     """Build full environment for the Claude subprocess."""
     env = os.environ.copy()
     env.update(_build_otel_env())
@@ -67,6 +70,75 @@ def _build_env(cwd: Optional[Path] = None) -> dict:
     return env
 
 
+def _extract_session_id(output_text: str) -> Optional[str]:
+    """Extract session_id from Claude's JSON output (last JSON line containing it)."""
+    for line in reversed(output_text.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            data = json.loads(line)
+            sid = data.get("session_id") or data.get("sessionId")
+            if sid:
+                return sid
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def _prepare_job_repo(job: Job):
+    """Clone repo and return (cwd, base_ref). Raises on failure."""
+    cwd = ensure_clone(job.repo_url)
+    base_ref = job.base_ref or get_default_branch(cwd)
+    return cwd, base_ref
+
+
+def _build_job_cmd(cfg, profile, job, base_ref, cwd):
+    """Build the CLI command and environment for a job."""
+    variables = {
+        "TASK": job.task,
+        "REPO_URL": job.repo_url or "",
+        "BASE_REF": base_ref,
+        "JOB_ID": job.id,
+        "PROFILE": job.profile,
+    }
+    cli_args = build_cli_args(profile, job.task, variables)
+    cmd = [cfg.claude.binary] + cli_args
+    if job.session_id:
+        cmd.extend(["--resume", job.session_id])
+    env = _build_env(cwd)
+    return cmd, env
+
+
+async def _run_subprocess(job_id, cmd, cwd, env, timeout):
+    """Run Claude subprocess with timeout. Returns (proc, stdout, stderr) or raises."""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=cwd,
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    update_job(job_id, pid=proc.pid)
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    return proc, stdout, stderr
+
+
+async def _maybe_auto_pr(job: Job, profile, status: str) -> Job:
+    """Create auto-PR if conditions are met."""
+    if status != "succeeded" or not profile.auto_pr or not job.repo_url:
+        return job
+    try:
+        from agenticore.pr import create_auto_pr
+
+        pr_url = await create_auto_pr(job)
+        if pr_url:
+            job = update_job(job.id, pr_url=pr_url)
+    except Exception as e:
+        print(f"Auto-PR failed for job {job.id}: {e}", file=sys.stderr)
+    return job
+
+
 async def run_job(job: Job) -> Job:
     """Execute a job: clone repo, run Claude, handle result.
 
@@ -74,27 +146,22 @@ async def run_job(job: Job) -> Job:
     """
     cfg = get_config()
 
-    # Load profile
     profile = get_profile(job.profile)
     if profile is None:
         return update_job(job.id, status="failed", error=f"Profile not found: {job.profile}", ended_at=_now_iso())
 
-    # Mark as running
     update_job(job.id, status="running", started_at=_now_iso())
     trace = start_job_trace(job)
 
     cwd = None
     base_ref = job.base_ref
 
-    # Clone repo if URL provided
     if job.repo_url:
         try:
-            cwd = ensure_clone(job.repo_url)
-            base_ref = base_ref or get_default_branch(cwd)
+            cwd, base_ref = _prepare_job_repo(job)
         except Exception as e:
             return update_job(job.id, status="failed", error=f"Clone failed: {e}", ended_at=_now_iso())
 
-    # Materialize profile's .claude/ package into working directory
     if cwd:
         try:
             materialize_profile(profile, Path(cwd) if not isinstance(cwd, Path) else cwd)
@@ -103,96 +170,29 @@ async def run_job(job: Job) -> Job:
                 job.id, status="failed", error=f"Profile materialization failed: {e}", ended_at=_now_iso()
             )
 
-    # Build template variables
-    variables = {
-        "TASK": job.task,
-        "REPO_URL": job.repo_url or "",
-        "BASE_REF": base_ref,
-        "JOB_ID": job.id,
-        "PROFILE": job.profile,
-    }
-
-    # Build CLI command
-    cli_args = build_cli_args(profile, job.task, variables)
-    cmd = [cfg.claude.binary] + cli_args
-
-    # Handle resume
-    if job.session_id:
-        cmd.extend(["--resume", job.session_id])
-
-    # Build environment
-    env = _build_env(cwd)
+    cmd, env = _build_job_cmd(cfg, profile, job, base_ref, cwd)
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=cwd,
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        job = await _execute_claude(job, cmd, cwd, env, profile, cfg)
+        return job
+    finally:
+        final_job = get_job(job.id)
+        ship_transcript(trace, getattr(final_job, "session_id", None), cwd=str(cwd) if cwd else None)
+        end_job_trace(trace, final_job)
 
-        # Store PID for cancellation
-        update_job(job.id, pid=proc.pid)
 
-        # Wait with timeout
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=profile.claude.timeout,
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            return update_job(
-                job.id,
-                status="failed",
-                error=f"Timeout after {profile.claude.timeout}s",
-                exit_code=-1,
-                ended_at=_now_iso(),
-            )
-
-        exit_code = proc.returncode
-        output_text = stdout.decode("utf-8", errors="replace") if stdout else ""
-        error_text = stderr.decode("utf-8", errors="replace") if stderr else ""
-
-        # Extract session_id from Claude's JSON output (last JSON line containing session_id)
-        for line in reversed(output_text.splitlines()):
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    data = json.loads(line)
-                    sid = data.get("session_id") or data.get("sessionId")
-                    if sid:
-                        update_job(job.id, session_id=sid)
-                        break
-                except json.JSONDecodeError:
-                    pass
-
-        status = "succeeded" if exit_code == 0 else "failed"
-
-        job = update_job(
+async def _execute_claude(job, cmd, cwd, env, profile, cfg):
+    """Execute Claude subprocess and process results."""
+    try:
+        proc, stdout, stderr = await _run_subprocess(job.id, cmd, cwd, env, profile.claude.timeout)
+    except asyncio.TimeoutError:
+        return update_job(
             job.id,
-            status=status,
-            exit_code=exit_code,
-            output=output_text[:50000],  # Truncate large output
-            error=error_text[:10000] if error_text else None,
+            status="failed",
+            error=f"Timeout after {profile.claude.timeout}s",
+            exit_code=-1,
             ended_at=_now_iso(),
         )
-
-        # Auto-PR on success
-        if status == "succeeded" and profile.auto_pr and job.repo_url:
-            try:
-                from agenticore.pr import create_auto_pr
-
-                pr_url = await create_auto_pr(job)
-                if pr_url:
-                    job = update_job(job.id, pr_url=pr_url)
-            except Exception as e:
-                print(f"Auto-PR failed for job {job.id}: {e}", file=sys.stderr)
-
-        return job
-
     except FileNotFoundError:
         return update_job(
             job.id,
@@ -202,10 +202,25 @@ async def run_job(job: Job) -> Job:
         )
     except Exception as e:
         return update_job(job.id, status="failed", error=str(e), ended_at=_now_iso())
-    finally:
-        final_job = get_job(job.id)
-        ship_transcript(trace, getattr(final_job, "session_id", None), cwd=str(cwd) if cwd else None)
-        end_job_trace(trace, final_job)
+
+    output_text = stdout.decode("utf-8", errors="replace") if stdout else ""
+    error_text = stderr.decode("utf-8", errors="replace") if stderr else ""
+
+    sid = _extract_session_id(output_text)
+    if sid:
+        update_job(job.id, session_id=sid)
+
+    status = "succeeded" if proc.returncode == 0 else "failed"
+    job = update_job(
+        job.id,
+        status=status,
+        exit_code=proc.returncode,
+        output=output_text[:50000],
+        error=error_text[:10000] if error_text else None,
+        ended_at=_now_iso(),
+    )
+
+    return await _maybe_auto_pr(job, profile, status)
 
 
 async def submit_job(
@@ -247,5 +262,8 @@ async def submit_job(
         return await run_job(job)
     else:
         # Fire-and-forget: launch in background
-        asyncio.create_task(run_job(job))
+        _background_task = asyncio.create_task(run_job(job))
+        # Store reference to prevent GC of fire-and-forget task
+        _background_tasks.add(_background_task)
+        _background_task.add_done_callback(_background_tasks.discard)
         return job

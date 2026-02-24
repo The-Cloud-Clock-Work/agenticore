@@ -129,6 +129,31 @@ def _cmd_jobs(args):
         print(f"{j['id']:<38} {j['status']:<12} {j.get('profile', ''):<10} {task_short}")
 
 
+def _print_job_details(job: dict) -> None:
+    """Print human-readable job details."""
+    print(f"Job:     {job['id']}")
+    print(f"Status:  {job['status']}")
+    print(f"Profile: {job.get('profile', '')}")
+    print(f"Task:    {job.get('task', '')}")
+
+    _OPTIONAL_FIELDS = [
+        ("repo_url", "Repo:    "),
+        ("exit_code", "Exit:    "),
+        ("pr_url", "PR:      "),
+        ("created_at", "Created: "),
+        ("ended_at", "Ended:   "),
+    ]
+    for key, label in _OPTIONAL_FIELDS:
+        val = job.get(key)
+        if val is not None:
+            print(f"{label}{val}")
+
+    if job.get("error"):
+        print(f"\nError:\n{job['error']}")
+    if job.get("output"):
+        print(f"\nOutput:\n{job['output'][:2000]}")
+
+
 def _cmd_job(args):
     """Get job details."""
     try:
@@ -144,25 +169,7 @@ def _cmd_job(args):
     if args.json:
         _print_json(data["job"])
     else:
-        job = data["job"]
-        print(f"Job:     {job['id']}")
-        print(f"Status:  {job['status']}")
-        print(f"Profile: {job.get('profile', '')}")
-        print(f"Task:    {job.get('task', '')}")
-        if job.get("repo_url"):
-            print(f"Repo:    {job['repo_url']}")
-        if job.get("exit_code") is not None:
-            print(f"Exit:    {job['exit_code']}")
-        if job.get("pr_url"):
-            print(f"PR:      {job['pr_url']}")
-        if job.get("created_at"):
-            print(f"Created: {job['created_at']}")
-        if job.get("ended_at"):
-            print(f"Ended:   {job['ended_at']}")
-        if job.get("error"):
-            print(f"\nError:\n{job['error']}")
-        if job.get("output"):
-            print(f"\nOutput:\n{job['output'][:2000]}")
+        _print_job_details(data["job"])
 
 
 def _cmd_cancel(args):

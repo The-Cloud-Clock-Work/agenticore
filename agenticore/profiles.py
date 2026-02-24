@@ -206,6 +206,39 @@ def _resolve_extends(profile: Profile, all_profiles: Dict[str, Profile]) -> Prof
     )
 
 
+def _get_search_dirs() -> List[Path]:
+    """Build the list of profile search directories."""
+    search_dirs = [_defaults_dir()]
+    agentihooks_dir = _agentihooks_profiles_dir()
+    if agentihooks_dir:
+        search_dirs.append(agentihooks_dir)
+    search_dirs.append(_user_profiles_dir())
+    return search_dirs
+
+
+def _load_dir_profiles(base_dir: Path, profiles: Dict[str, Profile]) -> None:
+    """Load directory-based profiles from a base directory."""
+    for child in sorted(base_dir.iterdir()):
+        if child.is_dir() and (child / "profile.yml").exists():
+            try:
+                p = _load_profile_dir(child)
+                profiles[p.name] = p
+            except Exception as e:
+                logger.warning("Failed to load profile dir %s: %s", child, e)
+
+
+def _load_legacy_profiles(base_dir: Path, profiles: Dict[str, Profile]) -> None:
+    """Load legacy .yml profiles from a base directory."""
+    for path in sorted(base_dir.glob("*.yml")):
+        if path.stem in profiles:
+            continue
+        try:
+            p = _load_legacy_yaml(path)
+            profiles[p.name] = p
+        except Exception as e:
+            logger.warning("Failed to load legacy profile %s: %s", path, e)
+
+
 def load_profiles() -> Dict[str, Profile]:
     """Load all profiles from defaults/ and ~/.agenticore/profiles/.
 
@@ -214,42 +247,14 @@ def load_profiles() -> Dict[str, Profile]:
     """
     profiles: Dict[str, Profile] = {}
 
-    search_dirs = [_defaults_dir()]
-    agentihooks_dir = _agentihooks_profiles_dir()
-    if agentihooks_dir:
-        search_dirs.append(agentihooks_dir)
-    search_dirs.append(_user_profiles_dir())
-
-    for base_dir in search_dirs:
+    for base_dir in _get_search_dirs():
         if not base_dir.exists():
             continue
-
-        # New format: directories with profile.yml
-        for child in sorted(base_dir.iterdir()):
-            if child.is_dir() and (child / "profile.yml").exists():
-                try:
-                    p = _load_profile_dir(child)
-                    profiles[p.name] = p
-                except Exception as e:
-                    logger.warning("Failed to load profile dir %s: %s", child, e)
-
-        # Legacy format: standalone .yml files
-        for path in sorted(base_dir.glob("*.yml")):
-            # Skip if a directory profile with same name already loaded
-            if path.stem in profiles:
-                continue
-            try:
-                p = _load_legacy_yaml(path)
-                profiles[p.name] = p
-            except Exception as e:
-                logger.warning("Failed to load legacy profile %s: %s", path, e)
+        _load_dir_profiles(base_dir, profiles)
+        _load_legacy_profiles(base_dir, profiles)
 
     # Resolve inheritance
-    resolved: Dict[str, Profile] = {}
-    for name, profile in profiles.items():
-        resolved[name] = _resolve_extends(profile, profiles)
-
-    return resolved
+    return {name: _resolve_extends(profile, profiles) for name, profile in profiles.items()}
 
 
 def get_profile(name: str) -> Optional[Profile]:
@@ -259,6 +264,35 @@ def get_profile(name: str) -> Optional[Profile]:
 
 
 # ── Materialization ───────────────────────────────────────────────────────
+
+
+def _copy_claude_dir(src_path: Path, working_dir: Path, created: List[Path]) -> None:
+    """Copy .claude/ directory from profile to working directory."""
+    src_claude = src_path / ".claude"
+    if src_claude.exists():
+        dst_claude = working_dir / ".claude"
+        shutil.copytree(src_claude, dst_claude, dirs_exist_ok=True)
+        created.append(dst_claude)
+
+
+def _copy_mcp_json(src_path: Path, working_dir: Path, created: List[Path]) -> None:
+    """Copy and merge .mcp.json from profile to working directory."""
+    src_mcp = src_path / ".mcp.json"
+    if not src_mcp.exists():
+        return
+
+    dst_mcp = working_dir / ".mcp.json"
+    if dst_mcp.exists():
+        with open(dst_mcp) as f:
+            existing = json.load(f)
+        with open(src_mcp) as f:
+            incoming = json.load(f)
+        existing.setdefault("mcpServers", {}).update(incoming.get("mcpServers", {}))
+        with open(dst_mcp, "w") as f:
+            json.dump(existing, f, indent=2)
+    else:
+        shutil.copy2(src_mcp, dst_mcp)
+    created.append(dst_mcp)
 
 
 def materialize_profile(
@@ -284,41 +318,15 @@ def materialize_profile(
         return []
 
     created: List[Path] = []
-    if profile.extends:
-        profiles = all_profiles if all_profiles is not None else load_profiles()
-    else:
-        profiles = {}
+    profiles = (all_profiles if all_profiles is not None else load_profiles()) if profile.extends else {}
 
-    # Build overlay chain: [base, ..., child]
     chain = _build_extends_chain(profile, profiles)
 
     for prof in chain:
         if prof.path is None:
             continue
-
-        # Copy .claude/ directory
-        src_claude = prof.path / ".claude"
-        if src_claude.exists():
-            dst_claude = working_dir / ".claude"
-            shutil.copytree(src_claude, dst_claude, dirs_exist_ok=True)
-            created.append(dst_claude)
-
-        # Copy .mcp.json (deep merge for inheritance)
-        src_mcp = prof.path / ".mcp.json"
-        if src_mcp.exists():
-            dst_mcp = working_dir / ".mcp.json"
-            if dst_mcp.exists():
-                # Deep merge: child servers added to parent servers
-                with open(dst_mcp) as f:
-                    existing = json.load(f)
-                with open(src_mcp) as f:
-                    incoming = json.load(f)
-                existing.setdefault("mcpServers", {}).update(incoming.get("mcpServers", {}))
-                with open(dst_mcp, "w") as f:
-                    json.dump(existing, f, indent=2)
-            else:
-                shutil.copy2(src_mcp, dst_mcp)
-            created.append(dst_mcp)
+        _copy_claude_dir(prof.path, working_dir, created)
+        _copy_mcp_json(prof.path, working_dir, created)
 
     return created
 
@@ -344,6 +352,41 @@ def _build_extends_chain(profile: Profile, all_profiles: Dict[str, Profile]) -> 
 # ── CLI Args ──────────────────────────────────────────────────────────────
 
 
+def _build_core_cli_args(c: ProfileClaude) -> List[str]:
+    """Build core CLI flags from ProfileClaude settings."""
+    args: List[str] = []
+
+    if c.worktree:
+        args.append("--worktree")
+
+    args.extend(["--model", c.model])
+    args.extend(["--max-turns", str(c.max_turns)])
+    args.extend(["--output-format", c.output_format])
+
+    if c.permission_mode == "dangerously-skip-permissions":
+        args.append("--dangerously-skip-permissions")
+    elif c.permission_mode:
+        args.extend(["--permission-mode", c.permission_mode])
+
+    if c.no_session_persistence:
+        args.append("--no-session-persistence")
+    if c.effort:
+        args.extend(["--effort", c.effort])
+    if c.max_budget_usd is not None:
+        args.extend(["--max-budget-usd", str(c.max_budget_usd)])
+    if c.fallback_model:
+        args.extend(["--fallback-model", c.fallback_model])
+
+    return args
+
+
+def _build_dynamic_prompt(vars_: Dict[str, str]) -> Optional[str]:
+    """Build dynamic system prompt from job variables."""
+    _CONTEXT_KEYS = [("JOB_ID", "Job"), ("TASK", "Task"), ("REPO_URL", "Repo"), ("BASE_REF", "Branch")]
+    parts = [f"{label}: {vars_[key]}" for key, label in _CONTEXT_KEYS if vars_.get(key)]
+    return " | ".join(parts) if parts else None
+
+
 def build_cli_args(
     profile: Profile,
     task: str,
@@ -364,67 +407,18 @@ def build_cli_args(
     Returns:
         List of CLI arguments (without the 'claude' binary)
     """
-    args: List[str] = []
-    c = profile.claude
+    args = _build_core_cli_args(profile.claude)
 
-    # Worktree
-    if c.worktree:
-        args.append("--worktree")
-
-    # Model
-    args.extend(["--model", c.model])
-
-    # Max turns
-    args.extend(["--max-turns", str(c.max_turns)])
-
-    # Output format
-    args.extend(["--output-format", c.output_format])
-
-    # Permission mode
-    if c.permission_mode == "dangerously-skip-permissions":
-        args.append("--dangerously-skip-permissions")
-    elif c.permission_mode:
-        args.extend(["--permission-mode", c.permission_mode])
-
-    # No session persistence
-    if c.no_session_persistence:
-        args.append("--no-session-persistence")
-
-    # Effort
-    if c.effort:
-        args.extend(["--effort", c.effort])
-
-    # Max budget
-    if c.max_budget_usd is not None:
-        args.extend(["--max-budget-usd", str(c.max_budget_usd)])
-
-    # Fallback model
-    if c.fallback_model:
-        args.extend(["--fallback-model", c.fallback_model])
-
-    # Dynamic context via --append-system-prompt
     vars_ = variables or {}
     if profile._legacy and profile.append_prompt:
-        # Legacy: render full template
         rendered = render_template(profile.append_prompt, vars_)
         args.extend(["--append-system-prompt", rendered])
     elif vars_:
-        # New format: inject job context as dynamic system prompt
-        parts = []
-        if vars_.get("JOB_ID"):
-            parts.append(f"Job: {vars_['JOB_ID']}")
-        if vars_.get("TASK"):
-            parts.append(f"Task: {vars_['TASK']}")
-        if vars_.get("REPO_URL"):
-            parts.append(f"Repo: {vars_['REPO_URL']}")
-        if vars_.get("BASE_REF"):
-            parts.append(f"Branch: {vars_['BASE_REF']}")
-        if parts:
-            args.extend(["--append-system-prompt", " | ".join(parts)])
+        prompt = _build_dynamic_prompt(vars_)
+        if prompt:
+            args.extend(["--append-system-prompt", prompt])
 
-    # Task prompt
     args.extend(["-p", task])
-
     return args
 
 

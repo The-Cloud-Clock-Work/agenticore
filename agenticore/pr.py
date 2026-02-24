@@ -53,7 +53,7 @@ async def create_auto_pr(job: Job) -> Optional[str]:
     return pr_url
 
 
-async def _get_worktree_branch(rdir, job_id: str) -> Optional[str]:
+async def _get_worktree_branch(rdir, _job_id: str) -> Optional[str]:
     """Find the worktree branch for this job."""
     try:
         result = await asyncio.create_subprocess_exec(
