@@ -241,6 +241,12 @@ No. Fully self-hosted. Langfuse integration is opt-in (set `LANGFUSE_PUBLIC_KEY`
 
 ---
 
+## Code Quality
+
+Continuous static analysis via [SonarQube](https://sonar.homeofanton.com/dashboard?id=agenticore) ensures code quality, security, and maintainability.
+
+---
+
 <div class="text-center mb-4" markdown="0">
   <p class="fs-5 fw-500">Ready to orchestrate Claude Code at scale?</p>
   <code class="fs-4">pip install agenticore</code>

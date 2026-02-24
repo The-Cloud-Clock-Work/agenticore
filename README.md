@@ -365,3 +365,7 @@ pytest tests/unit -v -m unit --cov=agenticore
 ruff check agenticore/ tests/
 ruff format --check agenticore/ tests/
 ```
+
+## Code Quality
+
+This project is continuously analyzed by [SonarQube](https://sonar.homeofanton.com/dashboard?id=agenticore) for code quality, security vulnerabilities, and test coverage.
