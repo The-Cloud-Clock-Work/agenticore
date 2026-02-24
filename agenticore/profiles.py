@@ -318,7 +318,10 @@ def materialize_profile(
         return []
 
     created: List[Path] = []
-    profiles = (all_profiles if all_profiles is not None else load_profiles()) if profile.extends else {}
+    if profile.extends:
+        profiles = all_profiles if all_profiles is not None else load_profiles()
+    else:
+        profiles = {}
 
     chain = _build_extends_chain(profile, profiles)
 

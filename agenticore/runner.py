@@ -120,7 +120,8 @@ async def _run_subprocess(job_id, cmd, cwd, env, timeout):
         stderr=asyncio.subprocess.PIPE,
     )
     update_job(job_id, pid=proc.pid)
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    async with asyncio.timeout(timeout):
+        stdout, stderr = await proc.communicate()
     return proc, stdout, stderr
 
 

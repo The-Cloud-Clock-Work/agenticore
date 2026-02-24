@@ -244,7 +244,7 @@ def _build_rest_app():
 # ── Transport ─────────────────────────────────────────────────────────────
 
 
-async def _handle_lifespan(scope, receive, send, lifespan_factory):
+async def _handle_lifespan(_scope, receive, send, lifespan_factory):
     """Handle ASGI lifespan events (startup/shutdown)."""
     lifespan_cm = None
     message = await receive()
