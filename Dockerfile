@@ -47,10 +47,11 @@ RUN apt-get update && \
 
 # gh CLI — direct tarball, no apt key needed
 RUN ARCH=$(dpkg --print-architecture) && \
-    curl -sL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" \
-    | tar xz -C /tmp && \
+    curl -fsSL --retry 3 --retry-delay 2 -o /tmp/gh.tar.gz \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" && \
+    tar xzf /tmp/gh.tar.gz -C /tmp && \
     mv "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh && \
-    rm -rf /tmp/gh_* && \
+    rm -rf /tmp/gh* && \
     gh --version
 
 # Node.js binary only (no npm) — needed by Claude CLI at runtime
