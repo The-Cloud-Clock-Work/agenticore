@@ -57,8 +57,8 @@ RUN ARCH=$(dpkg --print-architecture) && \
 # Node.js binary only (no npm) — needed by Claude CLI at runtime
 COPY --from=node-builder /usr/local/bin/node /usr/local/bin/node
 
-# Claude CLI (node_modules + launcher)
-COPY --from=node-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
+# Claude CLI only (exclude npm/corepack to avoid their CVEs)
+COPY --from=node-builder /usr/local/lib/node_modules/@anthropic-ai /usr/local/lib/node_modules/@anthropic-ai
 COPY --from=node-builder /usr/local/bin/claude /usr/local/bin/claude
 
 # Python venv with all dependencies
