@@ -1,6 +1,6 @@
 [project]
 name = "agenticore"
-version = "0.1.4"
+version = "0.1.5"
 description = "Claude Code runner and orchestrator — thin job lifecycle, repo management, and OTEL pipeline"
 readme = "README.md"
 license = {text = "MIT"}
