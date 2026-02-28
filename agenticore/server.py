@@ -18,14 +18,58 @@ from mcp.server.fastmcp import FastMCP
 from agenticore.config import get_config
 
 
+def _build_oauth_config():
+    """Build OAuth provider + AuthSettings if OAUTH_ISSUER_URL is set."""
+    import os
+
+    issuer = os.getenv("OAUTH_ISSUER_URL")
+    if not issuer:
+        return None, None
+
+    from agenticore.oauth_provider import AgenticoreOAuthProvider
+
+    try:
+        from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
+    except ImportError:
+        print("WARNING: mcp package does not support OAuth (upgrade to >=1.26)", file=sys.stderr)
+        return None, None
+
+    provider = AgenticoreOAuthProvider(
+        issuer_url=issuer,
+        client_id=os.getenv("OAUTH_CLIENT_ID", ""),
+        client_secret=os.getenv("OAUTH_CLIENT_SECRET", ""),
+    )
+
+    allowed_scopes_raw = os.getenv("OAUTH_ALLOWED_SCOPES", "").strip()
+    allowed_scopes = [s.strip() for s in allowed_scopes_raw.split() if s.strip()] if allowed_scopes_raw else None
+
+    resource_url = os.getenv("OAUTH_RESOURCE_URL") or (issuer.rstrip("/") + "/mcp")
+
+    settings = AuthSettings(
+        issuer_url=issuer,
+        resource_server_url=resource_url,
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True,
+            valid_scopes=allowed_scopes,
+        ),
+        revocation_options=RevocationOptions(enabled=True),
+    )
+    return provider, settings
+
+
 def _make_mcp() -> FastMCP:
     cfg = get_config()
-    return FastMCP(
-        "agenticore",
+    oauth_provider, oauth_settings = _build_oauth_config()
+    kwargs = dict(
         host=cfg.server.host,
         port=cfg.server.port,
         json_response=True,
     )
+    if oauth_provider and oauth_settings:
+        kwargs["auth_server_provider"] = oauth_provider
+        kwargs["auth"] = oauth_settings
+        print("OAuth 2.1 enabled (OAUTH_ISSUER_URL is set)", file=sys.stderr)
+    return FastMCP("agenticore", **kwargs)
 
 
 mcp = _make_mcp()

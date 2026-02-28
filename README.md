@@ -127,29 +127,45 @@ curl http://localhost:8200/health
 
 ## Authentication
 
-Authentication is **optional**. When disabled, all endpoints are public. When enabled, all endpoints except `/health` require a key.
+Authentication is **optional**. When disabled, all endpoints are public.
 
-### Enable API Keys
+### API Keys (simple)
 
 ```bash
 # Via environment variable (comma-separated for multiple keys)
 AGENTICORE_API_KEYS="key-1,key-2" agenticore serve
-
-# Via YAML config (~/.agenticore/config.yml)
-server:
-  api_keys:
-    - "key-1"
-    - "key-2"
 ```
 
-### Pass the Key in Requests
+Pass the key in requests:
 
 | Method | Example |
 |--------|---------|
 | Header | `curl -H "X-Api-Key: key-1" http://localhost:8200/jobs` |
 | Query param | `curl "http://localhost:8200/jobs?api_key=key-1"` |
+| Bearer token | `curl -H "Authorization: Bearer key-1" http://localhost:8200/jobs` |
 
-Unauthenticated requests return `401 {"error": "Invalid or missing API key"}`.
+### OAuth 2.1 (for claude.ai and MCP clients)
+
+Set `OAUTH_ISSUER_URL` to enable full OAuth 2.1 + PKCE. This lets claude.ai and other compliant MCP clients connect without a static API key — they go through the standard authorization code flow and get short-lived access tokens (1h) with automatic refresh (30 days).
+
+```bash
+OAUTH_ISSUER_URL=https://agenticore.example.com \
+OAUTH_CLIENT_ID=my-client \
+OAUTH_CLIENT_SECRET=my-secret \
+OAUTH_ALLOWED_REDIRECT_URIS=https://claude.ai/oauth/callback \
+agenticore serve
+```
+
+| Variable | Description |
+|----------|-------------|
+| `OAUTH_ISSUER_URL` | Master switch — your public server URL |
+| `OAUTH_CLIENT_ID` | Pre-configured client ID (optional — open registration if unset) |
+| `OAUTH_CLIENT_SECRET` | Pre-configured client secret |
+| `OAUTH_ALLOWED_REDIRECT_URIS` | Comma-separated allowed redirect URIs |
+| `OAUTH_ALLOWED_SCOPES` | Space-separated allowed scopes (optional) |
+| `OAUTH_RESOURCE_URL` | Resource server URL (defaults to `{issuer}/mcp`) |
+
+When OAuth is enabled, existing API keys still work as Bearer tokens — they are accepted in `load_access_token` as a fallback, so CLI and REST clients need no changes.
 
 ---
 
