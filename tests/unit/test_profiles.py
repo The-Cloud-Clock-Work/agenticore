@@ -8,6 +8,7 @@ import pytest
 from agenticore.profiles import (
     Profile,
     ProfileClaude,
+    _copy_profile_chain_to,
     build_cli_args,
     load_profiles,
     materialize_profile,
@@ -450,3 +451,106 @@ class TestProfileToDict:
         profile = Profile(name="code", claude=ProfileClaude())
         d = profile_to_dict(profile)
         assert "effort" not in d
+
+
+# ── Shared FS / Kubernetes materialization ────────────────────────────────
+
+
+@pytest.mark.unit
+class TestMaterializeProfileSharedFs:
+    def test_shared_fs_mode_writes_to_job_dir(self, tmp_path, monkeypatch):
+        """When AGENTICORE_SHARED_FS_ROOT is set, files go to /shared/jobs/{job_id}/."""
+        shared = tmp_path / "shared"
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
+
+        profiles = load_profiles()
+        code = profiles["code"]
+        working_dir = tmp_path / "repo"
+        working_dir.mkdir()
+
+        result = materialize_profile(code, working_dir, job_id="job-abc")
+
+        assert result is not None
+        assert result == shared / "jobs" / "job-abc"
+        assert (result / ".claude" / "settings.json").exists()
+
+    def test_shared_fs_mode_does_not_write_to_working_dir(self, tmp_path, monkeypatch):
+        """Working dir stays clean in Kubernetes mode."""
+        shared = tmp_path / "shared"
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
+
+        profiles = load_profiles()
+        code = profiles["code"]
+        working_dir = tmp_path / "repo"
+        working_dir.mkdir()
+
+        materialize_profile(code, working_dir, job_id="job-xyz")
+
+        assert not (working_dir / ".claude").exists()
+
+    def test_shared_fs_mode_creates_job_dir(self, tmp_path, monkeypatch):
+        """The per-job directory is created automatically."""
+        shared = tmp_path / "shared"
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
+
+        profiles = load_profiles()
+        code = profiles["code"]
+        working_dir = tmp_path / "repo"
+        working_dir.mkdir()
+
+        result = materialize_profile(code, working_dir, job_id="job-new")
+
+        assert result is not None
+        assert result.is_dir()
+
+    def test_local_mode_without_job_id(self, tmp_path, monkeypatch):
+        """With shared FS set but no job_id, falls back to working_dir."""
+        shared = tmp_path / "shared"
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
+
+        profiles = load_profiles()
+        code = profiles["code"]
+        working_dir = tmp_path / "repo"
+        working_dir.mkdir()
+
+        result = materialize_profile(code, working_dir, job_id="")
+
+        # Falls back to working_dir when no job_id
+        assert result == working_dir
+        assert (working_dir / ".claude").exists()
+
+
+@pytest.mark.unit
+class TestCopyProfileChainTo:
+    def test_copies_claude_dir(self, tmp_path):
+        """_copy_profile_chain_to copies .claude/ from each profile in chain."""
+        profiles = load_profiles()
+        code = profiles["code"]
+        target = tmp_path / "target"
+        target.mkdir()
+
+        created = _copy_profile_chain_to([code], target)
+
+        assert (target / ".claude").exists()
+        assert len(created) > 0
+
+    def test_skips_profiles_with_no_path(self, tmp_path):
+        """Profiles without a path are skipped silently."""
+        profile_no_path = Profile(name="noop", claude=ProfileClaude(), path=None)
+        target = tmp_path / "target"
+        target.mkdir()
+
+        created = _copy_profile_chain_to([profile_no_path], target)
+
+        assert created == []
+
+    def test_returns_created_paths(self, tmp_path):
+        """Returns list of paths that were created."""
+        profiles = load_profiles()
+        code = profiles["code"]
+        target = tmp_path / "target"
+        target.mkdir()
+
+        created = _copy_profile_chain_to([code], target)
+
+        assert all(p.exists() for p in created)

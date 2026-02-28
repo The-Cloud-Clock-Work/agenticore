@@ -15,6 +15,8 @@ from agenticore import __version__
 from agenticore.cli import (
     _api_url,
     _cmd_cancel,
+    _cmd_drain,
+    _cmd_init_shared_fs,
     _cmd_job,
     _cmd_jobs,
     _cmd_profiles,
@@ -920,3 +922,163 @@ class TestGetInstalledVersion:
         with patch("importlib.reload", side_effect=ImportError("boom")):
             v = _get_installed_version()
             assert v == ""
+
+
+# ── init-shared-fs command ────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestCmdInitSharedFs:
+    def test_creates_layout_dirs(self, tmp_path, capsys):
+        """init-shared-fs creates profiles, repos, jobs, job-state dirs."""
+        from types import SimpleNamespace
+
+        args = SimpleNamespace(shared_root=str(tmp_path / "shared"))
+        with patch("agenticore.profiles._defaults_dir", return_value=tmp_path / "no-profiles"):
+            _cmd_init_shared_fs(args)
+
+        root = tmp_path / "shared"
+        assert (root / "profiles").is_dir()
+        assert (root / "repos").is_dir()
+        assert (root / "jobs").is_dir()
+        assert (root / "job-state").is_dir()
+        assert "initialised" in capsys.readouterr().out.lower()
+
+    def test_uses_env_var_when_no_arg(self, tmp_path, monkeypatch, capsys):
+        """Uses AGENTICORE_SHARED_FS_ROOT when --shared-root is not set."""
+        from types import SimpleNamespace
+
+        root = tmp_path / "from-env"
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(root))
+        args = SimpleNamespace(shared_root=None)
+        with patch("agenticore.profiles._defaults_dir", return_value=tmp_path / "no-profiles"):
+            _cmd_init_shared_fs(args)
+
+        assert (root / "profiles").is_dir()
+
+    def test_exits_when_no_root_configured(self, monkeypatch, capsys):
+        """Exits with error when neither arg nor env var is provided."""
+        from types import SimpleNamespace
+
+        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
+        args = SimpleNamespace(shared_root=None)
+        with pytest.raises(SystemExit) as exc_info:
+            _cmd_init_shared_fs(args)
+        assert exc_info.value.code == 1
+        assert "required" in capsys.readouterr().err.lower()
+
+    def test_copies_bundled_profiles(self, tmp_path, capsys):
+        """Copies default profiles to shared FS when defaults dir exists."""
+        from types import SimpleNamespace
+
+        # Create a fake defaults dir with one profile
+        defaults = tmp_path / "defaults"
+        fake_profile = defaults / "code"
+        fake_profile.mkdir(parents=True)
+        (fake_profile / "profile.yml").write_text("name: code")
+
+        root = tmp_path / "shared"
+        args = SimpleNamespace(shared_root=str(root))
+
+        with patch("agenticore.profiles._defaults_dir", return_value=defaults):
+            _cmd_init_shared_fs(args)
+
+        assert (root / "profiles" / "code" / "profile.yml").exists()
+        assert "code" in capsys.readouterr().out
+
+
+# ── drain command ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestCmdDrain:
+    def test_drain_no_running_jobs(self, capsys):
+        """drain exits cleanly when no running jobs on this pod."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        args = SimpleNamespace(timeout=10)
+        with (
+            patch.dict("os.environ", {"AGENTICORE_POD_NAME": "test-pod-0", "REDIS_URL": ""}),
+            patch("agenticore.jobs.list_jobs", return_value=[]),
+        ):
+            _cmd_drain(args)
+
+        out = capsys.readouterr().out
+        assert "complete" in out.lower()
+
+    def test_drain_redis_unavailable_continues(self, capsys):
+        """drain works even when Redis is not available."""
+        from types import SimpleNamespace
+
+        args = SimpleNamespace(timeout=10)
+        with (
+            patch.dict("os.environ", {"AGENTICORE_POD_NAME": "pod-0", "REDIS_URL": "redis://bad:6379"}),
+            patch("redis.Redis.from_url", side_effect=Exception("connection refused")),
+            patch("agenticore.jobs.list_jobs", return_value=[]),
+        ):
+            _cmd_drain(args)
+
+        err = capsys.readouterr().err
+        assert "unavailable" in err.lower()
+
+    def test_drain_timeout_reached(self, capsys):
+        """drain prints timeout message when jobs don't finish."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        args = SimpleNamespace(timeout=1)
+
+        # Simulate a job that never finishes (always running on our pod)
+        running_job = MagicMock()
+        running_job.pod_name = "pod-0"
+
+        with (
+            patch.dict("os.environ", {"AGENTICORE_POD_NAME": "pod-0", "REDIS_URL": ""}),
+            patch("agenticore.jobs.list_jobs", return_value=[running_job]),
+            patch("time.sleep"),
+        ):
+            _cmd_drain(args)
+
+        err = capsys.readouterr().err
+        assert "timeout" in err.lower()
+
+    def test_drain_uses_hostname_when_no_pod_name(self, capsys):
+        """drain falls back to hostname when AGENTICORE_POD_NAME is unset."""
+        from types import SimpleNamespace
+
+        args = SimpleNamespace(timeout=5)
+        with (
+            patch.dict("os.environ", {"AGENTICORE_POD_NAME": "", "REDIS_URL": ""}),
+            patch("agenticore.jobs.list_jobs", return_value=[]),
+            patch("os.uname") as mock_uname,
+        ):
+            mock_uname.return_value = MagicMock(nodename="my-host")
+            _cmd_drain(args)
+
+        out = capsys.readouterr().out
+        assert "my-host" in out
+
+
+# ── main() dispatches new commands ───────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestMainDispatchesNewCommands:
+    def test_init_shared_fs_dispatches(self, tmp_path, capsys):
+        root = tmp_path / "shared"
+        with (
+            patch("sys.argv", ["agenticore", "init-shared-fs", "--shared-root", str(root)]),
+            patch("agenticore.profiles._defaults_dir", return_value=tmp_path / "no-defaults"),
+        ):
+            main()
+        assert (root / "profiles").is_dir()
+
+    def test_drain_dispatches(self, capsys):
+        with (
+            patch("sys.argv", ["agenticore", "drain", "--timeout", "5"]),
+            patch.dict("os.environ", {"AGENTICORE_POD_NAME": "pod-0", "REDIS_URL": ""}),
+            patch("agenticore.jobs.list_jobs", return_value=[]),
+        ):
+            main()
+        assert "complete" in capsys.readouterr().out.lower()

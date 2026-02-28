@@ -662,6 +662,86 @@ class TestApiKeyMiddleware:
             resp = client.get("/profiles")
         assert resp.status_code == 200
 
+    def test_accepts_bearer_token(self):
+        """Authorization: Bearer <key> is accepted."""
+        with patch.dict(os.environ, {"AGENTICORE_API_KEYS": "secret1"}, clear=False):
+            reset_config()
+            from agenticore.server import _build_asgi_app
+
+            app = _build_asgi_app()
+
+        from starlette.testclient import TestClient
+
+        mock_profiles = {"code": MagicMock(name="code")}
+
+        with (
+            patch("agenticore.profiles.load_profiles", return_value=mock_profiles),
+            patch("agenticore.profiles.profile_to_dict", return_value={"name": "code"}),
+        ):
+            client = TestClient(app)
+            resp = client.get("/profiles", headers={"Authorization": "Bearer secret1"})
+        assert resp.status_code == 200
+
+    def test_rejects_invalid_bearer(self):
+        """Authorization: Bearer with wrong key returns 401."""
+        with patch.dict(os.environ, {"AGENTICORE_API_KEYS": "secret1"}, clear=False):
+            reset_config()
+            from agenticore.server import _build_asgi_app
+
+            app = _build_asgi_app()
+
+        from starlette.testclient import TestClient
+
+        client = TestClient(app)
+        resp = client.get("/profiles", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401
+
+    def test_rejects_non_bearer_authorization(self):
+        """Authorization header that is not Bearer returns 401."""
+        with patch.dict(os.environ, {"AGENTICORE_API_KEYS": "secret1"}, clear=False):
+            reset_config()
+            from agenticore.server import _build_asgi_app
+
+            app = _build_asgi_app()
+
+        from starlette.testclient import TestClient
+
+        client = TestClient(app)
+        resp = client.get("/profiles", headers={"Authorization": "Basic dXNlcjpwYXNz"})
+        assert resp.status_code == 401
+
+    def test_extract_api_key_from_x_api_key(self):
+        """_extract_api_key reads X-API-Key header."""
+        from agenticore.server import _ApiKeyMiddleware
+
+        mw = _ApiKeyMiddleware(None, ["k"])
+        scope = {"headers": [(b"x-api-key", b"mykey")]}
+        assert mw._extract_api_key(scope) == "mykey"
+
+    def test_extract_api_key_from_bearer(self):
+        """_extract_api_key reads Authorization: Bearer header."""
+        from agenticore.server import _ApiKeyMiddleware
+
+        mw = _ApiKeyMiddleware(None, ["k"])
+        scope = {"headers": [(b"authorization", b"Bearer mytoken")]}
+        assert mw._extract_api_key(scope) == "mytoken"
+
+    def test_extract_api_key_from_query_string(self):
+        """_extract_api_key reads api_key query param."""
+        from agenticore.server import _ApiKeyMiddleware
+
+        mw = _ApiKeyMiddleware(None, ["k"])
+        scope = {"headers": [], "query_string": b"foo=bar&api_key=qparam&baz=1"}
+        assert mw._extract_api_key(scope) == "qparam"
+
+    def test_extract_api_key_returns_empty_when_absent(self):
+        """_extract_api_key returns empty string when no key present."""
+        from agenticore.server import _ApiKeyMiddleware
+
+        mw = _ApiKeyMiddleware(None, ["k"])
+        scope = {"headers": [], "query_string": b""}
+        assert mw._extract_api_key(scope) == ""
+
 
 # ── Consistent async behavior across interfaces ──────────────────────────
 

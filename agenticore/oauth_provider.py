@@ -258,7 +258,7 @@ class AgenticoreOAuthProvider(OAuthAuthorizationServerProvider):
                 self._refresh_tokens.pop(paired_rt, None)
         elif isinstance(token, RefreshToken):
             self._refresh_tokens.pop(token.token, None)
-            for at_str, rt_str in list(self._token_pairs.items()):
+            for at_str, rt_str in self._token_pairs.items():
                 if rt_str == token.token:
                     self._access_tokens.pop(at_str, None)
                     self._token_pairs.pop(at_str, None)

@@ -31,3 +31,5 @@ Thumbs.db
 _site/
 .jekyll-cache/
 Gemfile.lock
+coverage.xml
+.coverage

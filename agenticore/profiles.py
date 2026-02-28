@@ -295,6 +295,17 @@ def _copy_mcp_json(src_path: Path, working_dir: Path, created: List[Path]) -> No
     created.append(dst_mcp)
 
 
+def _copy_profile_chain_to(chain: List[Profile], target_dir: Path) -> List[Path]:
+    """Copy all profile files from the extends chain into target_dir."""
+    created: List[Path] = []
+    for prof in chain:
+        if prof.path is None:
+            continue
+        _copy_claude_dir(prof.path, target_dir, created)
+        _copy_mcp_json(prof.path, target_dir, created)
+    return created
+
+
 def materialize_profile(
     profile: Profile,
     working_dir: Path,
@@ -339,22 +350,11 @@ def materialize_profile(
     if shared_fs_root and job_id:
         target_dir = Path(shared_fs_root) / "jobs" / job_id
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
-        for prof in chain:
-            if prof.path is None:
-                continue
-            _copy_claude_dir(prof.path, target_dir, created)
-            _copy_mcp_json(prof.path, target_dir, created)
+        _copy_profile_chain_to(chain, target_dir)
         return target_dir
 
     # Local / Docker mode: copy into working directory (original behaviour)
-    created = []
-    for prof in chain:
-        if prof.path is None:
-            continue
-        _copy_claude_dir(prof.path, working_dir, created)
-        _copy_mcp_json(prof.path, working_dir, created)
-
+    created = _copy_profile_chain_to(chain, working_dir)
     return working_dir if created else None
 
 

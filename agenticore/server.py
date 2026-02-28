@@ -60,11 +60,11 @@ def _build_oauth_config():
 def _make_mcp() -> FastMCP:
     cfg = get_config()
     oauth_provider, oauth_settings = _build_oauth_config()
-    kwargs = dict(
-        host=cfg.server.host,
-        port=cfg.server.port,
-        json_response=True,
-    )
+    kwargs = {
+        "host": cfg.server.host,
+        "port": cfg.server.port,
+        "json_response": True,
+    }
     if oauth_provider and oauth_settings:
         kwargs["auth_server_provider"] = oauth_provider
         kwargs["auth"] = oauth_settings
@@ -354,6 +354,27 @@ class _ApiKeyMiddleware:
         self.app = app
         self.api_keys = set(api_keys)
 
+    def _extract_api_key(self, scope) -> str:
+        """Extract API key from headers or query string.
+
+        Accepted forms:
+          1. X-API-Key: <key>             (MCP client JSON config, preferred)
+          2. Authorization: Bearer <key>  (OAuth Bearer / MCP type:http clients)
+          3. ?api_key=<key>               (REST API / curl convenience)
+        """
+        for name, value in scope.get("headers", []):
+            n = name.lower()
+            if n == b"x-api-key":
+                return value.decode("utf-8")
+            if n == b"authorization":
+                v = value.decode("utf-8")
+                return v[7:] if v.startswith("Bearer ") else ""
+        qs = scope.get("query_string", b"").decode("utf-8")
+        for param in qs.split("&"):
+            if param.startswith("api_key="):
+                return param[8:]
+        return ""
+
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
@@ -364,29 +385,7 @@ class _ApiKeyMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Extract API key — three accepted forms:
-        #   1. X-API-Key: <key>             (MCP client JSON config, preferred)
-        #   2. Authorization: Bearer <key>  (OAuth Bearer / MCP type:http clients)
-        #   3. ?api_key=<key>               (REST API / curl convenience)
-        key = None
-        for name, value in scope.get("headers", []):
-            n = name.lower()
-            if n == b"x-api-key":
-                key = value.decode("utf-8")
-                break
-            if n == b"authorization":
-                v = value.decode("utf-8")
-                if v.startswith("Bearer "):
-                    key = v[7:]
-                break
-
-        if key is None:
-            qs = scope.get("query_string", b"").decode("utf-8")
-            for param in qs.split("&"):
-                if param.startswith("api_key="):
-                    key = param[8:]
-                    break
-
+        key = self._extract_api_key(scope)
         if key not in self.api_keys:
             body = json.dumps({"error": "Invalid or missing API key"}).encode()
             await send(
