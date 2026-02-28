@@ -171,35 +171,24 @@ When OAuth is enabled, existing API keys still work as Bearer tokens — they ar
 
 ## Connecting MCP Clients
 
-Agenticore speaks MCP over SSE or Streamable HTTP. Add it to any MCP client.
+Agenticore exposes two MCP transports on the same port:
 
-### Claude Code CLI
+| Transport | Endpoint | Use Case |
+|-----------|----------|----------|
+| Streamable HTTP | `/mcp` | `type: "http"` — Claude Code, Claude Desktop, most clients |
+| SSE | `/sse` | Legacy SSE clients |
+| stdio | stdin/stdout | Direct Claude Code subprocess integration |
 
-```bash
-claude mcp add agenticore --transport sse http://localhost:8200/sse
-```
+### Claude Code CLI / Claude Desktop
 
-Or add to your project's `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "agenticore": {
-      "url": "http://localhost:8200/sse"
-    }
-  }
-}
-```
-
-### Claude Desktop
-
-Add to `claude_desktop_config.json`:
+Add to your project's `.mcp.json` or `~/.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "agenticore": {
-      "url": "http://your-server:8200/sse"
+      "type": "http",
+      "url": "http://localhost:8200/mcp"
     }
   }
 }
@@ -207,25 +196,40 @@ Add to `claude_desktop_config.json`:
 
 ### With Authentication
 
+Pass the API key in the `headers` object — never in the URL:
+
 ```json
 {
   "mcpServers": {
     "agenticore": {
-      "url": "http://your-server:8200/sse?api_key=your-secret-key"
+      "type": "http",
+      "url": "http://your-server:8200/mcp",
+      "headers": {
+        "X-API-Key": "your-secret-key"
+      }
     }
   }
 }
 ```
 
-### Available Transports
+### stdio (Claude Code subprocess)
 
-| Transport | URL | Use Case |
-|-----------|-----|----------|
-| SSE | `/sse` | MCP clients — most compatible |
-| Streamable HTTP | `/mcp` | MCP clients — newer protocol |
-| stdio | stdin/stdout | Direct Claude Code integration |
+```bash
+AGENTICORE_TRANSPORT=stdio python -m agenticore
+```
 
-For stdio mode: `AGENTICORE_TRANSPORT=stdio python -m agenticore`
+Or in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "agenticore": {
+      "command": "python",
+      "args": ["-m", "agenticore"]
+    }
+  }
+}
+```
 
 ---
 

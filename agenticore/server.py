@@ -364,11 +364,20 @@ class _ApiKeyMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Extract API key
+        # Extract API key — three accepted forms:
+        #   1. X-API-Key: <key>             (MCP client JSON config, preferred)
+        #   2. Authorization: Bearer <key>  (OAuth Bearer / MCP type:http clients)
+        #   3. ?api_key=<key>               (REST API / curl convenience)
         key = None
         for name, value in scope.get("headers", []):
-            if name.lower() == b"x-api-key":
+            n = name.lower()
+            if n == b"x-api-key":
                 key = value.decode("utf-8")
+                break
+            if n == b"authorization":
+                v = value.decode("utf-8")
+                if v.startswith("Bearer "):
+                    key = v[7:]
                 break
 
         if key is None:

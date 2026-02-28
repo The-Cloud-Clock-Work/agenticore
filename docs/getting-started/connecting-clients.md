@@ -29,9 +29,46 @@ and access the same job store.
 
 ## MCP Client Setup
 
-### SSE Transport (recommended)
+### Streamable HTTP (recommended — `type: "http"`)
 
-Add to your client's `.mcp.json`:
+The `/mcp` endpoint supports the MCP Streamable HTTP transport. This is the
+correct transport for Claude Code CLI, Claude Desktop, and most modern clients.
+
+Add to your project's `.mcp.json` or `~/.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "agenticore": {
+      "type": "http",
+      "url": "http://localhost:8200/mcp"
+    }
+  }
+}
+```
+
+### With authentication
+
+Pass the key in `headers` — never in the URL:
+
+```json
+{
+  "mcpServers": {
+    "agenticore": {
+      "type": "http",
+      "url": "http://your-server:8200/mcp",
+      "headers": {
+        "X-API-Key": "your-secret-key"
+      }
+    }
+  }
+}
+```
+
+### SSE Transport (legacy)
+
+Some older MCP clients use the SSE transport (`/sse`). Only use this if your
+client does not support `type: "http"`:
 
 ```json
 {
@@ -43,25 +80,16 @@ Add to your client's `.mcp.json`:
 }
 ```
 
-### Streamable HTTP Transport
+### stdio (Claude Code subprocess)
+
+For direct subprocess integration (no HTTP server needed):
 
 ```json
 {
   "mcpServers": {
     "agenticore": {
-      "url": "http://localhost:8200/mcp"
-    }
-  }
-}
-```
-
-### With authentication
-
-```json
-{
-  "mcpServers": {
-    "agenticore": {
-      "url": "http://localhost:8200/sse?api_key=your-secret-key"
+      "command": "python",
+      "args": ["-m", "agenticore"]
     }
   }
 }
