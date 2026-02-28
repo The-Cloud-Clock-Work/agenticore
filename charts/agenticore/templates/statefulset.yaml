@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "agenticore.fullname" . }}
+  labels:
+    {{- include "agenticore.labels" . | nindent 4 }}
+  {{- with .Values.podAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceName: {{ include "agenticore.fullname" . }}-headless
+  {{- if not .Values.keda.enabled }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "agenticore.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agenticore.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 300
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agenticore
+          image: {{ include "agenticore.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.config.port }}
+              protocol: TCP
+          env:
+            # Pod identity (Downward API)
+            - name: AGENTICORE_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Server config
+            - name: AGENTICORE_TRANSPORT
+              value: {{ .Values.config.transport | quote }}
+            - name: AGENTICORE_HOST
+              value: "0.0.0.0"
+            - name: AGENTICORE_PORT
+              value: {{ .Values.config.port | quote }}
+            - name: AGENTICORE_DEFAULT_PROFILE
+              value: {{ .Values.config.defaultProfile | quote }}
+            - name: AGENTICORE_MAX_PARALLEL_JOBS
+              value: {{ .Values.config.maxParallelJobs | quote }}
+            - name: AGENTICORE_JOB_TTL
+              value: {{ .Values.config.jobTtl | quote }}
+            - name: AGENTICORE_CLAUDE_BINARY
+              value: {{ .Values.config.claudeBinary | quote }}
+            - name: AGENTICORE_CLAUDE_TIMEOUT
+              value: {{ .Values.config.claudeTimeout | quote }}
+            # Shared filesystem
+            - name: AGENTICORE_SHARED_FS_ROOT
+              value: {{ .Values.sharedFs.root | quote }}
+            - name: AGENTICORE_REPOS_ROOT
+              value: {{ .Values.sharedFs.reposRoot | quote }}
+            - name: AGENTICORE_JOBS_DIR
+              value: {{ .Values.sharedFs.jobsDir | quote }}
+            # Secrets from Secret resource
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: redis-url
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: anthropic-api-key
+                  optional: true
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: github-token
+                  optional: true
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: shared-fs
+              mountPath: {{ .Values.sharedFs.root }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.config.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.config.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "agenticore drain --timeout 270"]
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: shared-fs
+          persistentVolumeClaim:
+            claimName: {{ include "agenticore.fullname" . }}-shared
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

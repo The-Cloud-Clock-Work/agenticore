@@ -1,0 +1,165 @@
+# Agenticore Helm Chart — Default Values
+#
+# Override any value with:
+#   helm install agenticore oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+#     --set image.tag=v0.1.5 \
+#     --set redis.address=my-redis:6379 \
+#     -f my-values.yaml
+
+# Override the chart name (default: agenticore)
+nameOverride: ""
+# Override the fully-qualified release name
+fullnameOverride: ""
+
+# -----------------------------------------------------------------------------
+# Image
+# -----------------------------------------------------------------------------
+image:
+  repository: tccw/agenticore
+  tag: latest          # overridden by CI with the release tag (e.g. v0.1.5)
+  pullPolicy: IfNotPresent
+
+# Image pull secrets for private registries
+imagePullSecrets: []
+# - name: my-registry-secret
+
+# -----------------------------------------------------------------------------
+# Replicas
+# -----------------------------------------------------------------------------
+# Static replica count. Ignored when keda.enabled=true (KEDA manages replicas).
+replicas: 2
+
+# -----------------------------------------------------------------------------
+# Agenticore configuration
+# -----------------------------------------------------------------------------
+config:
+  # Transport: always "sse" in Kubernetes (HTTP server)
+  transport: sse
+  port: 8200
+
+  # Default execution profile when none is specified by the client
+  defaultProfile: code
+
+  # Max Claude Code subprocesses per pod
+  maxParallelJobs: 3
+
+  # Job record TTL in Redis (seconds)
+  jobTtl: 86400
+
+  # Claude Code binary path inside the container
+  claudeBinary: claude
+
+  # Max job runtime (seconds)
+  claudeTimeout: 3600
+
+# Shared filesystem mount path (must match the PVC mount)
+sharedFs:
+  root: /shared
+  reposRoot: /shared/repos
+  jobsDir: /shared/job-state
+
+# -----------------------------------------------------------------------------
+# Secret reference
+# -----------------------------------------------------------------------------
+# Name of the Kubernetes Secret containing sensitive values.
+# Create it before installing the chart:
+#
+#   kubectl create secret generic agenticore-secrets \
+#     --from-literal=redis-url="redis://:password@host:6379" \
+#     --from-literal=anthropic-api-key="sk-ant-..." \
+#     --from-literal=github-token="ghp_..."
+#
+secretName: agenticore-secrets
+
+# -----------------------------------------------------------------------------
+# Persistent storage (shared RWX volume)
+# -----------------------------------------------------------------------------
+storage:
+  # Storage class must support ReadWriteMany:
+  #   nfs-client      — on-prem NFS (nfs-subdir-external-provisioner)
+  #   efs-sc          — AWS EFS (efs-csi-driver)
+  #   azurefile-csi   — Azure Files
+  #   ceph-filesystem — Rook/Ceph
+  className: nfs-client
+  size: 100Gi
+
+# -----------------------------------------------------------------------------
+# Service
+# -----------------------------------------------------------------------------
+service:
+  # LoadBalancer — public IP (cloud)
+  # ClusterIP    — internal only (add Ingress separately)
+  # NodePort     — direct node port access
+  type: LoadBalancer
+  port: 8200
+
+# -----------------------------------------------------------------------------
+# Ingress (optional)
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: agenticore.example.com
+  tls: []
+  # - secretName: agenticore-tls
+  #   hosts:
+  #     - agenticore.example.com
+
+# -----------------------------------------------------------------------------
+# KEDA autoscaling (optional — requires KEDA installed in the cluster)
+# -----------------------------------------------------------------------------
+keda:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  pollingInterval: 15
+  cooldownPeriod: 60
+  # Scale up when queue depth exceeds listLength jobs per pod
+  listLength: "5"
+  # Redis address for KEDA queue trigger (host:port, no scheme)
+  # Usually the same Redis as REDIS_URL but without credentials here —
+  # credentials come from the TriggerAuthentication referencing secretName.
+  redisAddress: redis:6379
+
+# -----------------------------------------------------------------------------
+# Init job — populates shared FS with bundled profiles
+# -----------------------------------------------------------------------------
+initJob:
+  # Run once on install to copy bundled profiles to /shared/profiles/.
+  # Set to false if you manage profiles manually or have already run it.
+  enabled: true
+
+# -----------------------------------------------------------------------------
+# Resource requests and limits
+# -----------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+  limits:
+    cpu: "2"
+    memory: "2Gi"
+
+# -----------------------------------------------------------------------------
+# Extra environment variables
+# -----------------------------------------------------------------------------
+# Injected into the StatefulSet as-is. Use for any variable not covered above.
+extraEnv: []
+# - name: LANGFUSE_PUBLIC_KEY
+#   valueFrom:
+#     secretKeyRef:
+#       name: agenticore-secrets
+#       key: langfuse-public-key
+# - name: OAUTH_ISSUER_URL
+#   value: https://agenticore.example.com
+
+# -----------------------------------------------------------------------------
+# Pod settings
+# -----------------------------------------------------------------------------
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,17 @@
+apiVersion: v2
+name: agenticore
+description: Claude Code runner and orchestrator — profiles, job lifecycle, auto-PR, OTEL observability
+type: application
+version: 0.0.0  # replaced by CI during helm package
+appVersion: "0.0.0"  # replaced by CI during helm package
+keywords:
+  - claude
+  - ai
+  - agent
+  - mcp
+home: https://github.com/The-Cloud-Clock-Work/agenticore
+sources:
+  - https://github.com/The-Cloud-Clock-Work/agenticore
+maintainers:
+  - name: The Cloud Clock Work
+    url: https://github.com/The-Cloud-Clock-Work

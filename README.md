@@ -248,6 +248,30 @@ Custom profiles live in `~/.agenticore/profiles/`. See the [Profile System docs]
 
 ---
 
+## Helm (Kubernetes)
+
+Install from GHCR with a single command:
+
+```bash
+# 1. Create the Kubernetes Secret (once per cluster)
+kubectl create secret generic agenticore-secrets \
+  --from-literal=redis-url="redis://:password@host:6379" \
+  --from-literal=anthropic-api-key="sk-ant-..." \
+  --from-literal=github-token="ghp_..."
+
+# 2. Install the chart
+helm install agenticore \
+  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  --version 0.1.5 \
+  --set storage.className=your-rwx-storage-class
+```
+
+Upgrade: `helm upgrade agenticore oci://ghcr.io/the-cloud-clock-work/charts/agenticore --version 0.1.6`
+
+Full configuration: [Kubernetes Deployment](docs/deployment/kubernetes.md)
+
+---
+
 ## Docker
 
 ```bash

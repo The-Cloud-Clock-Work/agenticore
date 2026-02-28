@@ -18,5 +18,6 @@ jobs:
     uses: The-Cloud-Clock-Work/.github/.github/workflows/release-reusable.yml@main
     with:
       bump: ${{ inputs.bump }}
+      downstream_workflows: "docker-publish.yml,build.yml,publish-pypi.yml,helm-publish.yml"
     secrets:
       RELEASE_TOKEN: ${{ secrets.ORG_GITHUB_TOKEN }}

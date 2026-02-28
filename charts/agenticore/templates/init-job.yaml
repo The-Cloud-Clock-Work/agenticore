@@ -1,0 +1,48 @@
+{{- if .Values.initJob.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "agenticore.fullname" . }}-init-profiles
+  labels:
+    {{- include "agenticore.labels" . | nindent 4 }}
+    app.kubernetes.io/component: init
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "agenticore.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: init
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: {{ include "agenticore.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["agenticore", "init-shared-fs"]
+          env:
+            - name: AGENTICORE_SHARED_FS_ROOT
+              value: {{ .Values.sharedFs.root | quote }}
+          volumeMounts:
+            - name: shared-fs
+              mountPath: {{ .Values.sharedFs.root }}
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: shared-fs
+          persistentVolumeClaim:
+            claimName: {{ include "agenticore.fullname" . }}-shared
+{{- end }}

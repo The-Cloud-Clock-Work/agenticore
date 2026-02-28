@@ -10,6 +10,9 @@ PersistentVolumeClaim** so all pods share the same git repo cache and profile
 files. Jobs are stored in Redis; any pod can serve any job request
 (work-stealing). KEDA autoscales pods based on Redis queue depth.
 
+The recommended deployment method is **Helm** from GHCR. Raw `k8s/` manifests
+are available as a secondary option for non-Helm deployments.
+
 ## Architecture
 
 ```
@@ -46,29 +49,33 @@ Internet / Claude.ai ──► LoadBalancer :8200
 └── job-state/{id}.json         ← job file fallback (AGENTICORE_JOBS_DIR)
 ```
 
-## Manifests
-
-All manifests live in `k8s/`. Apply them with:
-
-```bash
-kubectl apply -f k8s/
-```
-
-| File | Resource | Purpose |
-|------|----------|---------|
-| `pvc-shared.yaml` | PersistentVolumeClaim | 100Gi RWX shared volume |
-| `init-profiles.yaml` | Job | One-time: populate shared FS with profiles |
-| `statefulset.yaml` | StatefulSet | Agenticore pods (2 replicas default) |
-| `headless-service.yaml` | Service | Stable pod DNS (`agenticore-0.agenticore-headless`) |
-| `service.yaml` | Service | LoadBalancer for external traffic |
-| `keda-scaledobject.yaml` | ScaledObject + TriggerAuthentication | KEDA autoscaler |
+---
 
 ## Prerequisites
 
-1. A RWX storage class (NFS, AWS EFS, Azure Files, Ceph RBD FS)
-2. Redis (in-cluster or external)
-3. KEDA installed (optional, for autoscaling)
-4. A Kubernetes Secret named `agenticore-secrets` with:
+1. A Kubernetes cluster
+2. A RWX-capable storage class (see table below)
+3. Redis (in-cluster or external)
+4. KEDA installed in the cluster (optional, for autoscaling)
+5. The `agenticore-secrets` Kubernetes Secret
+
+**RWX storage class options:**
+
+| Environment | `storageClassName` |
+|-------------|-------------------|
+| On-prem NFS | `nfs-client` |
+| AWS EFS | `efs-sc` |
+| Azure Files | `azurefile-csi` |
+| Ceph | `ceph-filesystem` |
+
+---
+
+## Install via Helm
+
+The chart is published to GHCR and requires no additional registry configuration
+for public clusters.
+
+### 1. Create the Secret
 
 ```bash
 kubectl create secret generic agenticore-secrets \
@@ -78,69 +85,83 @@ kubectl create secret generic agenticore-secrets \
   --from-literal=anthropic-api-key="$ANTHROPIC_API_KEY"
 ```
 
-## Deployment Steps
-
-### 1. Create the shared PVC
-
-Edit `k8s/pvc-shared.yaml` to set your storage class, then:
+### 2. Install the chart
 
 ```bash
-kubectl apply -f k8s/pvc-shared.yaml
+helm install agenticore \
+  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  --version 0.1.5 \
+  --set storage.className=nfs-client
 ```
 
-Storage class options:
+### Common `--set` overrides
 
-| Environment | `storageClassName` |
-|-------------|-------------------|
-| On-prem NFS | `nfs-client` |
-| AWS EFS | `efs-sc` |
-| Azure Files | `azurefile-csi` |
-| Ceph | `ceph-filesystem` |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `storage.className` | `nfs-client` | RWX storage class (required) |
+| `storage.size` | `100Gi` | PVC size |
+| `replicas` | `2` | Static replica count (ignored when KEDA enabled) |
+| `image.tag` | `latest` | Agenticore image tag |
+| `image.repository` | `tccw/agenticore` | Container image |
+| `config.defaultProfile` | `code` | Default execution profile |
+| `config.maxParallelJobs` | `3` | Max Claude subprocesses per pod |
+| `keda.enabled` | `false` | Enable KEDA autoscaling |
+| `keda.redisAddress` | `redis:6379` | Redis host:port for KEDA |
+| `ingress.enabled` | `false` | Enable Ingress resource |
+| `ingress.host` | `agenticore.example.com` | Ingress hostname |
 
-### 2. Initialise the shared FS (once)
+Full reference: [`charts/agenticore/values.yaml`](../../charts/agenticore/values.yaml)
+
+---
+
+## Upgrade
 
 ```bash
-kubectl apply -f k8s/init-profiles.yaml
-kubectl wait --for=condition=complete job/agenticore-init-profiles
+helm upgrade agenticore \
+  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  --version 0.1.6
 ```
 
-This runs `agenticore init-shared-fs` which creates the directory layout and
-copies the bundled profile packages to `/shared/profiles/`.
+---
 
-### 3. Apply the StatefulSet and Services
+## KEDA Autoscaling
+
+Enable with:
 
 ```bash
-kubectl apply -f k8s/headless-service.yaml
-kubectl apply -f k8s/service.yaml
-kubectl apply -f k8s/statefulset.yaml
+helm upgrade agenticore \
+  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  --set keda.enabled=true \
+  --set keda.redisAddress=redis:6379
 ```
 
-### 4. (Optional) Enable KEDA autoscaling
+The chart deploys a `ScaledObject` that watches the `agenticore:queue` Redis
+list and adds a replica for every 5 pending jobs, scaling from 1 to 10 pods.
 
-```bash
-kubectl apply -f k8s/keda-scaledobject.yaml
-```
+Adjust via `--set keda.minReplicas=1 --set keda.maxReplicas=20 --set keda.listLength=10`.
 
-Scales from 1 to 10 pods based on `agenticore:queue` Redis list depth
-(one scale-up per 5 queued jobs).
+---
 
-## StatefulSet Configuration
+## Key values reference
 
-Key environment variables injected into pods:
+| Value | Default | Description |
+|-------|---------|-------------|
+| `nameOverride` | `""` | Override chart name |
+| `fullnameOverride` | `""` | Override fully-qualified release name |
+| `secretName` | `agenticore-secrets` | K8s Secret with credentials |
+| `sharedFs.root` | `/shared` | Mount path for RWX PVC |
+| `sharedFs.reposRoot` | `/shared/repos` | Git clone cache path |
+| `sharedFs.jobsDir` | `/shared/job-state` | Job state fallback directory |
+| `config.transport` | `sse` | Always `sse` in Kubernetes |
+| `config.port` | `8200` | Server port |
+| `config.jobTtl` | `86400` | Job TTL in Redis (seconds) |
+| `initJob.enabled` | `true` | Run init job on install |
+| `service.type` | `LoadBalancer` | Kubernetes Service type |
+| `ingress.enabled` | `false` | Enable Ingress |
 
-| Variable | Value | Source |
-|----------|-------|--------|
-| `AGENTICORE_POD_NAME` | `metadata.name` | Downward API |
-| `AGENTICORE_SHARED_FS_ROOT` | `/shared` | Manifest |
-| `AGENTICORE_REPOS_ROOT` | `/shared/repos` | Manifest |
-| `AGENTICORE_JOBS_DIR` | `/shared/job-state` | Manifest |
-| `AGENTICORE_TRANSPORT` | `sse` | Manifest |
-| `REDIS_URL` | from Secret | `agenticore-secrets` |
+---
 
-`AGENTICORE_POD_NAME` is set via Downward API so the pod's stable name
-(`agenticore-0`, `agenticore-1`, …) is recorded on every job it runs.
-
-## Pod Identity
+## Pod Identity and Graceful Shutdown
 
 StatefulSet pods have stable DNS names:
 
@@ -155,8 +176,6 @@ agenticore-1.agenticore-headless.default.svc.cluster.local
 agenticore jobs --json | jq '.[].pod_name'
 ```
 
-## Graceful Shutdown
-
 The StatefulSet sets `terminationGracePeriodSeconds: 300`. The PreStop hook
 calls `agenticore drain --timeout 270` which:
 
@@ -164,23 +183,7 @@ calls `agenticore drain --timeout 270` which:
 2. Waits for all in-progress jobs to complete
 3. Exits — Kubernetes then sends SIGTERM to the container
 
-This ensures Claude sessions are never interrupted mid-task.
-
-## KEDA Autoscaling
-
-`keda-scaledobject.yaml` watches the `agenticore:queue` Redis list and adds a
-replica for every 5 pending jobs, up to 10 pods.
-
-```yaml
-triggers:
-- type: redis
-  metadata:
-    listName: agenticore:queue
-    listLength: "5"
-```
-
-Adjust `minReplicaCount`, `maxReplicaCount`, and `listLength` to match your
-throughput requirements.
+---
 
 ## Verification
 
@@ -198,12 +201,15 @@ agenticore run "echo hello world" --wait
 # Confirm job shows pod_name
 agenticore job <id> --json | jq '.pod_name'
 
-# Scale test: submit 10 jobs and verify spread
-for i in $(seq 1 10); do
-  agenticore run "task $i" --repo https://github.com/example/repo
-done
-agenticore jobs | head -15
+# Dry-run install to validate templates
+helm install agenticore \
+  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  --version 0.1.5 \
+  --dry-run --debug \
+  --set storage.className=standard
 ```
+
+---
 
 ## Migration from Docker Compose
 
@@ -221,8 +227,24 @@ Compose.
 | Scaling | Single container | KEDA ScaledObject |
 | Drain | N/A | `agenticore drain` PreStop hook |
 
-## Helm Chart
+---
 
-A Helm chart (`helm/agenticore/`) is also provided for simpler single-replica
-deployments. It uses ReadWriteOnce PVCs and does not include the StatefulSet or
-KEDA integration. For horizontal scaling, use the `k8s/` raw manifests above.
+## Raw Manifests (non-Helm)
+
+Raw Kubernetes manifests are in `k8s/` for deployments that cannot use Helm.
+They require manual image tag substitution before applying.
+
+| File | Resource | Purpose |
+|------|----------|---------|
+| `pvc-shared.yaml` | PersistentVolumeClaim | 100Gi RWX shared volume |
+| `init-profiles.yaml` | Job | One-time: populate shared FS with profiles |
+| `statefulset.yaml` | StatefulSet | Agenticore pods (2 replicas default) |
+| `headless-service.yaml` | Service | Stable pod DNS (`agenticore-0.agenticore-headless`) |
+| `service.yaml` | Service | LoadBalancer for external traffic |
+| `keda-scaledobject.yaml` | ScaledObject + TriggerAuthentication | KEDA autoscaler |
+
+```bash
+# Replace image tag placeholder, then apply
+sed -i 's|agenticore:latest|tccw/agenticore:v0.1.5|g' k8s/statefulset.yaml
+kubectl apply -f k8s/
+```

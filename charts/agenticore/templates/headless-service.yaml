@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agenticore.fullname" . }}-headless
+  labels:
+    {{- include "agenticore.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "agenticore.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.config.port }}
+      targetPort: {{ .Values.config.port }}
+      protocol: TCP
