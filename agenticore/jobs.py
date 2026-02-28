@@ -32,9 +32,9 @@ class Job:
     ended_at: Optional[str] = None
     ttl_seconds: int = 86400
     pid: Optional[int] = None  # OS process ID of claude subprocess
-    pod_name: str = ""         # Which pod ran this job (K8s)
-    worktree_path: str = ""    # Absolute path to worktree on shared FS
-    job_config_dir: str = ""   # CLAUDE_CONFIG_DIR used for this job
+    pod_name: str = ""  # Which pod ran this job (K8s)
+    worktree_path: str = ""  # Absolute path to worktree on shared FS
+    job_config_dir: str = ""  # CLAUDE_CONFIG_DIR used for this job
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}

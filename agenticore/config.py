@@ -32,9 +32,9 @@ class ReposConfig:
     root: str = ""
     max_parallel_jobs: int = 3
     job_ttl_seconds: int = 86400
-    shared_fs_root: str = ""   # AGENTICORE_SHARED_FS_ROOT — e.g. /shared
-    jobs_dir: str = ""         # AGENTICORE_JOBS_DIR — override ~/.agenticore/jobs/
-    pod_name: str = ""         # AGENTICORE_POD_NAME — set from K8s Downward API
+    shared_fs_root: str = ""  # AGENTICORE_SHARED_FS_ROOT — e.g. /shared
+    jobs_dir: str = ""  # AGENTICORE_JOBS_DIR — override ~/.agenticore/jobs/
+    pod_name: str = ""  # AGENTICORE_POD_NAME — set from K8s Downward API
 
 
 @dataclass

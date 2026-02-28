@@ -323,7 +323,7 @@ def _cmd_drain(args):
             prefix = os.getenv("REDIS_KEY_PREFIX", "agenticore")
             client.setex(f"{prefix}:pod:{pod_name}:draining", timeout, "1")
             r = client  # only assign if connection succeeded
-            print(f"  marked draining in Redis")
+            print("  marked draining in Redis")
         except Exception as e:
             print(f"  Redis unavailable ({e}), continuing without drain flag", file=sys.stderr)
 

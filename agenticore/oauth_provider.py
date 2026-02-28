@@ -25,8 +25,8 @@ from mcp.server.auth.provider import (
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
 # Token TTLs
-_AUTH_CODE_TTL = 300          # 5 minutes
-_ACCESS_TOKEN_TTL = 3600      # 1 hour
+_AUTH_CODE_TTL = 300  # 5 minutes
+_ACCESS_TOKEN_TTL = 3600  # 1 hour
 _REFRESH_TOKEN_TTL = 30 * 24 * 3600  # 30 days
 
 
@@ -69,6 +69,7 @@ class AgenticoreOAuthProvider(OAuthAuthorizationServerProvider):
             redirect_uris = _get_redirect_uris()
             if not redirect_uris:
                 from pydantic import AnyUrl
+
                 redirect_uris = [AnyUrl(issuer_url.rstrip("/") + "/callback")]
 
             allowed_scopes = os.getenv("OAUTH_ALLOWED_SCOPES", "").strip() or None
