@@ -742,6 +742,22 @@ class TestApiKeyMiddleware:
         scope = {"headers": [], "query_string": b""}
         assert mw._extract_api_key(scope) == ""
 
+    @pytest.mark.asyncio
+    async def test_non_http_scope_passes_through(self):
+        """Non-HTTP/WebSocket scopes (e.g. lifespan) bypass auth check."""
+        from agenticore.server import _ApiKeyMiddleware
+        from unittest.mock import AsyncMock
+
+        inner = AsyncMock()
+        mw = _ApiKeyMiddleware(inner, {"key1"})
+        scope = {"type": "lifespan"}
+        receive = AsyncMock()
+        send = AsyncMock()
+
+        await mw(scope, receive, send)
+
+        inner.assert_awaited_once_with(scope, receive, send)
+
 
 # ── Consistent async behavior across interfaces ──────────────────────────
 
@@ -796,3 +812,63 @@ class TestAsyncConsistency:
 
         args = parser.parse_args(["run", "test"])
         assert args.wait is False
+
+
+# ── OAuth config ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestOAuthConfig:
+    def test_no_issuer_returns_none(self):
+        """_build_oauth_config returns (None, None) when OAUTH_ISSUER_URL is unset."""
+        from agenticore.server import _build_oauth_config
+
+        with patch.dict(os.environ, {"OAUTH_ISSUER_URL": ""}, clear=False):
+            provider, settings = _build_oauth_config()
+
+        assert provider is None
+        assert settings is None
+
+    def test_issuer_url_creates_provider(self, capsys):
+        """_build_oauth_config returns provider + settings when OAUTH_ISSUER_URL is set."""
+        from agenticore.server import _build_oauth_config
+
+        env = {
+            "OAUTH_ISSUER_URL": "https://auth.example.com",
+            "OAUTH_CLIENT_ID": "",
+            "OAUTH_CLIENT_SECRET": "",
+            "OAUTH_ALLOWED_SCOPES": "",
+            "OAUTH_RESOURCE_URL": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            reset_config()
+            provider, settings = _build_oauth_config()
+
+        assert provider is not None
+        assert settings is not None
+
+    def test_make_mcp_logs_oauth_enabled(self, capsys):
+        """_make_mcp prints OAuth enabled message when provider is configured."""
+        from agenticore.server import _build_oauth_config
+
+        env = {
+            "OAUTH_ISSUER_URL": "https://auth.example.com",
+            "OAUTH_CLIENT_ID": "",
+            "OAUTH_CLIENT_SECRET": "",
+            "OAUTH_ALLOWED_SCOPES": "",
+            "OAUTH_RESOURCE_URL": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            reset_config()
+            provider, settings = _build_oauth_config()
+
+        assert provider is not None
+        # kwargs path: if oauth_provider and oauth_settings -> logs "OAuth 2.1 enabled"
+        from agenticore.server import _make_mcp
+
+        with patch.dict(os.environ, env, clear=False):
+            reset_config()
+            with patch("agenticore.server._build_oauth_config", return_value=(provider, settings)):
+                _make_mcp()
+
+        assert "OAuth 2.1 enabled" in capsys.readouterr().err

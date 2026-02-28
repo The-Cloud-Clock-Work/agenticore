@@ -677,6 +677,15 @@ class TestCmdJob:
         assert exc_info.value.code == 1
         assert "not found" in capsys.readouterr().err.lower()
 
+    @patch("agenticore.cli._api_get", side_effect=Exception("unexpected error"))
+    def test_job_generic_exception(self, mock_get, capsys):
+        """Any exception from _api_get prints error and exits with code 1."""
+        args = SimpleNamespace(job_id="any-id", json=False)
+        with pytest.raises(SystemExit) as exc_info:
+            _cmd_job(args)
+        assert exc_info.value.code == 1
+        assert "unexpected error" in capsys.readouterr().err
+
 
 # ── cancel command ────────────────────────────────────────────────────────
 
@@ -986,6 +995,29 @@ class TestCmdInitSharedFs:
         assert (root / "profiles" / "code" / "profile.yml").exists()
         assert "code" in capsys.readouterr().out
 
+    def test_overwrites_existing_profile_dir(self, tmp_path, capsys):
+        """Re-running init-shared-fs replaces existing profile directories."""
+        from types import SimpleNamespace
+
+        defaults = tmp_path / "defaults"
+        fake_profile = defaults / "code"
+        fake_profile.mkdir(parents=True)
+        (fake_profile / "profile.yml").write_text("name: code\nversion: 2")
+
+        root = tmp_path / "shared"
+        # Pre-create the destination profile dir with stale content
+        (root / "profiles" / "code").mkdir(parents=True)
+        (root / "profiles" / "code" / "stale.txt").write_text("old")
+
+        args = SimpleNamespace(shared_root=str(root))
+
+        with patch("agenticore.profiles._defaults_dir", return_value=defaults):
+            _cmd_init_shared_fs(args)
+
+        # Stale file gone, new profile.yml present
+        assert not (root / "profiles" / "code" / "stale.txt").exists()
+        assert (root / "profiles" / "code" / "profile.yml").exists()
+
 
 # ── drain command ─────────────────────────────────────────────────────────
 
@@ -1058,6 +1090,24 @@ class TestCmdDrain:
 
         out = capsys.readouterr().out
         assert "my-host" in out
+
+    def test_drain_sets_and_removes_redis_flag(self, capsys):
+        """drain marks pod draining in Redis and removes the flag after."""
+        from types import SimpleNamespace
+
+        mock_client = MagicMock()
+        args = SimpleNamespace(timeout=10)
+        with (
+            patch.dict("os.environ", {"AGENTICORE_POD_NAME": "pod-0", "REDIS_URL": "redis://localhost:6379"}),
+            patch("redis.Redis.from_url", return_value=mock_client),
+            patch("agenticore.jobs.list_jobs", return_value=[]),
+        ):
+            _cmd_drain(args)
+
+        mock_client.setex.assert_called_once()
+        mock_client.delete.assert_called_once()
+        out = capsys.readouterr().out
+        assert "marked draining" in out
 
 
 # ── main() dispatches new commands ───────────────────────────────────────

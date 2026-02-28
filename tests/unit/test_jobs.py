@@ -8,6 +8,7 @@ import pytest
 
 from agenticore.jobs import (
     Job,
+    _coerce_redis_types,
     _reset_redis,
     cancel_job,
     create_job,
@@ -236,3 +237,40 @@ class TestJobKubernetesFields:
         reset_config()
         assert result == custom
         assert custom.exists()
+
+
+@pytest.mark.unit
+class TestCoerceRedisTypes:
+    """Tests for _coerce_redis_types — new K8s field normalisation."""
+
+    def test_converts_exit_code_to_int(self):
+        data = {"exit_code": "0", "task": "test"}
+        result = _coerce_redis_types(data)
+        assert result["exit_code"] == 0
+
+    def test_converts_none_string_exit_code_to_none(self):
+        data = {"exit_code": "None"}
+        result = _coerce_redis_types(data)
+        assert result["exit_code"] is None
+
+    def test_normalizes_pod_name_none_string(self):
+        data = {"pod_name": "None", "worktree_path": "None", "job_config_dir": "None"}
+        result = _coerce_redis_types(data)
+        assert result["pod_name"] == ""
+        assert result["worktree_path"] == ""
+        assert result["job_config_dir"] == ""
+
+    def test_preserves_real_pod_name(self):
+        data = {"pod_name": "agenticore-0"}
+        result = _coerce_redis_types(data)
+        assert result["pod_name"] == "agenticore-0"
+
+    def test_no_k8s_fields_is_noop(self):
+        data = {"task": "fix bug", "status": "queued"}
+        result = _coerce_redis_types(data)
+        assert result == {"task": "fix bug", "status": "queued"}
+
+    def test_converts_ttl_seconds(self):
+        data = {"ttl_seconds": "86400"}
+        result = _coerce_redis_types(data)
+        assert result["ttl_seconds"] == 86400
