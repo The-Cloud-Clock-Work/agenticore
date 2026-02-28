@@ -182,3 +182,57 @@ class TestJobSerialization:
         assert restored.id == original.id
         assert restored.task == original.task
         assert restored.repo_url == original.repo_url
+
+
+@pytest.mark.unit
+class TestJobKubernetesFields:
+    """Tests for K8s pod identity and shared-FS fields added in the scaling plan."""
+
+    def test_pod_name_field(self, jobs_dir):
+        job = create_job(task="test")
+        updated = update_job(job.id, pod_name="agenticore-0")
+        assert updated.pod_name == "agenticore-0"
+        fetched = get_job(job.id)
+        assert fetched.pod_name == "agenticore-0"
+
+    def test_worktree_path_field(self, jobs_dir):
+        job = create_job(task="test")
+        updated = update_job(job.id, worktree_path="/shared/repos/org-repo/worktrees/abc")
+        assert updated.worktree_path == "/shared/repos/org-repo/worktrees/abc"
+
+    def test_job_config_dir_field(self, jobs_dir):
+        job = create_job(task="test")
+        updated = update_job(job.id, job_config_dir="/shared/jobs/abc/.claude")
+        assert updated.job_config_dir == "/shared/jobs/abc/.claude"
+
+    def test_k8s_fields_in_serialization(self):
+        job = Job(
+            id="k8s",
+            task="test",
+            status="running",
+            created_at="now",
+            pod_name="agenticore-1",
+            worktree_path="/shared/repos/x/worktrees/k8s",
+            job_config_dir="/shared/jobs/k8s",
+        )
+        d = job.to_dict()
+        assert d["pod_name"] == "agenticore-1"
+        assert d["worktree_path"] == "/shared/repos/x/worktrees/k8s"
+        assert d["job_config_dir"] == "/shared/jobs/k8s"
+        restored = Job.from_dict(d)
+        assert restored.pod_name == "agenticore-1"
+        assert restored.worktree_path == "/shared/repos/x/worktrees/k8s"
+
+    def test_jobs_dir_respects_config(self, tmp_path, monkeypatch):
+        """_jobs_dir() uses AGENTICORE_JOBS_DIR when set."""
+        custom = tmp_path / "custom-jobs"
+        monkeypatch.setenv("AGENTICORE_JOBS_DIR", str(custom))
+        # Re-import to pick up the env var through get_config
+        from agenticore import jobs as jobs_mod
+        from agenticore.config import reset_config
+
+        reset_config()
+        result = jobs_mod._jobs_dir()
+        reset_config()
+        assert result == custom
+        assert custom.exists()

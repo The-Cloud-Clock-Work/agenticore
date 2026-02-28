@@ -106,9 +106,38 @@ class TestLoadConfig:
         cfg = load_config(str(tmp_path / "x.yml"))
         assert cfg.otel.enabled is False
 
+    @patch.dict(os.environ, {"AGENTICORE_REPOS_ROOT": ""}, clear=False)
     def test_repos_root_expands_tilde(self, tmp_path):
         config_file = tmp_path / "config.yml"
         config_file.write_text(yaml.dump({"repos": {"root": "~/my-repos"}}))
         cfg = load_config(str(config_file))
         assert "~" not in cfg.repos.root
         assert cfg.repos.root.endswith("my-repos")
+
+    @patch.dict(
+        os.environ,
+        {
+            "AGENTICORE_SHARED_FS_ROOT": "/shared",
+            "AGENTICORE_JOBS_DIR": "/shared/job-state",
+            "AGENTICORE_POD_NAME": "agenticore-0",
+        },
+        clear=False,
+    )
+    def test_kubernetes_env_vars(self, tmp_path):
+        """K8s env vars load into ReposConfig."""
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.repos.shared_fs_root == "/shared"
+        assert cfg.repos.jobs_dir == "/shared/job-state"
+        assert cfg.repos.pod_name == "agenticore-0"
+
+    @patch.dict(
+        os.environ,
+        {"AGENTICORE_SHARED_FS_ROOT": "", "AGENTICORE_JOBS_DIR": "", "AGENTICORE_POD_NAME": ""},
+        clear=False,
+    )
+    def test_kubernetes_env_vars_default_empty(self, tmp_path):
+        """K8s fields default to empty string when not set."""
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.repos.shared_fs_root == ""
+        assert cfg.repos.jobs_dir == ""
+        assert cfg.repos.pod_name == ""
