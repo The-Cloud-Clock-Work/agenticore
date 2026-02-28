@@ -5,27 +5,41 @@ nav_order: 3
 
 # Profile System
 
-Profiles map to Claude Code CLI flags. Each profile is a YAML file that specifies
-the model, turn limits, permissions, prompt additions, and auto-PR behavior. The
-repo's own `CLAUDE.md` stays untouched; profiles add behavior on top via
-`--append-system-prompt` and `--settings`.
+Profiles are directory packages that configure Claude Code execution. Each profile
+is a directory containing a `profile.yml` for Agenticore metadata and a `.claude/`
+directory with native Claude Code config files.
 
-## Profile YAML Schema
+## Profile Directory Layout
 
-| Field | Type | Default | CLI Flag | Description |
-|-------|------|---------|----------|-------------|
-| `name` | string | file stem | | Profile identifier |
-| `description` | string | `""` | | Human-readable description |
-| `claude.model` | string | `sonnet` | `--model` | Claude model |
-| `claude.max_turns` | int | `80` | `--max-turns` | Max agentic turns |
-| `claude.output_format` | string | `json` | `--output-format` | Output format |
-| `claude.permission_mode` | string | `dangerously-skip-permissions` | `--dangerously-skip-permissions` | Permission mode |
-| `claude.timeout` | int | `3600` | (process timeout) | Max seconds |
-| `claude.worktree` | bool | `true` | `--worktree` | Use worktree isolation |
-| `append_prompt` | string | `""` | `--append-system-prompt` | Additional system prompt (supports templates) |
-| `settings.permissions` | object | `{}` | `--settings` | Permission allowlist |
-| `claude_md` | string/null | `null` | | Custom CLAUDE.md content (reserved) |
-| `auto_pr` | bool | `true` | | Create PR on success |
+```
+defaults/profiles/code/
+├── profile.yml          # Agenticore metadata (model, turns, auto_pr, etc.)
+└── .claude/
+    ├── settings.json    # Hooks, permissions, env vars
+    ├── CLAUDE.md        # System instructions for Claude
+    ├── agents/          # Custom subagents
+    └── skills/          # Custom skills
+```
+
+An optional `.mcp.json` at the profile root adds MCP servers to the working directory.
+
+## profile.yml Schema
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | directory name | Profile identifier |
+| `description` | string | `""` | Human-readable description |
+| `claude.model` | string | `sonnet` | Claude model |
+| `claude.max_turns` | int | `80` | `--max-turns` |
+| `claude.output_format` | string | `json` | `--output-format` |
+| `claude.permission_mode` | string | `bypassPermissions` | `--permission-mode` |
+| `claude.timeout` | int | `3600` | Process timeout in seconds |
+| `claude.worktree` | bool | `true` | Pass `--worktree` to Claude |
+| `claude.effort` | string/null | `null` | `--effort` (e.g. `high`) |
+| `claude.max_budget_usd` | float/null | `null` | `--max-budget-usd` |
+| `claude.fallback_model` | string/null | `null` | `--fallback-model` |
+| `auto_pr` | bool | `true` | Create PR on success |
+| `extends` | string/null | `null` | Inherit from another profile |
 
 ## Bundled Profiles
 
@@ -41,34 +55,19 @@ claude:
   model: sonnet
   max_turns: 80
   output_format: json
-  permission_mode: dangerously-skip-permissions
+  permission_mode: bypassPermissions
   timeout: 3600
   worktree: true
-
-append_prompt: |
-  ## Job Context
-  Task: {{TASK}}
-  Repository: {{REPO_URL}}
-  Base branch: {{BASE_REF}}
-
-  ## Guidelines
-  - Commit with descriptive messages
-  - Do NOT create PRs — the system handles that
-
-settings:
-  permissions:
-    allow:
-      - "Bash(*)"
-      - "Read(*)"
-      - "Write(*)"
-      - "Edit(*)"
 
 auto_pr: true
 ```
 
+The `.claude/settings.json` in this profile configures tool permissions and hooks.
+The `.claude/CLAUDE.md` provides task-execution guidelines to Claude.
+
 ### review
 
-Code review analyst. Read-only, uses a faster model.
+Code review analyst. Read-only mode, uses a faster model.
 
 ```yaml
 name: review
@@ -78,16 +77,8 @@ claude:
   model: haiku
   max_turns: 20
   output_format: json
-  permission_mode: dangerously-skip-permissions
+  permission_mode: bypassPermissions
   worktree: true
-
-append_prompt: |
-  ## Task
-  {{TASK}}
-
-  ## Guidelines
-  - Do NOT modify files
-  - Provide structured feedback
 
 auto_pr: false
 ```
@@ -97,80 +88,90 @@ auto_pr: false
 Profiles are loaded from up to three directories, in priority order (highest wins):
 
 ```
-defaults/profiles/                        <-- bundled (shipped with package)
-    code/profile.yml
-    review/profile.yml
+defaults/profiles/                        ← bundled (shipped with package)
 
-{AGENTICORE_AGENTIHOOKS_PATH}/profiles/   <-- external (agentihooks repo)
-    default/profile.yml                   <-- loaded only if env var is set
-    review/profile.yml
+{AGENTICORE_AGENTIHOOKS_PATH}/profiles/   ← external (set via env var)
 
-~/.agenticore/profiles/                   <-- user overrides (always checked)
-    code/profile.yml                      <-- overrides bundled code
-    deploy/profile.yml                    <-- new custom profile
+~/.agenticore/profiles/                   ← user overrides (always checked)
 ```
 
-Loading order: bundled defaults first, then agentihooks (if `AGENTICORE_AGENTIHOOKS_PATH`
-is set), then user profiles. Same-name profiles from a higher-priority directory
-replace the lower-priority version entirely.
+Same-name profiles from a higher-priority directory replace the lower-priority
+version entirely.
 
-### Agentihooks Integration
+## Profile Inheritance
 
-Set `AGENTICORE_AGENTIHOOKS_PATH` to the root of a cloned agentihooks repo (e.g. `/app`).
-Agenticore will load profiles from `{path}/profiles/`. These profiles can include
-pre-wired hook events in their `settings.json` — agenticore materializes `settings.json`
-into the working directory as-is, and Claude Code picks up the hooks automatically.
-No hook-specific logic exists in agenticore.
+A profile can extend another profile using the `extends` field:
 
-## Template Variables
+```yaml
+name: code-strict
+extends: code
 
-The `append_prompt` field supports template variables that are rendered at
-job execution time:
+claude:
+  max_turns: 20
+  effort: high
+```
 
-| Variable | Value | Source |
-|----------|-------|--------|
-| `{{TASK}}` | Task description | `job.task` |
-| `{{REPO_URL}}` | Repository URL | `job.repo_url` |
-| `{{BASE_REF}}` | Base branch | `job.base_ref` |
-| `{{JOB_ID}}` | Job UUID | `job.id` |
-| `{{PROFILE}}` | Profile name | `job.profile` |
+Child values override parent defaults. The `.claude/` files are merged
+(child overlays parent) during materialization.
 
-Templates use simple string replacement (`{{KEY}}` to value).
+## Materialization
+
+Before each job, `materialize_profile()` copies the profile's `.claude/` and
+`.mcp.json` into the job's working directory so Claude Code picks them up.
+
+### Local / Docker mode (default)
+
+Files are copied directly into the repo clone directory:
+
+```
+{repo-cwd}/
+├── .claude/              ← copied from profile
+│   ├── settings.json
+│   └── CLAUDE.md
+└── .mcp.json             ← merged with any existing .mcp.json
+```
+
+### Kubernetes / shared FS mode
+
+When `AGENTICORE_SHARED_FS_ROOT` is set, files are written to a per-job directory
+on the shared volume instead, keeping the repo tree clean:
+
+```
+/shared/jobs/{job-id}/
+├── .claude/
+│   ├── settings.json
+│   └── CLAUDE.md
+└── .mcp.json
+```
+
+The runner sets `CLAUDE_CONFIG_DIR=/shared/jobs/{job-id}` in the Claude subprocess
+environment so Claude reads config from there. The `job_config_dir` field is stored
+on the job record for auditing.
 
 ## Profile to CLI Args
 
 ```
-+------------------+
-|  Profile YAML    |
-|  code.yml        |
-+--------+---------+
-         |
-         v
-+--------+---------+
-|  build_cli_args  |
-|  (profiles.py)   |
-+--------+---------+
-         |
-         v
-+--------+------------------------------------------+
-|  claude --worktree                                |
-|         --model sonnet                            |
-|         --max-turns 80                            |
-|         --output-format json                      |
-|         --dangerously-skip-permissions            |
-|         --append-system-prompt "## Job Context..."|
-|         --settings '{"permissions":{...}}'        |
-|         -p "fix the auth bug"                     |
-+---------------------------------------------------+
+profile.yml (claude section)
+       |
+       v
+build_cli_args()
+       |
+       v
+claude --worktree
+       --model sonnet
+       --max-turns 80
+       --output-format json
+       --permission-mode bypassPermissions
+       -p "<task>"
 ```
 
-The `build_cli_args()` function in `profiles.py` converts a Profile dataclass
-into a list of CLI arguments. The task prompt is always appended last with `-p`.
+The `build_cli_args()` function in `profiles.py` converts the `claude` section
+of `profile.yml` into CLI flags. The task is always last with `-p`.
 
-## Profile Resolution
+## Profile Resolution and Routing
 
 ```
-Request arrives with profile=""
+Request arrives (profile="" or profile="code")
          |
          v
 +--------+---------+
@@ -186,7 +187,7 @@ specified?    specified
    |             |
    v             v
 validate      use default
-exists?       (config.claude.default_profile)
+exists?       (claude.default_profile)
    |             |
    +------+------+
           |
@@ -194,8 +195,19 @@ exists?       (config.claude.default_profile)
    resolved profile name
 ```
 
-If an explicit profile is requested but doesn't exist, the router falls back to
-the configured default profile (usually `code`).
+If the requested profile doesn't exist, the router falls back to
+`claude.default_profile` (default: `code`).
 
-See [Job Execution](job-execution.md) for how profiles are used during the
-runner pipeline.
+## Template Variables
+
+The `--append-system-prompt` flag receives dynamic context built from the
+job at execution time:
+
+| Variable | Value |
+|----------|-------|
+| `JOB_ID` | Job UUID |
+| `TASK` | Task description |
+| `REPO_URL` | Repository URL |
+| `BASE_REF` | Base branch |
+
+These are passed via `--append-system-prompt "Job: {id} | Task: {task} | ..."`.

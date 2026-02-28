@@ -299,25 +299,34 @@ def materialize_profile(
     profile: Profile,
     working_dir: Path,
     all_profiles: Optional[Dict[str, Profile]] = None,
-) -> List[Path]:
-    """Copy profile's .claude/ and .mcp.json into the working directory.
+    job_id: str = "",
+) -> Optional[Path]:
+    """Copy profile's .claude/ and .mcp.json into the target directory.
+
+    If ``AGENTICORE_SHARED_FS_ROOT`` is set (Kubernetes mode), files are
+    written to ``{shared_fs_root}/jobs/{job_id}/`` and that path is returned
+    as the ``CLAUDE_CONFIG_DIR`` for the Claude subprocess.  The repo working
+    directory is left clean.
+
+    In local/Docker mode (no shared FS), files are copied into ``working_dir``
+    (legacy behaviour) and ``working_dir`` is returned.
 
     If the profile uses ``extends``, the parent's files are copied first,
     then the child's files overlay on top.
 
     Args:
         profile: The resolved profile
-        working_dir: Target directory (repo clone)
+        working_dir: Repo clone directory (used in local/Docker mode)
         all_profiles: All loaded profiles (for resolving extends chain).
                       If None, loads from defaults/user dirs.
+        job_id: Job UUID — used to create a per-job directory on shared FS.
 
     Returns:
-        List of paths that were created/modified (for cleanup tracking)
+        Path to use as CLAUDE_CONFIG_DIR, or None if profile has no files.
     """
     if profile._legacy or profile.path is None:
-        return []
+        return None
 
-    created: List[Path] = []
     if profile.extends:
         profiles = all_profiles if all_profiles is not None else load_profiles()
     else:
@@ -325,13 +334,28 @@ def materialize_profile(
 
     chain = _build_extends_chain(profile, profiles)
 
+    # Kubernetes / shared-FS mode: write to per-job directory
+    shared_fs_root = os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
+    if shared_fs_root and job_id:
+        target_dir = Path(shared_fs_root) / "jobs" / job_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        created: List[Path] = []
+        for prof in chain:
+            if prof.path is None:
+                continue
+            _copy_claude_dir(prof.path, target_dir, created)
+            _copy_mcp_json(prof.path, target_dir, created)
+        return target_dir
+
+    # Local / Docker mode: copy into working directory (original behaviour)
+    created = []
     for prof in chain:
         if prof.path is None:
             continue
         _copy_claude_dir(prof.path, working_dir, created)
         _copy_mcp_json(prof.path, working_dir, created)
 
-    return created
+    return working_dir if created else None
 
 
 def _build_extends_chain(profile: Profile, all_profiles: Dict[str, Profile]) -> List[Profile]:

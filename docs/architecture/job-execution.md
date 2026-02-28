@@ -67,6 +67,12 @@ completion and optional PR creation.
 | `ended_at` | string/null | ISO 8601 timestamp |
 | `ttl_seconds` | int | Job TTL (default: 86400) |
 | `pid` | int/null | OS process ID of Claude subprocess |
+| `pod_name` | string | Pod that ran this job (Kubernetes) |
+| `worktree_path` | string | Absolute path to worktree on shared FS |
+| `job_config_dir` | string | `CLAUDE_CONFIG_DIR` used for this job |
+
+`pod_name` is recorded from `AGENTICORE_POD_NAME` (or `hostname` as fallback) at
+job start. `worktree_path` and `job_config_dir` are populated in Kubernetes mode.
 
 ## Runner Pipeline
 
@@ -74,25 +80,31 @@ The `run_job()` function in `runner.py` executes the following steps:
 
 ```
  1. Load profile by name
- 2. Mark job as "running" (update started_at)
- 3. Start Langfuse trace (start_job_trace) — non-fatal, returns None if unconfigured
- 4. Clone or fetch repo (if repo_url provided)
-    - ensure_clone() with flock serialization
+ 2. Record pod_name (AGENTICORE_POD_NAME or hostname) on job
+ 3. Mark job as "running" (update started_at)
+ 4. Start Langfuse trace — non-fatal, returns None if unconfigured
+ 5. Clone or fetch repo (if repo_url provided)
+    - Local/Docker: ensure_clone() with fcntl flock per repo
+    - Kubernetes:   ensure_clone() with Redis distributed lock (NFS-safe)
     - Detect default branch if base_ref not set
- 5. Materialize profile's .claude/ package into working directory
- 6. Build template variables (TASK, REPO_URL, BASE_REF, JOB_ID, PROFILE)
- 7. Build CLI args from profile (build_cli_args)
- 8. Construct command: [claude_binary] + cli_args
- 9. Append --resume session_id (if session_id provided)
-10. Build environment (inherit + OTEL vars + CLAUDE_CONFIG_DIR + GITHUB_TOKEN)
-11. Spawn subprocess (asyncio.create_subprocess_exec)
-12. Store PID in job record
-13. Wait for completion with timeout (profile.claude.timeout)
-14. Extract session_id from Claude's JSON stdout (scan for sessionId field)
-15. Parse result: stdout -> output, stderr -> error, returncode -> status
-16. Auto-PR on success (if profile.auto_pr and repo_url set)
-17. (finally) Ship Claude session transcript to Langfuse as spans
-18. (finally) Finalize Langfuse trace with status, exit_code, pr_url
+    - Record worktree_path on job (computed path, Claude creates it later)
+ 6. Materialize profile's .claude/ package
+    - Local/Docker: copy into repo cwd
+    - Kubernetes:   copy into /shared/jobs/{job-id}/ (CLAUDE_CONFIG_DIR)
+    - Record job_config_dir on job
+ 7. Build template variables (TASK, REPO_URL, BASE_REF, JOB_ID, PROFILE)
+ 8. Build CLI args from profile (build_cli_args)
+ 9. Construct command: [claude_binary] + cli_args
+10. Append --resume session_id (if session_id provided)
+11. Build environment (inherit + OTEL vars + CLAUDE_CONFIG_DIR + GITHUB_TOKEN)
+12. Spawn subprocess (asyncio.create_subprocess_exec)
+13. Store PID in job record
+14. Wait for completion with timeout (profile.claude.timeout)
+15. Extract session_id from Claude's JSON stdout (scan for sessionId field)
+16. Parse result: stdout → output, stderr → error, returncode → status
+17. Auto-PR on success (if profile.auto_pr and repo_url set)
+18. (finally) Ship Claude session transcript to Langfuse as spans
+19. (finally) Finalize Langfuse trace with status, exit_code, pr_url
 ```
 
 ## OTEL Environment Variables
@@ -131,24 +143,14 @@ Job succeeded
                                                    in job record
 ```
 
-**Steps:**
-
-1. **Find branch** — Look for `cc-*` branches created by Claude's `--worktree`
-2. **Check changes** — `git log origin/HEAD..{branch}` to verify commits exist
-3. **Push** — `git push origin {branch}`
-4. **Create PR** — `gh pr create --title "{task}" --body "Job: {id}..."` using
-   the `gh` CLI
-
 **Requirements:**
-- `GITHUB_TOKEN` must be set (for `gh` authentication)
+- `GITHUB_TOKEN` must be set
 - `gh` CLI must be installed
 - The worktree branch must have commits ahead of the default branch
 
-If any step fails, the auto-PR is skipped silently (logged to stderr).
+If any step fails, auto-PR is skipped silently (logged to stderr).
 
 ## Cancellation
-
-Cancelling a job sends `SIGTERM` (signal 15) to the Claude subprocess:
 
 1. `cancel_job(job_id)` retrieves the job
 2. If status is `queued` or `running`, proceed
@@ -159,12 +161,11 @@ Cancelling a job sends `SIGTERM` (signal 15) to the Claude subprocess:
 
 ## Concurrency
 
-- `max_parallel_jobs` is configured but not currently enforced at the runner
-  level (planned feature)
-- Repo cloning is serialized per-repo using `flock` — multiple jobs for
-  different repos can clone in parallel
-- Jobs run as `asyncio.create_task()` in fire-and-forget mode, allowing the
-  server to handle concurrent requests
+- Repo cloning is serialized per-repo:
+  - **Local/Docker**: `fcntl.flock` (single host)
+  - **Kubernetes**: Redis `SET NX` distributed lock (NFS-safe, cross-pod)
+- Jobs run as `asyncio.create_task()` in fire-and-forget mode
+- Work-stealing from Redis queue — any pod picks up the next job
 
 ## Submission Flow
 

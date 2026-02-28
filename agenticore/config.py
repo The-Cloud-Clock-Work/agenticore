@@ -32,6 +32,9 @@ class ReposConfig:
     root: str = ""
     max_parallel_jobs: int = 3
     job_ttl_seconds: int = 86400
+    shared_fs_root: str = ""   # AGENTICORE_SHARED_FS_ROOT — e.g. /shared
+    jobs_dir: str = ""         # AGENTICORE_JOBS_DIR — override ~/.agenticore/jobs/
+    pod_name: str = ""         # AGENTICORE_POD_NAME — set from K8s Downward API
 
 
 @dataclass
@@ -129,6 +132,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
         root=repos_root,
         max_parallel_jobs=_env_int("AGENTICORE_MAX_PARALLEL_JOBS", str(repos_raw.get("max_parallel_jobs", 3))),
         job_ttl_seconds=_env_int("AGENTICORE_JOB_TTL", str(repos_raw.get("job_ttl_seconds", 86400))),
+        shared_fs_root=_env("AGENTICORE_SHARED_FS_ROOT", repos_raw.get("shared_fs_root", "")),
+        jobs_dir=_env("AGENTICORE_JOBS_DIR", repos_raw.get("jobs_dir", "")),
+        pod_name=_env("AGENTICORE_POD_NAME", repos_raw.get("pod_name", "")),
     )
 
     # Claude — env overrides

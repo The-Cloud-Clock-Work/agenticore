@@ -221,6 +221,9 @@ The full Job object returned by all endpoints:
 | `ended_at` | string/null | ISO 8601 timestamp |
 | `ttl_seconds` | int | Job TTL (default: 86400) |
 | `pid` | int/null | OS process ID |
+| `pod_name` | string | Pod that ran this job (Kubernetes) |
+| `worktree_path` | string | Absolute path to worktree on shared FS |
+| `job_config_dir` | string | `CLAUDE_CONFIG_DIR` used for this job |
 
 ## Profile Schema
 

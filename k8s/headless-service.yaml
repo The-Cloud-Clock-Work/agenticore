@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agenticore-headless
+  labels:
+    app: agenticore
+spec:
+  clusterIP: None
+  selector:
+    app: agenticore
+  ports:
+  - port: 8200
+    targetPort: 8200
+    name: http

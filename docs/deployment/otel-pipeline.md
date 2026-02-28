@@ -180,7 +180,7 @@ Code runs without telemetry emission.
 
 ```bash
 # Via environment
-AGENTICORE_OTEL_ENABLED=false agenticore run
+AGENTICORE_OTEL_ENABLED=false agenticore serve
 
 # Via YAML config
 otel:

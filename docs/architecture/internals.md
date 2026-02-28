@@ -6,7 +6,7 @@ nav_order: 1
 # Architecture Internals
 
 Agenticore is a thin orchestration layer for Claude Code. It manages job lifecycle,
-repo cloning, profile-to-CLI-flag mapping, auto-PR creation, and OTEL pipeline setup.
+repo cloning, profile materialization, auto-PR creation, and OTEL pipeline setup.
 Claude Code does the actual work: coding, worktree management, and telemetry emission.
 
 ## Design Philosophy
@@ -22,19 +22,9 @@ already provides natively:
 | Job lifecycle | Agenticore |
 | Repo cloning + caching | Agenticore |
 | Profile to CLI flags | Agenticore |
+| Profile materialization | Agenticore |
 | Auto-PR creation | Agenticore |
 | OTEL pipeline to Langfuse + PostgreSQL | Agenticore (collector config + SDK) |
-
-This separation means Agenticore stays small. When Claude Code adds new features
-(like `--worktree`), Agenticore adopts them by passing flags rather than
-reimplementing the behavior.
-
-### What Was Dropped
-
-The previous Agenticore iteration included 12+ AWS integrations, RAG search,
-custom worktree management, Terraform, sidecar containers, and a hook event system.
-All of these were removed in favor of Claude Code's native capabilities and a
-simpler job-centric model.
 
 ## Module Map
 
@@ -42,14 +32,14 @@ simpler job-centric model.
 |--------|---------|---------------|
 | `server.py` | FastMCP server + REST routes | `run_task()`, `_build_asgi_app()` |
 | `config.py` | YAML config + env var overrides | `load_config()`, `get_config()` |
-| `profiles.py` | Profile YAML to CLI flags | `load_profiles()`, `build_cli_args()` |
-| `repos.py` | Git clone/fetch with flock | `ensure_clone()`, `repo_dir()` |
-| `jobs.py` | Job store (Redis + file) | `create_job()`, `get_job()`, `update_job()` |
+| `profiles.py` | Load profile packages, build CLI args, materialize `.claude/` | `load_profiles()`, `build_cli_args()`, `materialize_profile()` |
+| `repos.py` | Git clone/fetch with flock or Redis lock | `ensure_clone()`, `repo_dir()` |
+| `jobs.py` | Job store (Redis + file fallback) | `create_job()`, `get_job()`, `update_job()` |
 | `runner.py` | Spawn Claude subprocess | `submit_job()`, `run_job()` |
 | `telemetry.py` | Langfuse trace lifecycle + transcripts | `start_job_trace()`, `ship_transcript()` |
-| `router.py` | Profile routing (code + AI) | `route()`, `ai_route()` |
+| `router.py` | Profile routing (code + AI fallback) | `route()`, `ai_route()` |
 | `pr.py` | Auto-PR via `gh` CLI | `create_auto_pr()` |
-| `cli.py` | CLI entrypoint | `main()`, 9 subcommands |
+| `cli.py` | CLI entrypoint | `main()`, 11 subcommands |
 
 ## Data Flow
 
@@ -77,6 +67,8 @@ simpler job-centric model.
      +--------+--------+          +--------+--------+
      |   repos.py       |          |   profiles.py   |
      |  ensure_clone()  |          |  build_cli_args()|
+     |  (flock or       |          |  materialize_   |
+     |   Redis lock)    |          |   profile()     |
      +--------+--------+          +--------+--------+
               |                             |
               +-------------+---------------+
@@ -86,6 +78,7 @@ simpler job-centric model.
                    |   runner.py     |
                    |  run_job()      |
                    |  claude --worktree -p "task" --model X ...
+                   |  CLAUDE_CONFIG_DIR=/shared/jobs/{id}
                    +--------+--------+
                             |
               +-------------+-------------+
@@ -95,13 +88,12 @@ simpler job-centric model.
      |  jobs.py   |  |   pr.py      |  |  OTEL        |  | telemetry.py|
      | update_job |  | auto-PR      |  |  Collector   |  | Langfuse SDK|
      | Redis+file |  | gh pr create |  |  -> Langfuse |  | job traces  |
-     +------------+  +--------------+  |  -> Postgres |  | + transcripts|
-                                       +--------------+  +-------------+
+     +------------+  +--------------+  +-------+------+  +-------------+
 ```
 
 ## Redis + File Fallback
 
-Every stateful operation works with and without Redis. The pattern:
+Every stateful operation works with and without Redis:
 
 1. Try Redis first (if `REDIS_URL` is set and reachable)
 2. Always write to filesystem as fallback
@@ -117,8 +109,9 @@ Every stateful operation works with and without Redis. The pattern:
             v                     v
   +---------+--------+   +-------+--------+
   |  Redis hash      |   |  JSON file     |
-  |  agenticore:     |   |  ~/.agenticore/|
-  |   job:{id}       |   |   jobs/{id}.json|
+  |  agenticore:     |   |  AGENTICORE_   |
+  |   job:{id}       |   |  JOBS_DIR/     |
+  |  (with TTL)      |   |   {id}.json    |
   +---------+--------+   +-------+--------+
             |                     |
             +----------+----------+
@@ -130,10 +123,12 @@ Every stateful operation works with and without Redis. The pattern:
 ```
 
 Redis keys use the namespace `{REDIS_KEY_PREFIX}:job:{id}`. Jobs stored as Redis
-hashes are given a TTL matching `job_ttl_seconds` (default: 24h). File-based jobs
+hashes receive a TTL matching `job_ttl_seconds` (default: 24h). File-based jobs
 have no automatic expiry.
 
 ## Repo Cache Layout
+
+### Local / Docker
 
 Repos are cloned once and reused. Each repo is identified by a SHA-256 hash of its
 URL (first 12 chars). Concurrent access is serialized with `flock`.
@@ -141,18 +136,27 @@ URL (first 12 chars). Concurrent access is serialized with `flock`.
 ```
 ~/agenticore-repos/
 ├── a1b2c3d4e5f6/
-|   ├── .lock             <-- flock file (per-repo serialization)
-|   └── repo/             <-- git clone target
-|       ├── .git/
-|       └── ...
+|   ├── .lock             ← flock file (per-repo, single-host)
+|   └── repo/             ← git clone
 ├── f6e5d4c3b2a1/
 |   ├── .lock
 |   └── repo/
 ...
 ```
 
-On first request: `git clone <url>`. On subsequent requests: `git fetch --all --prune`.
-Claude's `--worktree` flag handles worktree creation inside the `repo/` directory.
+### Kubernetes / shared FS
+
+On shared NFS/EFS, `fcntl` advisory locks are not enforced across hosts.
+Instead, the runner uses a Redis `SET NX` distributed lock
+(`agenticore:lock:clone:{hash}`). Clone/fetch is idempotent, so a timeout
+on the lock falls through safely.
+
+```
+/shared/repos/
+├── a1b2c3d4e5f6/
+|   └── repo/             ← git clone (shared across pods)
+...
+```
 
 ## Execution Modes
 
@@ -161,12 +165,9 @@ Claude's `--worktree` flag handles worktree creation inside the `repo/` director
 | Fire-and-forget | `wait=false` (default) | Returns job ID immediately, runs in background |
 | Sync | `wait=true` | Holds connection until job completes |
 | Stateful | `session_id` provided | Passes `--resume <id>` to Claude |
-| Stateless | Default (no session_id) | Fresh Claude session per job |
+| Stateless | Default | Fresh Claude session per job |
 
 ## Config Precedence
-
-See [Configuration Reference](../reference/configuration.md) for the full variable
-list. The precedence chain:
 
 ```
 env var  >  YAML file  >  built-in default
@@ -174,3 +175,5 @@ env var  >  YAML file  >  built-in default
 
 The config is loaded once as a module-level singleton (`get_config()`). Call
 `reset_config()` to reload (used in tests).
+
+See [Configuration Reference](../reference/configuration.md) for the full variable list.

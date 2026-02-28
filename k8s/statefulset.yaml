@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: agenticore
+  labels:
+    app: agenticore
+spec:
+  serviceName: agenticore-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agenticore
+  template:
+    metadata:
+      labels:
+        app: agenticore
+    spec:
+      terminationGracePeriodSeconds: 300
+      containers:
+      - name: agenticore
+        image: agenticore:latest
+        ports:
+        - containerPort: 8200
+          name: http
+        env:
+        - name: AGENTICORE_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENTICORE_SHARED_FS_ROOT
+          value: /shared
+        - name: AGENTICORE_REPOS_ROOT
+          value: /shared/repos
+        - name: AGENTICORE_JOBS_DIR
+          value: /shared/job-state
+        - name: AGENTICORE_TRANSPORT
+          value: sse
+        - name: AGENTICORE_HOST
+          value: "0.0.0.0"
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: agenticore-secrets
+              key: redis-url
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: agenticore-secrets
+              key: github-token
+              optional: true
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: agenticore-secrets
+              key: anthropic-api-key
+              optional: true
+        volumeMounts:
+        - name: shared-fs
+          mountPath: /shared
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "agenticore drain --timeout 270"]
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8200
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8200
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+      volumes:
+      - name: shared-fs
+        persistentVolumeClaim:
+          claimName: agenticore-shared

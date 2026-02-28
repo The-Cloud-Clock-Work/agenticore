@@ -165,7 +165,7 @@ AGENTICORE_HOST=10.0.0.5 AGENTICORE_PORT=9000 agenticore jobs
 ### Common commands
 
 ```bash
-agenticore submit "fix the bug" --repo https://github.com/org/repo
+agenticore run "fix the bug" --repo https://github.com/org/repo
 agenticore jobs
 agenticore job <job_id>
 agenticore cancel <job_id>
@@ -187,7 +187,7 @@ Set `AGENTICORE_API_KEYS` with one or more comma-separated keys:
 ```bash
 # Environment variable
 export AGENTICORE_API_KEYS="key-1,key-2"
-agenticore run
+agenticore serve
 
 # YAML config
 # ~/.agenticore/config.yml
@@ -235,5 +235,5 @@ header or `api_key` query parameter.
 3. Try the health endpoint to confirm the server is reachable
 
 **CLI commands fail with "Is the server running?":**
-The CLI needs a running server. Start it with `agenticore run` or
+The CLI needs a running server. Start it with `agenticore serve` or
 `docker compose up -d`.

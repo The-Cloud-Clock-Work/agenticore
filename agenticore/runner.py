@@ -8,6 +8,7 @@ OTEL environment variables. Manages the full job lifecycle: queued → running
 import asyncio
 import json
 import os
+import socket
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -93,7 +94,7 @@ def _prepare_job_repo(job: Job):
     return cwd, base_ref
 
 
-def _build_job_cmd(cfg, profile, job, base_ref, cwd):
+def _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir: Optional[Path] = None):
     """Build the CLI command and environment for a job."""
     variables = {
         "TASK": job.task,
@@ -107,6 +108,8 @@ def _build_job_cmd(cfg, profile, job, base_ref, cwd):
     if job.session_id:
         cmd.extend(["--resume", job.session_id])
     env = _build_env(cwd)
+    if job_config_dir:
+        env["CLAUDE_CONFIG_DIR"] = str(job_config_dir)
     return cmd, env
 
 
@@ -150,11 +153,14 @@ async def run_job(job: Job) -> Job:
     if profile is None:
         return update_job(job.id, status="failed", error=f"Profile not found: {job.profile}", ended_at=_now_iso())
 
-    update_job(job.id, status="running", started_at=_now_iso())
+    # Record which pod is running this job
+    pod_name = cfg.repos.pod_name or socket.gethostname()
+    update_job(job.id, status="running", started_at=_now_iso(), pod_name=pod_name)
     trace = start_job_trace(job)
 
     cwd = None
     base_ref = job.base_ref
+    job_config_dir: Optional[Path] = None
 
     if job.repo_url:
         try:
@@ -162,15 +168,26 @@ async def run_job(job: Job) -> Job:
         except Exception as e:
             return update_job(job.id, status="failed", error=f"Clone failed: {e}", ended_at=_now_iso())
 
+        # Record worktree path (computed, not yet created — Claude creates it)
+        repos_root = Path(cfg.repos.root)
+        from agenticore.repos import _repo_key
+
+        worktree_path = repos_root / _repo_key(job.repo_url) / "worktrees" / job.id
+        update_job(job.id, worktree_path=str(worktree_path))
+
     if cwd:
         try:
-            materialize_profile(profile, Path(cwd) if not isinstance(cwd, Path) else cwd)
+            job_config_dir = materialize_profile(
+                profile, Path(cwd) if not isinstance(cwd, Path) else cwd, job_id=job.id
+            )
+            if job_config_dir:
+                update_job(job.id, job_config_dir=str(job_config_dir))
         except Exception as e:
             return update_job(
                 job.id, status="failed", error=f"Profile materialization failed: {e}", ended_at=_now_iso()
             )
 
-    cmd, env = _build_job_cmd(cfg, profile, job, base_ref, cwd)
+    cmd, env = _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir=job_config_dir)
 
     try:
         job = await _execute_claude(job, cmd, cwd, env, profile, cfg)

@@ -32,6 +32,9 @@ class Job:
     ended_at: Optional[str] = None
     ttl_seconds: int = 86400
     pid: Optional[int] = None  # OS process ID of claude subprocess
+    pod_name: str = ""         # Which pod ran this job (K8s)
+    worktree_path: str = ""    # Absolute path to worktree on shared FS
+    job_config_dir: str = ""   # CLAUDE_CONFIG_DIR used for this job
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -57,6 +60,9 @@ class Job:
             ended_at=data.get("ended_at"),
             ttl_seconds=int(data.get("ttl_seconds", 86400)),
             pid=data.get("pid"),
+            pod_name=data.get("pod_name", ""),
+            worktree_path=data.get("worktree_path", ""),
+            job_config_dir=data.get("job_config_dir", ""),
         )
 
 
@@ -112,7 +118,13 @@ def _redis_key(job_id: str) -> str:
 
 
 def _jobs_dir() -> Path:
-    d = Path.home() / ".agenticore" / "jobs"
+    from agenticore.config import get_config
+
+    cfg = get_config()
+    if cfg.repos.jobs_dir:
+        d = Path(cfg.repos.jobs_dir)
+    else:
+        d = Path.home() / ".agenticore" / "jobs"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -157,6 +169,10 @@ def _coerce_redis_types(data: dict) -> dict:
     for key, convert in [("exit_code", int), ("ttl_seconds", int), ("pid", int)]:
         if key in data:
             data[key] = convert(data[key]) if data[key] != "None" else None
+    # String fields stored as "None" in Redis — normalize to empty string
+    for key in ("pod_name", "worktree_path", "job_config_dir"):
+        if data.get(key) == "None":
+            data[key] = ""
     return data
 
 

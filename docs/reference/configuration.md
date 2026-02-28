@@ -17,9 +17,6 @@ Environment variables  (highest)
    Built-in defaults   (lowest)
 ```
 
-Environment variables always win. If a YAML key and an env var both set the same
-value, the env var takes effect.
-
 ## YAML Config File
 
 Default path: `~/.agenticore/config.yml`
@@ -42,6 +39,10 @@ repos:
   root: ~/agenticore-repos
   max_parallel_jobs: 3
   job_ttl_seconds: 86400
+  # Kubernetes / shared FS (optional):
+  shared_fs_root: ""
+  jobs_dir: ""
+  pod_name: ""
 
 redis:
   url: "redis://localhost:6379/0"
@@ -83,7 +84,7 @@ agentihooks_path: ""
 | `AGENTICORE_CLAUDE_BINARY` | `claude.binary` | `claude` | Path to Claude CLI binary |
 | `AGENTICORE_CLAUDE_TIMEOUT` | `claude.timeout` | `3600` | Max seconds per job |
 | `AGENTICORE_DEFAULT_PROFILE` | `claude.default_profile` | `code` | Default execution profile |
-| `AGENTICORE_CLAUDE_CONFIG_DIR` | `claude.config_dir` | (none) | Custom `CLAUDE_CONFIG_DIR` directory |
+| `AGENTICORE_CLAUDE_CONFIG_DIR` | `claude.config_dir` | (none) | Static `CLAUDE_CONFIG_DIR` (overridden per-job in K8s mode) |
 
 ### Repos
 
@@ -92,6 +93,9 @@ agentihooks_path: ""
 | `AGENTICORE_REPOS_ROOT` | `repos.root` | `~/agenticore-repos` | Root directory for cloned repos |
 | `AGENTICORE_MAX_PARALLEL_JOBS` | `repos.max_parallel_jobs` | `3` | Max concurrent jobs |
 | `AGENTICORE_JOB_TTL` | `repos.job_ttl_seconds` | `86400` | Job TTL in seconds (24h default) |
+| `AGENTICORE_SHARED_FS_ROOT` | `repos.shared_fs_root` | (none) | Shared RWX filesystem root (Kubernetes). When set, enables K8s mode: profiles are materialised to `/shared/jobs/{job-id}/` instead of the repo working dir. |
+| `AGENTICORE_JOBS_DIR` | `repos.jobs_dir` | `~/.agenticore/jobs` | Override job JSON file directory. In K8s use `/shared/job-state`. |
+| `AGENTICORE_POD_NAME` | `repos.pod_name` | `hostname` | Pod identity recorded on each job. Set from K8s Downward API (`metadata.name`). |
 
 ### Redis
 
@@ -133,13 +137,24 @@ agentihooks_path: ""
 
 ## File Paths
 
+### Local / Docker mode
+
 | Path | Purpose |
 |------|---------|
 | `~/.agenticore/config.yml` | Main configuration file |
 | `~/.agenticore/jobs/{id}.json` | Job data (file fallback) |
-| `~/.agenticore/profiles/*.yml` | Custom user profiles |
+| `~/.agenticore/profiles/*/` | Custom user profiles |
 | `~/agenticore-repos/` | Default cloned repos root |
 | `~/agenticore-repos/{hash}/.lock` | Per-repo flock file |
 | `~/agenticore-repos/{hash}/repo/` | Cloned repository |
-| `defaults/profiles/*/` | Bundled default profiles (directory-based) |
+| `defaults/profiles/*/` | Bundled default profiles |
 | `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/*/` | External agentihooks profiles |
+
+### Kubernetes / shared FS mode (`AGENTICORE_SHARED_FS_ROOT=/shared`)
+
+| Path | Purpose |
+|------|---------|
+| `/shared/profiles/{name}/.claude/` | Bundled profile files (populated by `init-shared-fs`) |
+| `/shared/repos/{hash}/repo/` | Cloned repos on shared volume |
+| `/shared/jobs/{job-id}/` | Per-job `CLAUDE_CONFIG_DIR` (profile files for one job) |
+| `/shared/job-state/{id}.json` | Job data files (`AGENTICORE_JOBS_DIR=/shared/job-state`) |

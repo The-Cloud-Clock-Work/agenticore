@@ -42,7 +42,7 @@ docker compose up --build -d
 ### SSE transport (HTTP — recommended)
 
 ```bash
-agenticore run
+agenticore serve
 ```
 
 The server starts at `http://127.0.0.1:8200` with MCP, REST, and health
@@ -51,7 +51,7 @@ endpoints.
 ### Custom host/port
 
 ```bash
-agenticore run --host 0.0.0.0 --port 9000
+agenticore serve --host 0.0.0.0 --port 9000
 ```
 
 ### stdio transport (for Claude Code CLI integration)
@@ -72,11 +72,11 @@ docker compose up -d
 
 ```bash
 # Fire-and-forget
-agenticore submit "add a hello world endpoint" \
+agenticore run "add a hello world endpoint" \
   --repo https://github.com/your-org/your-repo
 
 # Wait for result
-agenticore submit "fix the typo in README.md" \
+agenticore run "fix the typo in README.md" \
   --repo https://github.com/your-org/your-repo \
   --wait
 ```

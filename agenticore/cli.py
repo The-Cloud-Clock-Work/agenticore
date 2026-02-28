@@ -12,6 +12,8 @@ Usage::
     agenticore status                       Check server health
     agenticore update                       Update agenticore to latest version
     agenticore version                      Show version
+    agenticore init-shared-fs               Initialise shared FS layout (Kubernetes)
+    agenticore drain                        Drain pod before shutdown (Kubernetes)
 """
 
 import argparse
@@ -265,6 +267,85 @@ def _get_installed_version() -> str:
         return ""
 
 
+def _cmd_init_shared_fs(args):
+    """Initialise shared FS layout and copy bundled profiles."""
+    import os
+    import shutil
+    from pathlib import Path
+
+    shared_root = args.shared_root or os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
+    if not shared_root:
+        print("Error: --shared-root or AGENTICORE_SHARED_FS_ROOT required", file=sys.stderr)
+        sys.exit(1)
+
+    root = Path(shared_root)
+
+    # Create directory layout
+    for subdir in ("profiles", "repos", "jobs", "job-state"):
+        (root / subdir).mkdir(parents=True, exist_ok=True)
+        print(f"  created {root / subdir}")
+
+    # Copy bundled profiles to shared FS
+    from agenticore.profiles import _defaults_dir
+
+    defaults = _defaults_dir()
+    if defaults.exists():
+        dst_profiles = root / "profiles"
+        for profile_dir in sorted(defaults.iterdir()):
+            if profile_dir.is_dir() and (profile_dir / "profile.yml").exists():
+                dst = dst_profiles / profile_dir.name
+                if dst.exists():
+                    shutil.rmtree(dst)
+                shutil.copytree(profile_dir, dst)
+                print(f"  copied profile: {profile_dir.name}")
+
+    print(f"\nShared FS initialised at: {root}")
+
+
+def _cmd_drain(args):
+    """Mark this pod as draining and wait for in-progress jobs to finish."""
+    import os
+    import time
+
+    pod_name = os.getenv("AGENTICORE_POD_NAME", "") or os.uname().nodename
+    timeout = args.timeout
+
+    print(f"Draining pod: {pod_name} (timeout={timeout}s)")
+
+    # Mark pod as draining in Redis
+    redis_url = os.getenv("REDIS_URL", "")
+    r = None
+    if redis_url:
+        try:
+            import redis as redis_lib
+
+            r = redis_lib.Redis.from_url(redis_url, decode_responses=True, socket_timeout=5.0)
+            prefix = os.getenv("REDIS_KEY_PREFIX", "agenticore")
+            r.setex(f"{prefix}:pod:{pod_name}:draining", timeout, "1")
+            print(f"  marked draining in Redis")
+        except Exception as e:
+            print(f"  Redis unavailable ({e}), continuing without drain flag", file=sys.stderr)
+
+    # Poll until no running jobs on this pod or timeout
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        from agenticore.jobs import list_jobs
+
+        running = [j for j in list_jobs(limit=100, status="running") if j.pod_name == pod_name]
+        if not running:
+            print("All jobs complete. Pod ready to terminate.")
+            break
+        print(f"  waiting for {len(running)} job(s)...")
+        time.sleep(5)
+    else:
+        print(f"Drain timeout ({timeout}s) reached — terminating anyway.", file=sys.stderr)
+
+    # Remove draining flag
+    if r:
+        prefix = os.getenv("REDIS_KEY_PREFIX", "agenticore")
+        r.delete(f"{prefix}:pod:{pod_name}:draining")
+
+
 def _cmd_version(args):
     print(f"agenticore {__version__}")
 
@@ -329,6 +410,24 @@ def main():
     # version
     p_version = sub.add_parser("version", help="Show version")
     p_version.set_defaults(func=_cmd_version)
+
+    # init-shared-fs
+    p_init = sub.add_parser("init-shared-fs", help="Initialise shared FS layout (Kubernetes)")
+    p_init.add_argument(
+        "--shared-root",
+        help="Shared FS root path (default: AGENTICORE_SHARED_FS_ROOT env var)",
+    )
+    p_init.set_defaults(func=_cmd_init_shared_fs)
+
+    # drain
+    p_drain = sub.add_parser("drain", help="Drain pod: wait for in-progress jobs to finish")
+    p_drain.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Max seconds to wait for jobs (default: 300)",
+    )
+    p_drain.set_defaults(func=_cmd_drain)
 
     args = parser.parse_args()
     if not args.command:

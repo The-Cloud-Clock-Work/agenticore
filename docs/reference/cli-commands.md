@@ -6,7 +6,7 @@ nav_order: 1
 # CLI Reference
 
 Agenticore provides a CLI for server management, job submission, and status queries.
-All job-related commands communicate with a running server via REST API.
+Job-related commands communicate with a running server via REST API.
 
 ```
 agenticore <command> [options]
@@ -16,22 +16,24 @@ agenticore <command> [options]
 
 | Command | Args | Key Flags | Server Required |
 |---------|------|-----------|-----------------|
-| `run` | | `--port`, `--host` | No (starts it) |
-| `submit` | `<task>` | `--repo`, `--profile`, `--wait` | Yes |
+| `serve` | | `--port`, `--host` | No (starts it) |
+| `run` | `<task>` | `--repo`, `--profile`, `--wait` | Yes |
 | `jobs` | | `--limit`, `--status` | Yes |
 | `job` | `<job_id>` | `--json` | Yes |
 | `cancel` | `<job_id>` | | Yes |
 | `profiles` | | | Yes |
 | `status` | | | Yes |
+| `init-shared-fs` | | `--shared-root` | No |
+| `drain` | | `--timeout` | No |
 | `update` | | `--source` | No |
 | `version` | | | No |
 
-## run
+## serve
 
 Start the Agenticore server.
 
 ```bash
-agenticore run [--port PORT] [--host HOST]
+agenticore serve [--port PORT] [--host HOST]
 ```
 
 | Flag | Type | Default | Description |
@@ -39,22 +41,19 @@ agenticore run [--port PORT] [--host HOST]
 | `--port` | int | 8200 | Server port |
 | `--host` | str | 127.0.0.1 | Bind address |
 
-The transport mode is controlled by `AGENTICORE_TRANSPORT` (default: `sse`).
+Transport mode is controlled by `AGENTICORE_TRANSPORT` (default: `sse`).
 
 ```bash
-# Start on default port
-agenticore run
-
-# Start on custom port
-agenticore run --port 9000 --host 0.0.0.0
+agenticore serve
+agenticore serve --port 9000 --host 0.0.0.0
 ```
 
-## submit
+## run
 
 Submit a task for Claude Code execution.
 
 ```bash
-agenticore submit <task> [--repo URL] [--profile NAME] [--base-ref REF] [--wait] [--session-id ID]
+agenticore run <task> [--repo URL] [--profile NAME] [--base-ref REF] [--wait] [--session-id ID]
 ```
 
 | Flag | Short | Type | Default | Description |
@@ -67,16 +66,16 @@ agenticore submit <task> [--repo URL] [--profile NAME] [--base-ref REF] [--wait]
 
 ```bash
 # Fire-and-forget
-agenticore submit "fix the auth bug" --repo https://github.com/org/repo
+agenticore run "fix the auth bug" --repo https://github.com/org/repo
 
 # Wait for result
-agenticore submit "add unit tests" -r https://github.com/org/repo -w
+agenticore run "add unit tests" -r https://github.com/org/repo -w
 
 # Use specific profile
-agenticore submit "review this PR" -r https://github.com/org/repo -p review
+agenticore run "review this PR" -r https://github.com/org/repo -p review
 
 # Resume session
-agenticore submit "continue the refactor" --session-id abc123
+agenticore run "continue the refactor" --session-id abc123
 ```
 
 ## jobs
@@ -93,10 +92,7 @@ agenticore jobs [--limit N] [--status STATUS]
 | `--status` | `-s` | str | (all) | Filter: `queued`, `running`, `succeeded`, `failed`, `cancelled` |
 
 ```bash
-# List all recent jobs
 agenticore jobs
-
-# Only running jobs
 agenticore jobs -s running -n 50
 ```
 
@@ -115,10 +111,7 @@ agenticore job <job_id> [--json]
 | `--json` | flag | Output raw JSON instead of formatted text |
 
 ```bash
-# Human-readable output
 agenticore job a1b2c3d4-...
-
-# JSON output (for scripting)
 agenticore job a1b2c3d4-... --json
 ```
 
@@ -135,10 +128,6 @@ agenticore cancel <job_id>
 
 Sends SIGTERM to the Claude subprocess if the job is running.
 
-```bash
-agenticore cancel a1b2c3d4-...
-```
-
 ## profiles
 
 List available execution profiles.
@@ -147,14 +136,11 @@ List available execution profiles.
 agenticore profiles
 ```
 
-Displays each profile with: name, description, model, max_turns, and auto_pr setting.
-
-```bash
-agenticore profiles
-#   code         Autonomous coding worker
-#                model=sonnet max_turns=80 auto_pr=True
-#   review       Code review analyst
-#                model=haiku max_turns=20 auto_pr=False
+```
+  code         Autonomous coding worker
+               model=sonnet max_turns=80 auto_pr=True
+  review       Code review analyst
+               model=haiku max_turns=20 auto_pr=False
 ```
 
 ## status
@@ -163,15 +149,54 @@ Check server health.
 
 ```bash
 agenticore status
-```
-
-Queries `GET /health` and shows the response.
-
-```bash
-agenticore status
 # Status:  ok
 # Service: agenticore
 ```
+
+## init-shared-fs
+
+Initialise the shared filesystem layout for Kubernetes deployments.
+
+```bash
+agenticore init-shared-fs [--shared-root PATH]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--shared-root` | str | `$AGENTICORE_SHARED_FS_ROOT` | Shared FS root path |
+
+Creates the directory layout and copies bundled profiles to the shared volume:
+
+```
+/shared/
+├── profiles/    ← bundled profiles copied here
+├── repos/       ← git clone root
+├── jobs/        ← per-job CLAUDE_CONFIG_DIR directories
+└── job-state/   ← job JSON files (AGENTICORE_JOBS_DIR)
+```
+
+Typically run once as a Kubernetes init Job before the StatefulSet starts. See
+[Kubernetes Deployment](../deployment/kubernetes.md) for the manifest.
+
+## drain
+
+Drain the pod before shutdown. Called by the Kubernetes PreStop hook.
+
+```bash
+agenticore drain [--timeout SECONDS]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--timeout` | int | 300 | Max seconds to wait for running jobs |
+
+Steps:
+1. Marks this pod as draining in Redis (`agenticore:pod:{pod_name}:draining`)
+2. Polls until all jobs with `pod_name == this pod` are no longer `running`
+3. Removes the draining flag
+4. Exits (Kubernetes then terminates the container)
+
+The StatefulSet configures `terminationGracePeriodSeconds: 300` to give this time to finish.
 
 ## update
 
@@ -183,16 +208,11 @@ agenticore update [--source SOURCE]
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--source` | str | `agenticore` | Install source (PyPI package, git URL, or local path) |
+| `--source` | str | `agenticore` | Install source (PyPI, git URL, or local path) |
 
 ```bash
-# Update from PyPI
 agenticore update
-
-# Update from git
 agenticore update --source git+https://github.com/The-Cloud-Clock-Work/agenticore.git
-
-# Update from local path
 agenticore update --source /path/to/agenticore
 ```
 
@@ -202,7 +222,7 @@ Show the installed version.
 
 ```bash
 agenticore version
-# agenticore 0.1.0
+# agenticore 0.1.5
 ```
 
 ## Client Configuration
@@ -215,6 +235,5 @@ The CLI connects to the server using these environment variables:
 | `AGENTICORE_PORT` | `8200` | Server port |
 
 ```bash
-# Connect to a remote server
 AGENTICORE_HOST=10.0.0.5 AGENTICORE_PORT=9000 agenticore jobs
 ```

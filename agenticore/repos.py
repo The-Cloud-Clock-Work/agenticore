@@ -15,6 +15,7 @@ import fcntl
 import hashlib
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from agenticore.config import get_config
@@ -44,6 +45,60 @@ def _authenticated_url(repo_url: str) -> str:
     return repo_url
 
 
+def _redis_lock_acquire(lock_key: str, ttl: int = 300) -> bool:
+    """Try to acquire a Redis SET NX lock. Returns True if acquired."""
+    import os
+
+    url = os.getenv("REDIS_URL", "")
+    if not url:
+        return False
+    try:
+        import redis as redis_lib
+
+        r = redis_lib.Redis.from_url(url, decode_responses=True, socket_timeout=5.0)
+        return bool(r.set(lock_key, "1", nx=True, ex=ttl))
+    except Exception:
+        return False
+
+
+def _redis_lock_release(lock_key: str) -> None:
+    """Release a Redis lock."""
+    import os
+
+    url = os.getenv("REDIS_URL", "")
+    if not url:
+        return
+    try:
+        import redis as redis_lib
+
+        r = redis_lib.Redis.from_url(url, decode_responses=True, socket_timeout=5.0)
+        r.delete(lock_key)
+    except Exception:
+        pass
+
+
+def _with_redis_lock(lock_key: str, fn, timeout: int = 300):
+    """Execute fn() while holding a Redis-based distributed lock.
+
+    Falls back to running fn() without a lock if Redis is unavailable.
+    Polls with exponential backoff up to ``timeout`` seconds.
+    """
+    deadline = time.monotonic() + timeout
+    delay = 0.5
+    while True:
+        if _redis_lock_acquire(lock_key, ttl=timeout):
+            try:
+                return fn()
+            finally:
+                _redis_lock_release(lock_key)
+        if time.monotonic() >= deadline:
+            # Lock held too long — run anyway (clone/fetch is idempotent)
+            print(f"Redis lock timeout for {lock_key}, proceeding without lock", file=sys.stderr)
+            return fn()
+        time.sleep(min(delay, deadline - time.monotonic()))
+        delay = min(delay * 2, 30)
+
+
 def ensure_clone(repo_url: str) -> Path:
     """Clone or fetch a repository, flock-protected.
 
@@ -58,19 +113,27 @@ def ensure_clone(repo_url: str) -> Path:
     # Ensure directories exist
     key_dir.mkdir(parents=True, exist_ok=True)
 
-    # flock serialization — only one clone/fetch at a time per repo
-    with open(lock_path, "w") as lockfile:
-        fcntl.flock(lockfile, fcntl.LOCK_EX)
-        try:
-            if rdir.exists() and (rdir / ".git").exists():
-                # Repo exists — fetch latest
-                _run_git(["git", "fetch", "--all", "--prune"], cwd=rdir)
-            else:
-                # Fresh clone — use authenticated URL for private repos
-                clone_url = _authenticated_url(repo_url)
-                _run_git(["git", "clone", clone_url, str(rdir)])
-        finally:
-            fcntl.flock(lockfile, fcntl.LOCK_UN)
+    def _do_clone_or_fetch():
+        if rdir.exists() and (rdir / ".git").exists():
+            _run_git(["git", "fetch", "--all", "--prune"], cwd=rdir)
+        else:
+            clone_url = _authenticated_url(repo_url)
+            _run_git(["git", "clone", clone_url, str(rdir)])
+
+    cfg = get_config()
+    if cfg.repos.shared_fs_root:
+        # Kubernetes / shared FS: use Redis distributed lock (fcntl doesn't
+        # work reliably across NFS mounts from different hosts).
+        prefix = f"agenticore:lock:clone:{key}"
+        _with_redis_lock(prefix, _do_clone_or_fetch)
+    else:
+        # Local / Docker: flock is sufficient (single host).
+        with open(lock_path, "w") as lockfile:
+            fcntl.flock(lockfile, fcntl.LOCK_EX)
+            try:
+                _do_clone_or_fetch()
+            finally:
+                fcntl.flock(lockfile, fcntl.LOCK_UN)
 
     return rdir
 

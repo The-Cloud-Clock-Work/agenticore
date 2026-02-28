@@ -218,11 +218,11 @@ class TestMaterializeProfile:
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
-        created = materialize_profile(code, working_dir)
+        result = materialize_profile(code, working_dir)
 
         assert (working_dir / ".claude" / "settings.json").exists()
         assert (working_dir / ".claude" / "CLAUDE.md").exists()
-        assert len(created) > 0
+        assert result is not None
 
     def test_materialize_copies_mcp_json(self, tmp_path):
         profiles = load_profiles()
@@ -281,9 +281,9 @@ class TestMaterializeProfile:
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
-        created = materialize_profile(profile, working_dir)
+        result = materialize_profile(profile, working_dir)
 
-        assert created == []
+        assert result is None
         assert not (working_dir / ".claude").exists()
 
     def test_materialize_settings_content(self, tmp_path):

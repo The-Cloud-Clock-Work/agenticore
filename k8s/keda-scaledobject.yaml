@@ -1,0 +1,34 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: agenticore-scaler
+  labels:
+    app: agenticore
+spec:
+  scaleTargetRef:
+    name: agenticore
+    kind: StatefulSet
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  pollingInterval: 15
+  cooldownPeriod: 60
+  triggers:
+  - type: redis
+    metadata:
+      # Redis connection — reference the same secret as the StatefulSet
+      address: redis:6379
+      listName: agenticore:queue
+      # Scale up when queue depth exceeds 5 jobs per pod
+      listLength: "5"
+    authenticationRef:
+      name: agenticore-redis-auth
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: agenticore-redis-auth
+spec:
+  secretTargetRef:
+  - parameter: address
+    name: agenticore-secrets
+    key: redis-address
