@@ -319,9 +319,10 @@ def _cmd_drain(args):
         try:
             import redis as redis_lib
 
-            r = redis_lib.Redis.from_url(redis_url, decode_responses=True, socket_timeout=5.0)
+            client = redis_lib.Redis.from_url(redis_url, decode_responses=True, socket_timeout=5.0)
             prefix = os.getenv("REDIS_KEY_PREFIX", "agenticore")
-            r.setex(f"{prefix}:pod:{pod_name}:draining", timeout, "1")
+            client.setex(f"{prefix}:pod:{pod_name}:draining", timeout, "1")
+            r = client  # only assign if connection succeeded
             print(f"  marked draining in Redis")
         except Exception as e:
             print(f"  Redis unavailable ({e}), continuing without drain flag", file=sys.stderr)
