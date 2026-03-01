@@ -2,7 +2,7 @@ name: review
 description: "Code review analyst"
 
 claude:
-  model: haiku
+  model: claude-haiku-4-5
   max_turns: 20
   permission_mode: bypassPermissions
   no_session_persistence: true

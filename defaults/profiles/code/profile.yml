@@ -2,7 +2,7 @@ name: code
 description: "Autonomous coding worker"
 
 claude:
-  model: sonnet
+  model: claude-sonnet-4-6
   max_turns: 80
   permission_mode: bypassPermissions
   no_session_persistence: true
