@@ -98,9 +98,13 @@ async def oauth_callback(code: str, state: str) -> HTMLResponse:
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(_: None = Depends(require_auth)) -> HTMLResponse:
+async def dashboard(token: str = "") -> HTMLResponse:
+    """Dashboard — auth via ?token= query param (browser-friendly)."""
     from pathlib import Path
 
+    cfg = get_config()
+    if not token or token != cfg.api_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
     html_path = Path(__file__).parent / "static" / "dashboard.html"
     return HTMLResponse(content=html_path.read_text())
 
