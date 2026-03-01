@@ -8,17 +8,24 @@ Flow:
   5. Pod polls GET /auth/token/{id} until completed
 """
 
+import os
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+import httpx
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from auth_broker import oauth, providers, store, vault
 from auth_broker import ws as ws_module
 from auth_broker.config import get_config
 from auth_broker.models import AuthRequest, AuthStatus, ManualTokenInput
+
+_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
 security = HTTPBearer()
 
@@ -98,6 +105,11 @@ async def oauth_callback(code: str, state: str) -> HTMLResponse:
 # ── Dashboard ────────────────────────────────────────────────────────────────
 
 
+def _google_redirect_uri() -> str:
+    cfg = get_config()
+    return f"{cfg.callback_base_url.rstrip('/')}/auth/google/callback"
+
+
 def _serve_dashboard() -> HTMLResponse:
     """Serve dashboard HTML with API key injected as a JS global."""
     from pathlib import Path
@@ -109,19 +121,125 @@ def _serve_dashboard() -> HTMLResponse:
     return HTMLResponse(content=html)
 
 
+async def _session_from_cf_header(request: Request) -> str:
+    """Auto-create a session from CF-Access-Authenticated-User-Email header."""
+    cf_email = request.headers.get("Cf-Access-Authenticated-User-Email", "")
+    if not cf_email:
+        return ""
+    cfg = get_config()
+    if cfg.admin_email and cf_email != cfg.admin_email:
+        return ""
+    return await store.create_session(cf_email)
+
+
+# ── Google OAuth login ────────────────────────────────────────────────────────
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(error: str = "") -> HTMLResponse:
+    """Anton-branded Google OAuth entry page — no auth required."""
+    from pathlib import Path
+    html = (Path(__file__).parent / "static" / "login.html").read_text()
+    if error:
+        messages = {
+            "invalid_state": "Session expired — please try again.",
+            "unauthorized": "Access denied — wrong Google account.",
+        }
+        msg = messages.get(error, "Login failed.")
+        html = html.replace("<!--ERROR-->", f'<div class="error">{msg}</div>')
+    return HTMLResponse(content=html)
+
+
+@app.get("/auth/google")
+async def google_auth() -> RedirectResponse:
+    """Redirect to Google OAuth consent screen."""
+    import secrets as _sec
+    state = _sec.token_urlsafe(16)
+    await store.store_oauth_state(state, "__login__")
+    params = {
+        "client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
+        "redirect_uri": _google_redirect_uri(),
+        "scope": "openid email profile",
+        "response_type": "code",
+        "state": state,
+        "prompt": "select_account",
+    }
+    return RedirectResponse(f"{_GOOGLE_AUTH_URL}?{urlencode(params)}")
+
+
+@app.get("/auth/google/callback")
+async def google_callback(code: str, state: str) -> RedirectResponse:
+    """Exchange Google auth code, verify email, create session cookie."""
+    stored = await store.get_request_by_state(state)
+    if not stored:
+        return RedirectResponse("/login?error=invalid_state")
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        token_resp = await client.post(_GOOGLE_TOKEN_URL, data={
+            "code": code,
+            "client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
+            "client_secret": os.getenv("GOOGLE_CLIENT_SECRET", ""),
+            "redirect_uri": _google_redirect_uri(),
+            "grant_type": "authorization_code",
+        }, headers={"Accept": "application/json"})
+        token_resp.raise_for_status()
+        g_token = token_resp.json().get("access_token", "")
+
+        user_resp = await client.get(_GOOGLE_USERINFO_URL,
+                                     headers={"Authorization": f"Bearer {g_token}"})
+        user_resp.raise_for_status()
+        email = user_resp.json().get("email", "")
+
+    cfg = get_config()
+    if cfg.admin_email and email != cfg.admin_email:
+        return RedirectResponse("/login?error=unauthorized")
+
+    session_token = await store.create_session(email)
+    response = RedirectResponse("/", status_code=302)
+    response.set_cookie("auth_session", session_token, httponly=True,
+                        secure=True, samesite="lax", max_age=86400)
+    return response
+
+
+@app.get("/logout")
+async def logout(auth_session: str = Cookie(default="")) -> RedirectResponse:
+    await store.delete_session(auth_session)
+    response = RedirectResponse("/login", status_code=302)
+    response.delete_cookie("auth_session")
+    return response
+
+
 @app.get("/", response_class=HTMLResponse)
-async def root() -> HTMLResponse:
-    """Root — served after Cloudflare Access (Google) login. No token needed."""
+async def root(request: Request, auth_session: str = Cookie(default="")) -> HTMLResponse:
+    """Root — check session cookie or CF Access header, then serve dashboard."""
+    if not await store.get_session(auth_session):
+        new_token = await _session_from_cf_header(request)
+        if not new_token:
+            return RedirectResponse("/login", status_code=302)
+        resp = _serve_dashboard()
+        resp.set_cookie("auth_session", new_token, httponly=True,
+                        secure=True, samesite="lax", max_age=86400)
+        return resp
     return _serve_dashboard()
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(token: str = "") -> HTMLResponse:
-    """Dashboard — CF Access path (clean URL) or legacy ?token= fallback."""
+async def dashboard(request: Request, token: str = "",
+                    auth_session: str = Cookie(default="")) -> HTMLResponse:
+    """Dashboard — session, legacy ?token=, or CF Access header."""
     cfg = get_config()
-    # Legacy token path still works; root path skips this check (CF Access gates it)
-    if token and token != cfg.api_key:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    if token:
+        if token != cfg.api_key:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return _serve_dashboard()
+    if not await store.get_session(auth_session):
+        new_token = await _session_from_cf_header(request)
+        if not new_token:
+            return RedirectResponse("/login", status_code=302)
+        resp = _serve_dashboard()
+        resp.set_cookie("auth_session", new_token, httponly=True,
+                        secure=True, samesite="lax", max_age=86400)
+        return resp
     return _serve_dashboard()
 
 

@@ -26,6 +26,8 @@ class Config:
     providers_path: str = "/app/providers.yaml"
     # Public base URL for OAuth redirect_uri — e.g. https://auth.homeofanton.com
     callback_base_url: str = ""
+    # Google email authorized to access the dashboard
+    admin_email: str = ""
 
 
 _config: Optional[Config] = None
@@ -43,6 +45,7 @@ def get_config() -> Config:
             openbao_token=_env("OPENBAO_TOKEN"),
             providers_path=_env("PROVIDERS_PATH", "/app/providers.yaml"),
             callback_base_url=_env("CALLBACK_BASE_URL", "http://localhost:8300"),
+            admin_email=_env("AUTH_BROKER_ADMIN_EMAIL"),
         )
     return _config
 
