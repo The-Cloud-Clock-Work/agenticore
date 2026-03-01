@@ -60,6 +60,7 @@ class TestCommitUntracked:
     @pytest.mark.asyncio
     async def test_nothing_to_commit_is_tolerated(self, tmp_path):
         """git commit rc=1 (nothing to commit) does not raise."""
+
         async def fake_exec(*args, **kwargs):
             proc = MagicMock()
             proc.communicate = AsyncMock(return_value=(b"", b"nothing to commit"))
@@ -127,7 +128,9 @@ class TestCreateAutoPrCommitsUntracked:
             patch("agenticore.pr._get_worktree_branch", new_callable=AsyncMock, return_value="cc-abc"),
             patch("agenticore.pr._has_changes", new_callable=AsyncMock, return_value=True),
             patch("agenticore.pr._push_branch", new_callable=AsyncMock, return_value=True),
-            patch("agenticore.pr._create_pr", new_callable=AsyncMock, return_value="https://github.com/org/repo/pull/1"),
+            patch(
+                "agenticore.pr._create_pr", new_callable=AsyncMock, return_value="https://github.com/org/repo/pull/1"
+            ),
         ):
             mock_repo_dir.return_value = tmp_path
             pr_url = await create_auto_pr(job)

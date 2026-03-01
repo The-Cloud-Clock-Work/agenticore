@@ -72,7 +72,9 @@ async def _commit_untracked(worktree_path: Path, job_id: str) -> None:
         return
     try:
         add = await asyncio.create_subprocess_exec(
-            "git", "add", "-A",
+            "git",
+            "add",
+            "-A",
             cwd=worktree_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -80,7 +82,10 @@ async def _commit_untracked(worktree_path: Path, job_id: str) -> None:
         await add.communicate()
 
         commit = await asyncio.create_subprocess_exec(
-            "git", "commit", "-m", f"chore: apply changes from agenticore job {job_id}",
+            "git",
+            "commit",
+            "-m",
+            f"chore: apply changes from agenticore job {job_id}",
             cwd=worktree_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
