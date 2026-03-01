@@ -194,17 +194,17 @@ async def run_job(job: Job) -> Job:
         worktree_path = repos_root / _repo_key(job.repo_url) / "worktrees" / job.id
         update_job(job.id, worktree_path=str(worktree_path))
 
-    if cwd:
-        try:
-            job_config_dir = materialize_profile(
-                profile, Path(cwd) if not isinstance(cwd, Path) else cwd, job_id=job.id
-            )
-            if job_config_dir:
-                update_job(job.id, job_config_dir=str(job_config_dir))
-        except Exception as e:
-            return update_job(
-                job.id, status="failed", error=f"Profile materialization failed: {e}", ended_at=_now_iso()
-            )
+    try:
+        job_config_dir = materialize_profile(profile, job_id=job.id)
+        if job_config_dir:
+            update_job(job.id, job_config_dir=str(job_config_dir))
+    except Exception as e:
+        return update_job(
+            job.id,
+            status="failed",
+            error=f"Profile materialization failed: {e}",
+            ended_at=_now_iso(),
+        )
 
     cmd, env = _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir=job_config_dir)
 

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -301,56 +302,51 @@ def _copy_profile_chain_to(chain: List[Profile], target_dir: Path) -> List[Path]
     return created
 
 
+def _job_config_dir(job_id: str) -> Path:
+    shared_fs_root = os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
+    if shared_fs_root:
+        return Path(shared_fs_root) / "jobs" / (job_id or "default")
+    return Path(tempfile.gettempdir()) / "agenticore-jobs" / (job_id or "default")
+
+
 def materialize_profile(
     profile: Profile,
-    working_dir: Path,
-    all_profiles: Optional[Dict[str, Profile]] = None,
     job_id: str = "",
+    all_profiles: Optional[Dict[str, Profile]] = None,
 ) -> Optional[Path]:
-    """Copy profile's .claude/ and .mcp.json into the target directory.
+    """Return the CLAUDE_CONFIG_DIR path for the given profile.
 
-    If ``AGENTICORE_SHARED_FS_ROOT`` is set (Kubernetes mode), files are
-    written to ``{shared_fs_root}/jobs/{job_id}/`` and that path is returned
-    as the ``CLAUDE_CONFIG_DIR`` for the Claude subprocess.  The repo working
-    directory is left clean.
+    Simple profiles (no ``extends``) are returned as-is — no I/O at all.
+    Claude Code reads ``CLAUDE_CONFIG_DIR`` directly, so pointing it at the
+    profile directory is sufficient.
 
-    In local/Docker mode (no shared FS), files are copied into ``working_dir``
-    (legacy behaviour) and ``working_dir`` is returned.
-
-    If the profile uses ``extends``, the parent's files are copied first,
-    then the child's files overlay on top.
+    Profiles with an ``extends`` chain must be merged; the merged output is
+    written to an isolated per-job temp directory (``/tmp/agenticore-jobs/{id}``
+    in local/Docker mode, or ``{AGENTICORE_SHARED_FS_ROOT}/jobs/{id}`` in
+    Kubernetes mode).  The repo working directory is never touched.
 
     Args:
-        profile: The resolved profile
-        working_dir: Repo clone directory (used in local/Docker mode)
+        profile: The resolved profile.
+        job_id: Job UUID — used to create an isolated per-job directory for
+                merged profiles.
         all_profiles: All loaded profiles (for resolving extends chain).
                       If None, loads from defaults/user dirs.
-        job_id: Job UUID — used to create a per-job directory on shared FS.
 
     Returns:
         Path to use as CLAUDE_CONFIG_DIR, or None if profile has no files.
     """
     if profile._legacy or profile.path is None:
         return None
-
-    if profile.extends:
-        profiles = all_profiles if all_profiles is not None else load_profiles()
-    else:
-        profiles = {}
-
+    # Simple profile — zero I/O, point CLAUDE_CONFIG_DIR directly at the profile
+    if not profile.extends:
+        return profile.path
+    # Extends chain — merge into an isolated per-job directory (never the repo cwd)
+    profiles = all_profiles if all_profiles is not None else load_profiles()
     chain = _build_extends_chain(profile, profiles)
-
-    # Kubernetes / shared-FS mode: write to per-job directory
-    shared_fs_root = os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
-    if shared_fs_root and job_id:
-        target_dir = Path(shared_fs_root) / "jobs" / job_id
-        target_dir.mkdir(parents=True, exist_ok=True)
-        _copy_profile_chain_to(chain, target_dir)
-        return target_dir
-
-    # Local / Docker mode: copy into working directory (original behaviour)
-    created = _copy_profile_chain_to(chain, working_dir)
-    return working_dir if created else None
+    target_dir = _job_config_dir(job_id)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    _copy_profile_chain_to(chain, target_dir)
+    return target_dir
 
 
 def _build_extends_chain(profile: Profile, all_profiles: Dict[str, Profile]) -> List[Profile]:

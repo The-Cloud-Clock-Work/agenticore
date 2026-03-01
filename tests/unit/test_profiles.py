@@ -196,81 +196,113 @@ def minimal_profile(tmp_path):
 
 @pytest.mark.unit
 class TestMaterializeProfile:
-    def test_materialize_copies_claude_dir(self, tmp_path, minimal_profile):
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
+    def test_simple_profile_returns_profile_path(self, minimal_profile):
+        """Simple profile (no extends) returns its own path — zero I/O."""
+        result = materialize_profile(minimal_profile)
+        assert result == minimal_profile.path
 
-        result = materialize_profile(minimal_profile, working_dir)
+    def test_simple_profile_no_files_copied(self, tmp_path, minimal_profile):
+        """Simple profile never copies files anywhere."""
+        result = materialize_profile(minimal_profile, job_id="test-job")
+        assert result == minimal_profile.path
+        # No agenticore-jobs dir created
+        import tempfile
 
-        assert (working_dir / ".claude" / "settings.json").exists()
-        assert (working_dir / ".claude" / "CLAUDE.md").exists()
-        assert result is not None
+        assert not (tmp_path / "agenticore-jobs").exists()
+        jobs_tmp = __import__("pathlib").Path(tempfile.gettempdir()) / "agenticore-jobs" / "test-job"
+        # The simple path should not have been created
+        assert result != jobs_tmp
 
-    def test_materialize_copies_mcp_json(self, tmp_path, minimal_profile):
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
-
-        materialize_profile(minimal_profile, working_dir)
-
-        assert (working_dir / ".mcp.json").exists()
-        with open(working_dir / ".mcp.json") as f:
-            data = json.load(f)
-        assert "mcpServers" in data
-
-    def test_materialize_overlays_existing(self, tmp_path, minimal_profile):
-        """Profile files overlay on top of existing repo .claude/ files."""
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
-
-        # Pre-existing repo .claude/ file
-        claude_dir = working_dir / ".claude"
-        claude_dir.mkdir()
-        (claude_dir / "existing.txt").write_text("keep me")
-
-        materialize_profile(minimal_profile, working_dir)
-
-        # Original file preserved
-        assert (claude_dir / "existing.txt").read_text() == "keep me"
-        # Profile files added
-        assert (claude_dir / "settings.json").exists()
-
-    def test_materialize_merges_mcp_json(self, tmp_path, minimal_profile):
-        """If repo already has .mcp.json, servers are merged."""
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
-
-        # Pre-existing .mcp.json with a server
-        existing = {"mcpServers": {"existing": {"command": "node", "args": ["server.js"]}}}
-        with open(working_dir / ".mcp.json", "w") as f:
-            json.dump(existing, f)
-
-        materialize_profile(minimal_profile, working_dir)
-
-        with open(working_dir / ".mcp.json") as f:
-            data = json.load(f)
-        # Existing server preserved
-        assert "existing" in data["mcpServers"]
-
-    def test_materialize_legacy_returns_empty(self, tmp_path):
-        """Legacy profiles don't materialize any files."""
+    def test_materialize_legacy_returns_none(self):
+        """Legacy profiles return None."""
         profile = Profile(name="old", _legacy=True)
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
-
-        result = materialize_profile(profile, working_dir)
-
+        result = materialize_profile(profile)
         assert result is None
-        assert not (working_dir / ".claude").exists()
 
-    def test_materialize_settings_content(self, tmp_path, minimal_profile):
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
+    def test_materialize_no_path_returns_none(self):
+        """Profiles with no path return None."""
+        profile = Profile(name="test", path=None)
+        result = materialize_profile(profile)
+        assert result is None
 
-        materialize_profile(minimal_profile, working_dir)
+    def test_extends_profile_copies_to_temp_dir(self, tmp_path):
+        """Extends profile merges into a temp dir, not the profile dir."""
+        base_dir = tmp_path / "base"
+        (base_dir / ".claude").mkdir(parents=True)
+        (base_dir / "profile.yml").write_text("name: base\n")
+        (base_dir / ".claude" / "CLAUDE.md").write_text("# Base")
 
-        with open(working_dir / ".claude" / "settings.json") as f:
+        child_dir = tmp_path / "child"
+        (child_dir / ".claude").mkdir(parents=True)
+        (child_dir / "profile.yml").write_text("name: child\nextends: base\n")
+        (child_dir / ".claude" / "CLAUDE.md").write_text("# Child")
+
+        from agenticore.profiles import _load_profile_dir, _resolve_extends
+
+        base = _load_profile_dir(base_dir)
+        child = _load_profile_dir(child_dir)
+        all_profiles = {"base": base, "child": child}
+        resolved = _resolve_extends(child, all_profiles)
+
+        result = materialize_profile(resolved, job_id="test-job", all_profiles=all_profiles)
+
+        import tempfile
+
+        assert result is not None
+        assert str(result).startswith(tempfile.gettempdir())
+        assert "agenticore-jobs" in str(result)
+
+    def test_extends_merges_mcp_json(self, tmp_path):
+        """Extends chain merges .mcp.json servers from all profiles."""
+        base_dir = tmp_path / "base"
+        (base_dir / ".claude").mkdir(parents=True)
+        (base_dir / "profile.yml").write_text("name: base\n")
+        (base_dir / ".mcp.json").write_text('{"mcpServers": {"base-server": {}}}')
+
+        child_dir = tmp_path / "child"
+        (child_dir / ".claude").mkdir(parents=True)
+        (child_dir / "profile.yml").write_text("name: child\nextends: base\n")
+        (child_dir / ".mcp.json").write_text('{"mcpServers": {"child-server": {}}}')
+
+        from agenticore.profiles import _load_profile_dir, _resolve_extends
+
+        base = _load_profile_dir(base_dir)
+        child = _load_profile_dir(child_dir)
+        all_profiles = {"base": base, "child": child}
+        resolved = _resolve_extends(child, all_profiles)
+
+        result = materialize_profile(resolved, job_id="merge-test", all_profiles=all_profiles)
+
+        assert result is not None
+        with open(result / ".mcp.json") as f:
+            data = json.load(f)
+        assert "base-server" in data["mcpServers"]
+        assert "child-server" in data["mcpServers"]
+
+    def test_extends_settings_content(self, tmp_path):
+        """Extends chain copies settings from base profile."""
+        base_dir = tmp_path / "base"
+        (base_dir / ".claude").mkdir(parents=True)
+        (base_dir / "profile.yml").write_text("name: base\n")
+        (base_dir / ".claude" / "settings.json").write_text('{"permissions": {"allow": ["Bash(*)"]}}')
+
+        child_dir = tmp_path / "child"
+        (child_dir / ".claude").mkdir(parents=True)
+        (child_dir / "profile.yml").write_text("name: child\nextends: base\n")
+        (child_dir / ".claude" / "CLAUDE.md").write_text("# Child")
+
+        from agenticore.profiles import _load_profile_dir, _resolve_extends
+
+        base = _load_profile_dir(base_dir)
+        child = _load_profile_dir(child_dir)
+        all_profiles = {"base": base, "child": child}
+        resolved = _resolve_extends(child, all_profiles)
+
+        result = materialize_profile(resolved, job_id="settings-test", all_profiles=all_profiles)
+
+        assert result is not None
+        with open(result / ".claude" / "settings.json") as f:
             settings = json.load(f)
-        assert "permissions" in settings
         assert "Bash(*)" in settings["permissions"]["allow"]
 
 
@@ -342,14 +374,13 @@ class TestExtendsInheritance:
         all_profiles = {"base": base, "child": child}
         resolved = _resolve_extends(child, all_profiles)
 
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
-        materialize_profile(resolved, working_dir, all_profiles=all_profiles)
+        result = materialize_profile(resolved, job_id="test-job", all_profiles=all_profiles)
 
+        assert result is not None
         # Child's CLAUDE.md overwrites base's
-        assert (working_dir / ".claude" / "CLAUDE.md").read_text() == "# Child instructions"
+        assert (result / ".claude" / "CLAUDE.md").read_text() == "# Child instructions"
         # Base-only file is still present
-        assert (working_dir / ".claude" / "base_only.txt").read_text() == "base file"
+        assert (result / ".claude" / "base_only.txt").read_text() == "base file"
 
 
 @pytest.mark.unit
@@ -431,58 +462,68 @@ class TestProfileToDict:
 
 @pytest.mark.unit
 class TestMaterializeProfileSharedFs:
-    def test_shared_fs_mode_writes_to_job_dir(self, tmp_path, monkeypatch, minimal_profile):
-        """When AGENTICORE_SHARED_FS_ROOT is set, files go to /shared/jobs/{job_id}/."""
+    def test_simple_profile_ignores_shared_fs(self, tmp_path, monkeypatch, minimal_profile):
+        """Simple profile always returns profile.path — shared FS root is irrelevant."""
         shared = tmp_path / "shared"
         monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
 
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
+        result = materialize_profile(minimal_profile, job_id="job-abc")
 
-        result = materialize_profile(minimal_profile, working_dir, job_id="job-abc")
+        assert result == minimal_profile.path
+        assert not (shared / "jobs").exists()
 
-        assert result is not None
-        assert result == shared / "jobs" / "job-abc"
-        assert (result / ".claude" / "settings.json").exists()
-
-    def test_shared_fs_mode_does_not_write_to_working_dir(self, tmp_path, monkeypatch, minimal_profile):
-        """Working dir stays clean in Kubernetes mode."""
+    def test_extends_profile_writes_to_shared_fs(self, tmp_path, monkeypatch):
+        """Extends profiles write to shared_fs_root/jobs/{job_id}/."""
         shared = tmp_path / "shared"
         monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
 
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
+        base_dir = tmp_path / "base"
+        (base_dir / ".claude").mkdir(parents=True)
+        (base_dir / "profile.yml").write_text("name: base\n")
+        (base_dir / ".claude" / "CLAUDE.md").write_text("# Base")
 
-        materialize_profile(minimal_profile, working_dir, job_id="job-xyz")
+        child_dir = tmp_path / "child"
+        (child_dir / ".claude").mkdir(parents=True)
+        (child_dir / "profile.yml").write_text("name: child\nextends: base\n")
+        (child_dir / ".claude" / "CLAUDE.md").write_text("# Child")
 
-        assert not (working_dir / ".claude").exists()
+        from agenticore.profiles import _load_profile_dir, _resolve_extends
 
-    def test_shared_fs_mode_creates_job_dir(self, tmp_path, monkeypatch, minimal_profile):
-        """The per-job directory is created automatically."""
+        base = _load_profile_dir(base_dir)
+        child = _load_profile_dir(child_dir)
+        all_profiles = {"base": base, "child": child}
+        resolved = _resolve_extends(child, all_profiles)
+
+        result = materialize_profile(resolved, job_id="job-k8s", all_profiles=all_profiles)
+
+        assert result == shared / "jobs" / "job-k8s"
+        assert (result / ".claude" / "CLAUDE.md").exists()
+
+    def test_extends_creates_job_dir_on_shared_fs(self, tmp_path, monkeypatch):
+        """The per-job directory under shared FS is created automatically."""
         shared = tmp_path / "shared"
         monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
 
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
+        base_dir = tmp_path / "base"
+        (base_dir / ".claude").mkdir(parents=True)
+        (base_dir / "profile.yml").write_text("name: base\n")
 
-        result = materialize_profile(minimal_profile, working_dir, job_id="job-new")
+        child_dir = tmp_path / "child"
+        (child_dir / ".claude").mkdir(parents=True)
+        (child_dir / "profile.yml").write_text("name: child\nextends: base\n")
+
+        from agenticore.profiles import _load_profile_dir, _resolve_extends
+
+        base = _load_profile_dir(base_dir)
+        child = _load_profile_dir(child_dir)
+        all_profiles = {"base": base, "child": child}
+        resolved = _resolve_extends(child, all_profiles)
+
+        result = materialize_profile(resolved, job_id="job-new", all_profiles=all_profiles)
 
         assert result is not None
         assert result.is_dir()
-
-    def test_local_mode_without_job_id(self, tmp_path, monkeypatch, minimal_profile):
-        """With shared FS set but no job_id, falls back to working_dir."""
-        shared = tmp_path / "shared"
-        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
-
-        working_dir = tmp_path / "repo"
-        working_dir.mkdir()
-
-        result = materialize_profile(minimal_profile, working_dir, job_id="")
-
-        # Falls back to working_dir when no job_id
-        assert result == working_dir
-        assert (working_dir / ".claude").exists()
+        assert str(result).startswith(str(shared))
 
 
 @pytest.mark.unit
