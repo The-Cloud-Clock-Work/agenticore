@@ -74,6 +74,12 @@ class GithubConfig:
 
 
 @dataclass
+class AuthBrokerConfig:
+    url: str = ""
+    api_key: str = ""
+
+
+@dataclass
 class LangfuseConfig:
     host: str = "https://cloud.langfuse.com"
     public_key: str = ""
@@ -89,6 +95,7 @@ class Config:
     otel: OtelConfig = field(default_factory=OtelConfig)
     github: GithubConfig = field(default_factory=GithubConfig)
     langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
+    auth_broker: AuthBrokerConfig = field(default_factory=AuthBrokerConfig)
     agentihooks_path: str = ""
 
 
@@ -191,6 +198,13 @@ def load_config(config_path: Optional[str] = None) -> Config:
 
     agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
 
+    # Auth Broker — env overrides
+    auth_broker_raw = raw.get("auth_broker", {})
+    auth_broker = AuthBrokerConfig(
+        url=_env("AUTH_BROKER_URL", auth_broker_raw.get("url", "")),
+        api_key=_env("AUTH_BROKER_API_KEY", auth_broker_raw.get("api_key", "")),
+    )
+
     return Config(
         repos=repos,
         claude=claude,
@@ -199,6 +213,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         otel=otel,
         github=github,
         langfuse=langfuse,
+        auth_broker=auth_broker,
         agentihooks_path=agentihooks_path,
     )
 

@@ -45,6 +45,16 @@ def _build_otel_env() -> dict:
     }
 
 
+def _fetch_from_auth_broker(service: str, consumer_id: str = "agenticore") -> Optional[str]:
+    """Fetch a credential string from Auth Broker. Returns None if unavailable."""
+    from agenticore.auth_client import AuthClient  # lazy import
+
+    client = AuthClient()
+    if not client.enabled:
+        return None
+    return client.get_credential(service, consumer_id=consumer_id)
+
+
 def _build_env(_cwd: Optional[Path] = None) -> dict:
     """Build full environment for the Claude subprocess."""
     env = os.environ.copy()
@@ -54,7 +64,16 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
     if cfg.claude.config_dir:
         env["CLAUDE_CONFIG_DIR"] = cfg.claude.config_dir
 
-    if cfg.github.token:
+    if cfg.auth_broker.url:
+        # Auth Broker takes priority over static config
+        key = _fetch_from_auth_broker("anthropic")
+        if key:
+            env["ANTHROPIC_API_KEY"] = key
+        gh = _fetch_from_auth_broker("github")
+        if gh:
+            env["GITHUB_TOKEN"] = gh
+    elif cfg.github.token:
+        # Fallback to static config when broker not configured
         env["GITHUB_TOKEN"] = cfg.github.token
 
     # Auto-build ANTHROPIC_CUSTOM_HEADERS for CF Access-protected proxies

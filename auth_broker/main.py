@@ -117,6 +117,17 @@ async def create_auth_request(
     if not provider:
         raise HTTPException(status_code=404, detail=f"Unknown service: {req.service}")
 
+    # Pre-check: return cached token if one already exists and is valid
+    existing = await vault.get_token(req.service, req.consumer_id)
+    if existing:
+        if vault.needs_refresh(existing):
+            refreshed = await vault.refresh_token(req.service, req.consumer_id, provider)
+            if refreshed:
+                existing = refreshed
+        if vault.is_valid(existing):
+            return {"request_id": None, "status": AuthStatus.completed.value,
+                    "token": existing, "cached": True}
+
     request_id = await store.create_request(
         service=req.service,
         consumer_id=req.consumer_id,
@@ -148,6 +159,29 @@ async def create_auth_request(
         "request_id": request_id,
         "status": AuthStatus.url_ready.value if auth_url else AuthStatus.pending.value,
         "auth_url": auth_url,
+    }
+
+
+@app.get("/auth/token/direct")
+async def get_token_direct(
+    service: str, consumer_id: str = "default", _: None = Depends(require_auth)
+) -> dict:
+    """Direct token lookup — returns immediately without creating a request."""
+    token_data = await vault.get_token(service, consumer_id)
+    if not token_data:
+        raise HTTPException(status_code=404, detail="No token found")
+    if vault.needs_refresh(token_data):
+        provider = providers.get_provider(service)
+        if provider:
+            refreshed = await vault.refresh_token(service, consumer_id, provider)
+            if refreshed:
+                token_data = refreshed
+    return {
+        "service": service,
+        "consumer_id": consumer_id,
+        "status": AuthStatus.completed.value,
+        "token": token_data,
+        "valid": vault.is_valid(token_data),
     }
 
 

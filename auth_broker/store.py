@@ -48,7 +48,7 @@ async def create_request(
     }
     pipe = _redis.pipeline()
     pipe.hset(f"auth:request:{request_id}", mapping=data)
-    pipe.expire(f"auth:request:{request_id}", 3600)  # 1h TTL
+    pipe.expire(f"auth:request:{request_id}", 86400)  # 24h TTL
     pipe.zadd("auth:pending", {request_id: now})
     await pipe.execute()
     return request_id
