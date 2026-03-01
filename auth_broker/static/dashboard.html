@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auth Broker — Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Courier New', monospace;
+      background: #0d0d0d;
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+    h1 { color: #00ff88; font-size: 1.4rem; margin-bottom: 0.5rem; }
+    .status-bar {
+      display: flex; gap: 1rem; align-items: center;
+      margin-bottom: 2rem; font-size: 0.8rem; color: #666;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #333; }
+    .dot.connected { background: #00ff88; }
+    .dot.disconnected { background: #ff4444; }
+    section { margin-bottom: 2rem; }
+    h2 { font-size: 0.9rem; color: #888; text-transform: uppercase;
+         letter-spacing: 0.1em; margin-bottom: 1rem; }
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 4px;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+    }
+    .card:hover { border-color: #3a3a3a; }
+    .card-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 0.75rem;
+    }
+    .service-name { color: #00ff88; font-weight: bold; }
+    .status-badge {
+      font-size: 0.75rem; padding: 0.2rem 0.5rem;
+      border-radius: 2px; font-family: monospace;
+    }
+    .status-pending    { background: #2a1a00; color: #ff9900; }
+    .status-url_ready  { background: #0a1a2a; color: #4488ff; }
+    .status-approved   { background: #1a2a00; color: #88ff44; }
+    .status-completed  { background: #002a10; color: #00ff88; }
+    .status-denied     { background: #2a0000; color: #ff4444; }
+    .card-meta { font-size: 0.75rem; color: #555; margin-bottom: 0.75rem; }
+    .card-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    button {
+      background: #222; border: 1px solid #444; color: #ccc;
+      padding: 0.35rem 0.75rem; border-radius: 3px;
+      cursor: pointer; font-family: monospace; font-size: 0.8rem;
+    }
+    button:hover { background: #2a2a2a; border-color: #666; }
+    button.primary { background: #003a20; border-color: #00ff88; color: #00ff88; }
+    button.primary:hover { background: #004a28; }
+    button.danger { background: #3a0000; border-color: #ff4444; color: #ff4444; }
+    button.danger:hover { background: #4a0000; }
+    .manual-input {
+      display: flex; gap: 0.5rem; margin-top: 0.5rem;
+    }
+    .manual-input input {
+      flex: 1; background: #111; border: 1px solid #333; color: #e0e0e0;
+      padding: 0.35rem 0.6rem; border-radius: 3px; font-family: monospace;
+      font-size: 0.8rem;
+    }
+    .toast {
+      position: fixed; bottom: 2rem; right: 2rem;
+      background: #1a1a1a; border: 1px solid #00ff88;
+      color: #00ff88; padding: 0.75rem 1.25rem;
+      border-radius: 4px; font-size: 0.85rem;
+      opacity: 0; transition: opacity 0.3s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    #log {
+      background: #111; border: 1px solid #1a1a1a;
+      padding: 0.75rem; border-radius: 4px;
+      font-size: 0.75rem; color: #555;
+      height: 120px; overflow-y: auto;
+    }
+    #log .entry { border-bottom: 1px solid #1a1a1a; padding: 0.2rem 0; }
+    #log .ts { color: #333; }
+    #log .msg { color: #666; }
+    .empty { color: #333; font-size: 0.85rem; padding: 1rem 0; }
+  </style>
+</head>
+<body>
+  <h1>⚡ Auth Broker</h1>
+  <div class="status-bar">
+    <div class="dot" id="ws-dot"></div>
+    <span id="ws-status">connecting...</span>
+    <span>|</span>
+    <button onclick="loadPending()" style="font-size:0.75rem;padding:0.2rem 0.5rem">↻ refresh</button>
+  </div>
+
+  <section>
+    <h2>Pending Requests</h2>
+    <div id="pending-list"><div class="empty">Loading...</div></div>
+  </section>
+
+  <section>
+    <h2>Event Log</h2>
+    <div id="log"></div>
+  </section>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const API_KEY = new URLSearchParams(location.search).get('token') || '';
+    const headers = { 'Authorization': `Bearer ${API_KEY}` };
+
+    // ── WebSocket ────────────────────────────────────────────────────────────
+    let ws;
+    function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/auth/ws?token=${API_KEY}`);
+      ws.onopen = () => {
+        document.getElementById('ws-dot').className = 'dot connected';
+        document.getElementById('ws-status').textContent = 'connected';
+        logEntry('WS connected');
+      };
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        logEntry(`${msg.event}: ${JSON.stringify(msg.data)}`);
+        if (['new_request', 'token_ready', 'token_failed', 'request_denied'].includes(msg.event)) {
+          loadPending();
+          toast(eventLabel(msg));
+        }
+      };
+      ws.onclose = () => {
+        document.getElementById('ws-dot').className = 'dot disconnected';
+        document.getElementById('ws-status').textContent = 'disconnected — retrying...';
+        setTimeout(connectWS, 3000);
+      };
+      ws.onerror = () => ws.close();
+    }
+
+    function eventLabel(msg) {
+      const svc = msg.data.service || '';
+      if (msg.event === 'new_request') return `🔔 New request: ${svc}`;
+      if (msg.event === 'token_ready') return `✅ Token ready: ${svc}`;
+      if (msg.event === 'token_failed') return `❌ Failed: ${svc}`;
+      if (msg.event === 'request_denied') return `🚫 Denied: ${msg.data.id?.slice(0,8)}`;
+      return msg.event;
+    }
+
+    // ── API helpers ──────────────────────────────────────────────────────────
+    async function loadPending() {
+      const r = await fetch('/auth/pending', { headers });
+      const data = await r.json();
+      renderPending(data.requests || []);
+    }
+
+    async function deny(id) {
+      await fetch(`/auth/request/${id}`, { method: 'DELETE', headers });
+      loadPending();
+    }
+
+    async function submitManual(id) {
+      const inp = document.getElementById(`manual-${id}`);
+      const token = inp.value.trim();
+      if (!token) return;
+      await fetch(`/auth/manual/${id}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+      loadPending();
+      toast('✅ Token submitted');
+    }
+
+    // ── Render ───────────────────────────────────────────────────────────────
+    function renderPending(requests) {
+      const el = document.getElementById('pending-list');
+      const active = requests.filter(r => !['completed','denied'].includes(r.status));
+      if (active.length === 0) {
+        el.innerHTML = '<div class="empty">No pending requests.</div>';
+        return;
+      }
+      el.innerHTML = active.map(r => cardHTML(r)).join('');
+    }
+
+    function cardHTML(r) {
+      const svcLabel = r.service || 'unknown';
+      const shortId = (r.id || '').slice(0, 8);
+      const ts = r.created_at ? new Date(parseInt(r.created_at) * 1000).toLocaleTimeString() : '';
+      const authUrl = r.auth_url || '';
+      const isOAuth = !!authUrl;
+      const isManual = !isOAuth;
+
+      const oauthBtn = isOAuth
+        ? `<a href="${authUrl}" target="_blank"><button class="primary">🔗 Authorize</button></a>`
+        : '';
+
+      const manualSection = isManual
+        ? `<div class="manual-input">
+             <input id="manual-${r.id}" type="password" placeholder="Paste API key..." />
+             <button class="primary" onclick="submitManual('${r.id}')">Submit</button>
+           </div>`
+        : '';
+
+      return `<div class="card">
+        <div class="card-header">
+          <span class="service-name">${svcLabel}</span>
+          <span class="status-badge status-${r.status}">${r.status}</span>
+        </div>
+        <div class="card-meta">ID: ${shortId} | Consumer: ${r.consumer_id || 'default'} | ${ts}</div>
+        <div class="card-actions">
+          ${oauthBtn}
+          <button class="danger" onclick="deny('${r.id}')">✕ Deny</button>
+        </div>
+        ${manualSection}
+      </div>`;
+    }
+
+    // ── Utils ────────────────────────────────────────────────────────────────
+    function logEntry(msg) {
+      const log = document.getElementById('log');
+      const ts = new Date().toLocaleTimeString();
+      const div = document.createElement('div');
+      div.className = 'entry';
+      div.innerHTML = `<span class="ts">[${ts}]</span> <span class="msg">${msg}</span>`;
+      log.prepend(div);
+      while (log.children.length > 50) log.removeChild(log.lastChild);
+    }
+
+    let toastTimer;
+    function toast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+    }
+
+    // ── Init ─────────────────────────────────────────────────────────────────
+    connectWS();
+    loadPending();
+    setInterval(loadPending, 30000);  // fallback poll every 30s
+  </script>
+</body>
+</html>

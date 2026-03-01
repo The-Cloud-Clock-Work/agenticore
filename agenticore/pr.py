@@ -9,6 +9,7 @@ When ``profile.auto_pr: true`` and the job succeeds (exit_code == 0):
 
 import asyncio
 import sys
+from pathlib import Path
 from typing import Optional
 
 from agenticore.jobs import Job
@@ -38,6 +39,12 @@ async def create_auto_pr(job: Job) -> Optional[str]:
     if not branch:
         return None
 
+    # Stage and commit any files Claude wrote but didn't git-add.
+    # Claude Code's --worktree mode leaves files untracked when the task
+    # doesn't include explicit git operations.
+    if job.worktree_path:
+        await _commit_untracked(Path(job.worktree_path), job.id)
+
     # Check if there are commits on this branch
     has_changes = await _has_changes(rdir, branch)
     if not has_changes:
@@ -51,6 +58,37 @@ async def create_auto_pr(job: Job) -> Optional[str]:
     # Create PR
     pr_url = await _create_pr(rdir, branch, job)
     return pr_url
+
+
+async def _commit_untracked(worktree_path: Path, job_id: str) -> None:
+    """Stage and commit any untracked/modified files left by Claude.
+
+    Claude Code's --worktree mode may write files without running git.
+    This ensures those changes are committed onto the branch before the
+    PR is created.  A non-zero exit from ``git commit`` (e.g. "nothing
+    to commit") is silently ignored.
+    """
+    if not worktree_path.exists():
+        return
+    try:
+        add = await asyncio.create_subprocess_exec(
+            "git", "add", "-A",
+            cwd=worktree_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await add.communicate()
+
+        commit = await asyncio.create_subprocess_exec(
+            "git", "commit", "-m", f"chore: apply changes from agenticore job {job_id}",
+            cwd=worktree_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await commit.communicate()
+        # rc=1 with "nothing to commit" is normal when Claude committed already
+    except Exception as e:
+        print(f"_commit_untracked failed for {worktree_path}: {e}", file=sys.stderr)
 
 
 async def _get_worktree_branch(rdir, _job_id: str) -> Optional[str]:

@@ -17,6 +17,12 @@ env/
 # Environment variables
 .env
 
+# MCP server config (machine-specific paths and defaults — gitignored, see .mcp.json.example)
+.mcp.json
+
+# Local Claude instructions (machine-specific, auto-gitignored by Claude Code)
+CLAUDE.local.md
+
 # IDE
 .vscode/
 .idea/
