@@ -141,3 +141,30 @@ class TestLoadConfig:
         assert cfg.repos.shared_fs_root == ""
         assert cfg.repos.jobs_dir == ""
         assert cfg.repos.pod_name == ""
+
+    @patch.dict(
+        os.environ,
+        {"AUTH_BROKER_URL": "http://broker:8300", "AUTH_BROKER_API_KEY": "secret"},
+        clear=False,
+    )
+    def test_auth_broker_from_env(self, tmp_path):
+        """Auth broker config loads from env vars."""
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.auth_broker.url == "http://broker:8300"
+        assert cfg.auth_broker.api_key == "secret"
+
+    @patch.dict(os.environ, {"AUTH_BROKER_URL": "", "AUTH_BROKER_API_KEY": ""}, clear=False)
+    def test_auth_broker_defaults_empty(self, tmp_path):
+        """Auth broker defaults to empty when not configured."""
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.auth_broker.url == ""
+        assert cfg.auth_broker.api_key == ""
+
+    @patch.dict(os.environ, {"AUTH_BROKER_URL": "", "AUTH_BROKER_API_KEY": ""}, clear=False)
+    def test_auth_broker_from_yaml(self, tmp_path):
+        """Auth broker config loads from YAML file."""
+        config_file = tmp_path / "config.yml"
+        config_file.write_text(yaml.dump({"auth_broker": {"url": "http://yaml-broker", "api_key": "yaml-key"}}))
+        cfg = load_config(str(config_file))
+        assert cfg.auth_broker.url == "http://yaml-broker"
+        assert cfg.auth_broker.api_key == "yaml-key"

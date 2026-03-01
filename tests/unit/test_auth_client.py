@@ -202,6 +202,101 @@ class TestGetToken:
 
         assert result is None
 
+    def test_slow_path_post_failure_returns_none(self):
+        """POST /auth/request returning non-200 → None."""
+        miss_resp = MagicMock()
+        miss_resp.status_code = 404
+
+        fail_resp = MagicMock()
+        fail_resp.status_code = 503
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get = MagicMock(return_value=miss_resp)
+        mock_client.post = MagicMock(return_value=fail_resp)
+
+        with patch("agenticore.auth_client.httpx.Client", return_value=mock_client):
+            client = AuthClient(url="http://broker", api_key="key")
+            result = client.get_token("anthropic")
+
+        assert result is None
+
+    def test_slow_path_connect_error_returns_none(self):
+        """ConnectError on POST /auth/request → None."""
+        miss_resp = MagicMock()
+        miss_resp.status_code = 404
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get = MagicMock(return_value=miss_resp)
+        mock_client.post = MagicMock(side_effect=httpx.ConnectError("refused"))
+
+        with patch("agenticore.auth_client.httpx.Client", return_value=mock_client):
+            client = AuthClient(url="http://broker", api_key="key")
+            result = client.get_token("anthropic")
+
+        assert result is None
+
+    def test_no_request_id_returns_none(self):
+        """POST /auth/request returns 200 but no request_id → None."""
+        miss_resp = MagicMock()
+        miss_resp.status_code = 404
+
+        bad_resp = MagicMock()
+        bad_resp.status_code = 200
+        bad_resp.json = MagicMock(return_value={"status": "pending"})  # no request_id
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get = MagicMock(return_value=miss_resp)
+        mock_client.post = MagicMock(return_value=bad_resp)
+
+        with patch("agenticore.auth_client.httpx.Client", return_value=mock_client):
+            client = AuthClient(url="http://broker", api_key="key")
+            result = client.get_token("anthropic")
+
+        assert result is None
+
+    def test_poll_non_200_continues_then_completes(self):
+        """Poll returning non-200 is skipped; next poll with 200 completed returns token."""
+        miss_resp = MagicMock()
+        miss_resp.status_code = 404
+
+        req_resp = MagicMock()
+        req_resp.status_code = 200
+        req_resp.json = MagicMock(return_value={"request_id": "req-1", "status": "pending"})
+
+        error_poll = MagicMock()
+        error_poll.status_code = 500
+
+        ok_poll = MagicMock()
+        ok_poll.status_code = 200
+        ok_poll.json = MagicMock(return_value={"status": "completed", "token": {"token": "tok"}})
+
+        poll_calls = [0]
+
+        def mock_get(url, **kwargs):
+            if "token/direct" in url:
+                return miss_resp
+            poll_calls[0] += 1
+            return error_poll if poll_calls[0] == 1 else ok_poll
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get = MagicMock(side_effect=mock_get)
+        mock_client.post = MagicMock(return_value=req_resp)
+
+        with patch("agenticore.auth_client.httpx.Client", return_value=mock_client):
+            with patch("agenticore.auth_client.time.sleep"):
+                client = AuthClient(url="http://broker", api_key="key", poll_interval=0)
+                result = client.get_token("anthropic", timeout=60)
+
+        assert result == {"token": "tok"}
+
 
 @pytest.mark.unit
 class TestGetCredential:
