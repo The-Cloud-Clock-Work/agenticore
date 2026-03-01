@@ -11,7 +11,9 @@ import httpx
 from auth_broker.config import get_config
 
 
-def _callback_url() -> str:
+def _callback_url(provider: dict | None = None) -> str:
+    if provider and provider.get("redirect_uri_override"):
+        return provider["redirect_uri_override"]
     cfg = get_config()
     return f"{cfg.callback_base_url.rstrip('/')}/auth/callback"
 
@@ -34,7 +36,7 @@ async def build_auth_url(provider: dict, state: str, code_challenge: str = "") -
     """Construct the OAuth2 authorization URL for the given provider."""
     params = {
         "client_id": _resolve_client_id(provider),
-        "redirect_uri": _callback_url(),
+        "redirect_uri": _callback_url(provider),
         "scope": " ".join(provider.get("scopes", [])),
         "state": state,
         "response_type": "code",
@@ -50,7 +52,7 @@ async def exchange_code(provider: dict, code: str, code_verifier: str = "") -> d
     data: dict = {
         "client_id": _resolve_client_id(provider),
         "code": code,
-        "redirect_uri": _callback_url(),
+        "redirect_uri": _callback_url(provider),
         "grant_type": "authorization_code",
     }
     if code_verifier:

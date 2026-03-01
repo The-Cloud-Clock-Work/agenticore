@@ -108,14 +108,14 @@
   <div class="toast" id="toast"></div>
 
   <script>
-    const API_KEY = new URLSearchParams(location.search).get('token') || '';
-    const headers = { 'Authorization': `Bearer ${API_KEY}` };
+    const authToken = window.__AUTH_KEY__ || new URLSearchParams(location.search).get('token') || '';
+    const headers = { 'Authorization': `Bearer ${authToken}` };
 
     // ── WebSocket ────────────────────────────────────────────────────────────
     let ws;
     function connectWS() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      ws = new WebSocket(`${proto}://${location.host}/auth/ws?token=${API_KEY}`);
+      ws = new WebSocket(`${proto}://${location.host}/auth/ws?token=${authToken}`);
       ws.onopen = () => {
         document.getElementById('ws-dot').className = 'dot connected';
         document.getElementById('ws-status').textContent = 'connected';
@@ -182,6 +182,20 @@
       el.innerHTML = active.map(r => cardHTML(r)).join('');
     }
 
+    async function submitCode(id) {
+      const inp = document.getElementById(`code-${id}`);
+      const code = inp.value.trim();
+      if (!code) return;
+      inp.disabled = true;
+      const r = await fetch(`/auth/code/${id}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: code })
+      });
+      if (r.ok) { loadPending(); toast('✅ Code exchanged — token stored'); }
+      else { inp.disabled = false; toast('❌ Exchange failed — check the code'); }
+    }
+
     function cardHTML(r) {
       const svcLabel = r.service || 'unknown';
       const shortId = (r.id || '').slice(0, 8);
@@ -189,9 +203,21 @@
       const authUrl = r.auth_url || '';
       const isOAuth = !!authUrl;
       const isManual = !isOAuth;
+      // manual_code: has an auth URL but code must be pasted (e.g. Claude.ai)
+      const isManualCode = isOAuth && (r.manual_code === true || r.manual_code === '1' || r.manual_code === 'true');
 
       const oauthBtn = isOAuth
         ? `<a href="${authUrl}" target="_blank"><button class="primary">🔗 Authorize</button></a>`
+        : '';
+
+      const codeSection = isManualCode
+        ? `<div style="margin-top:0.75rem;font-size:0.75rem;color:#888;">
+             After authorizing, copy the code shown on Claude.ai and paste it below:
+           </div>
+           <div class="manual-input">
+             <input id="code-${r.id}" type="text" placeholder="Paste authorization code..." />
+             <button class="primary" onclick="submitCode('${r.id}')">Exchange</button>
+           </div>`
         : '';
 
       const manualSection = isManual
@@ -211,6 +237,7 @@
           ${oauthBtn}
           <button class="danger" onclick="deny('${r.id}')">✕ Deny</button>
         </div>
+        ${codeSection}
         ${manualSection}
       </div>`;
     }

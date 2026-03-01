@@ -98,16 +98,31 @@ async def oauth_callback(code: str, state: str) -> HTMLResponse:
 # ── Dashboard ────────────────────────────────────────────────────────────────
 
 
+def _serve_dashboard() -> HTMLResponse:
+    """Serve dashboard HTML with API key injected as a JS global."""
+    from pathlib import Path
+    cfg = get_config()
+    html = (Path(__file__).parent / "static" / "dashboard.html").read_text()
+    # Inject key so the dashboard JS never needs it in the URL
+    injected = f'<script>window.__AUTH_KEY__="{cfg.api_key}";</script>'
+    html = html.replace("</head>", injected + "</head>", 1)
+    return HTMLResponse(content=html)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root() -> HTMLResponse:
+    """Root — served after Cloudflare Access (Google) login. No token needed."""
+    return _serve_dashboard()
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(token: str = "") -> HTMLResponse:
-    """Dashboard — auth via ?token= query param (browser-friendly)."""
-    from pathlib import Path
-
+    """Dashboard — CF Access path (clean URL) or legacy ?token= fallback."""
     cfg = get_config()
-    if not token or token != cfg.api_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing token")
-    html_path = Path(__file__).parent / "static" / "dashboard.html"
-    return HTMLResponse(content=html_path.read_text())
+    # Legacy token path still works; root path skips this check (CF Access gates it)
+    if token and token != cfg.api_key:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return _serve_dashboard()
 
 
 # ── Auth request lifecycle ───────────────────────────────────────────────────
@@ -150,7 +165,12 @@ async def create_auth_request(
             await store.store_pkce_verifier(request_id, verifier)
         auth_url = await oauth.build_auth_url(provider, state, code_challenge)
         await store.store_oauth_state(state, request_id)
-        await store.update_status(request_id, AuthStatus.url_ready, auth_url=auth_url)
+        manual_code = provider.get("manual_code", False)
+        await store.update_status(
+            request_id, AuthStatus.url_ready,
+            auth_url=auth_url,
+            manual_code="1" if manual_code else "0",
+        )
 
     await ws_module.ws_manager.broadcast(
         "new_request",
@@ -160,6 +180,7 @@ async def create_auth_request(
             "consumer_id": req.consumer_id,
             "auth_type": provider.get("auth_type"),
             "auth_url": auth_url,
+            "manual_code": provider.get("manual_code", False),
             "display_name": provider.get("display_name", req.service),
         },
     )
@@ -235,6 +256,39 @@ async def deny_request(request_id: str, _: None = Depends(require_auth)) -> dict
     await store.update_status(request_id, AuthStatus.denied)
     await ws_module.ws_manager.broadcast("request_denied", {"id": request_id})
     return {"request_id": request_id, "status": "denied"}
+
+
+@app.post("/auth/code/{request_id}")
+async def submit_oauth_code(
+    request_id: str, body: ManualTokenInput, _: None = Depends(require_auth)
+) -> dict:
+    """Exchange a manually-pasted OAuth code (for manual_code providers like Claude.ai)."""
+    data = await store.get_request(request_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Request not found")
+    provider = providers.get_provider(data["service"])
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+
+    await store.update_status(request_id, AuthStatus.approved)
+    try:
+        pkce_verifier = data.get("pkce_verifier", "")
+        token_data = await oauth.exchange_code(provider, body.token, pkce_verifier)
+        vault_data = {
+            "token": token_data.get("access_token", ""),
+            "refresh_token": token_data.get("refresh_token", ""),
+            "scope": token_data.get("scope", ""),
+            "expires_at": int(time.time()) + token_data.get("expires_in", 3600),
+        }
+        await vault.store_token(data["service"], data["consumer_id"], vault_data)
+        await store.update_status(request_id, AuthStatus.completed)
+        await ws_module.ws_manager.broadcast(
+            "token_ready", {"id": request_id, "service": data["service"]}
+        )
+        return {"request_id": request_id, "status": "completed"}
+    except Exception as exc:
+        await store.update_status(request_id, AuthStatus.pending)
+        raise HTTPException(status_code=502, detail=f"Code exchange failed: {exc}") from exc
 
 
 @app.post("/auth/manual/{request_id}")
