@@ -34,20 +34,12 @@ class AuthClient:
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self._api_key}"}
 
-    def get_token(self, service: str, consumer_id: str = "default", timeout: int = 300) -> Optional[dict]:
-        """Get a valid token for the given service.
+    def _try_direct_lookup(self, base: str, service: str, consumer_id: str) -> tuple[Optional[dict], bool]:
+        """GET /auth/token/direct — fast path.
 
-        Fast path: GET /auth/token/direct — returns immediately if token exists.
-        Slow path: POST /auth/request → poll GET /auth/token/{id} until completed/denied/timeout.
-
-        Returns None on auth broker disabled, connection error, denial, or timeout.
+        Returns (token, should_stop).
+        should_stop=True means do not fall through to slow path.
         """
-        if not self.enabled:
-            return None
-
-        base = self._url.rstrip("/")
-
-        # Fast path: check for existing valid token
         try:
             with httpx.Client(timeout=5.0) as client:
                 resp = client.get(
@@ -56,15 +48,19 @@ class AuthClient:
                     headers=self._headers(),
                 )
             if resp.status_code == 200:
-                data = resp.json()
-                return data.get("token")
+                return resp.json().get("token"), True
         except httpx.ConnectError as e:
             logger.warning("Auth Broker unreachable: %s", e)
-            return None
+            return None, True
         except Exception as e:
             logger.warning("Auth Broker fast-path error: %s", e)
+        return None, False
 
-        # Slow path: create request and poll
+    def _try_create_request(self, base: str, service: str, consumer_id: str) -> Optional[dict]:
+        """POST /auth/request — slow path.
+
+        Returns result dict on success, None on any failure.
+        """
         try:
             with httpx.Client(timeout=10.0) as client:
                 resp = client.post(
@@ -75,7 +71,7 @@ class AuthClient:
             if resp.status_code != 200:
                 logger.warning("Auth Broker request failed: HTTP %s", resp.status_code)
                 return None
-            result = resp.json()
+            return resp.json()
         except httpx.ConnectError as e:
             logger.warning("Auth Broker unreachable: %s", e)
             return None
@@ -83,24 +79,14 @@ class AuthClient:
             logger.warning("Auth Broker slow-path request error: %s", e)
             return None
 
-        # Immediate return if cached
-        if result.get("cached") or result.get("status") == "completed":
-            return result.get("token")
-
-        request_id = result.get("request_id")
-        if not request_id:
-            return None
-
-        # Poll until completed, denied, or timeout
+    def _poll_for_token(self, base: str, request_id: str, service: str, timeout: int) -> Optional[dict]:
+        """Poll GET /auth/token/{id} until completed, denied, or timeout."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             time.sleep(self._poll_interval)
             try:
                 with httpx.Client(timeout=10.0) as client:
-                    poll = client.get(
-                        f"{base}/auth/token/{request_id}",
-                        headers=self._headers(),
-                    )
+                    poll = client.get(f"{base}/auth/token/{request_id}", headers=self._headers())
                 if poll.status_code != 200:
                     continue
                 poll_data = poll.json()
@@ -112,9 +98,38 @@ class AuthClient:
                     return None
             except Exception as e:
                 logger.warning("Auth Broker poll error: %s", e)
-
-        logger.warning("Auth Broker timeout waiting for service=%s (request_id=%s)", service, request_id)
+        logger.warning("Auth Broker timeout for service=%s (request_id=%s)", service, request_id)
         return None
+
+    def get_token(self, service: str, consumer_id: str = "default", timeout: int = 300) -> Optional[dict]:
+        """Get a valid token for the given service.
+
+        Fast path: GET /auth/token/direct — returns immediately if token exists.
+        Slow path: POST /auth/request → poll until completed/denied/timeout.
+
+        Returns None on disabled, unreachable, denial, or timeout.
+        """
+        if not self.enabled:
+            return None
+
+        base = self._url.rstrip("/")
+
+        token, stop = self._try_direct_lookup(base, service, consumer_id)
+        if stop:
+            return token
+
+        result = self._try_create_request(base, service, consumer_id)
+        if result is None:
+            return None
+
+        if result.get("cached") or result.get("status") == "completed":
+            return result.get("token")
+
+        request_id = result.get("request_id")
+        if not request_id:
+            return None
+
+        return self._poll_for_token(base, request_id, service, timeout)
 
     def get_credential(self, service: str, consumer_id: str = "default") -> Optional[str]:
         """Returns the token string or None."""
