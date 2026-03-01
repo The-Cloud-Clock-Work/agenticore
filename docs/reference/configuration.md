@@ -143,18 +143,16 @@ agentihooks_path: ""
 |------|---------|
 | `~/.agenticore/config.yml` | Main configuration file |
 | `~/.agenticore/jobs/{id}.json` | Job data (file fallback) |
-| `~/.agenticore/profiles/*/` | Custom user profiles |
+| `~/.agenticore/profiles/*/` | User profiles |
 | `~/agenticore-repos/` | Default cloned repos root |
 | `~/agenticore-repos/{hash}/.lock` | Per-repo flock file |
 | `~/agenticore-repos/{hash}/repo/` | Cloned repository |
-| `defaults/profiles/*/` | Bundled default profiles |
-| `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/*/` | External agentihooks profiles |
+| `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/*/` | agentihooks profiles |
 
 ### Kubernetes / shared FS mode (`AGENTICORE_SHARED_FS_ROOT=/shared`)
 
 | Path | Purpose |
 |------|---------|
-| `/shared/profiles/{name}/.claude/` | Bundled profile files (populated by `init-shared-fs`) |
 | `/shared/repos/{hash}/repo/` | Cloned repos on shared volume |
 | `/shared/jobs/{job-id}/` | Per-job `CLAUDE_CONFIG_DIR` (profile files for one job) |
 | `/shared/job-state/{id}.json` | Job data files (`AGENTICORE_JOBS_DIR=/shared/job-state`) |

@@ -6,26 +6,39 @@ has_children: true
 
 # Agenticore Documentation
 
-Agenticore is a Claude Code runner and orchestrator that manages job lifecycle,
-repo cloning, profile-based execution, auto-PR creation, and OTEL observability.
+Agenticore is a **production-grade Claude Code runner and orchestrator**. It
+manages the full job lifecycle — repo cloning, profile-based execution,
+auto-PR creation, and OTEL observability — while Claude Code does the actual
+coding work.
 
 ```
-Request (MCP / REST / CLI)
-    |
-    v
-+---+---+     +--------+     +----------+     +--------+     +--------+
-| Router+---->| Clone  +---->| Claude   +---->| Auto-PR+---->| Job    |
-|       |     | repo   |     | --worktree|    | gh pr  |     | result |
-+-------+     +--------+     | -p "task"|     | create |     | Redis  |
-                             +----+-----+     +--------+     | + file |
-                                  |                          +--------+
-                                  v
-                             +----+-----+
-                             | OTEL     |
-                             | Collector|
-                             | -> PG    |
-                             +----------+
+MCP Client / REST Client / CLI
+            │
+            ▼
+    ┌── Agenticore ──────────────────────────────────────────────┐
+    │   Auth · Router · Job Queue                                │
+    │                                                            │
+    │   Clone repo ──► Materialize profile ──► claude --worktree │
+    │   (cached, distributed lock)   (.claude/ + .mcp.json)     │
+    │                                         │                  │
+    │                                         ▼                  │
+    │                                   Auto-PR (gh)             │
+    │                                   Job result → Redis       │
+    └──────────────────────┬─────────────────────────────────────┘
+                           │
+                    OTEL Collector
+                    → Langfuse / PostgreSQL
 ```
+
+Deploy anywhere:
+
+| Mode | When to use |
+|------|-------------|
+| Standalone | Development, single-machine workloads |
+| Docker Compose | Self-hosted, single-host production |
+| Kubernetes (Helm) | Multi-pod, autoscaling, shared repo cache |
+
+---
 
 ## Getting Started
 
@@ -36,14 +49,14 @@ Request (MCP / REST / CLI)
 
 - [Architecture Internals](architecture/internals.md) — Modules, data flow, Redis+file fallback, repo caching
 - [Dual Interface](architecture/dual-interface.md) — MCP + REST ASGI routing and auth middleware
-- [Profile System](architecture/profile-system.md) — Directory-based profiles, materialization, CLI flags
+- [Profile System](architecture/profile-system.md) — Directory-based profiles, agentihooks integration, materialization
 - [Job Execution](architecture/job-execution.md) — Runner pipeline, lifecycle state machine, auto-PR, OTEL
 
 ## Deployment
 
 - [Docker Compose](deployment/docker-compose.md) — 4-service stack, volumes, networking
-- [Kubernetes](deployment/kubernetes.md) — StatefulSet, shared RWX PVC, KEDA autoscaling, drain
-- [OTEL Pipeline](deployment/otel-pipeline.md) — Collector config, PostgreSQL sink
+- [Kubernetes](deployment/kubernetes.md) — StatefulSet, shared RWX PVC, KEDA autoscaling, graceful drain
+- [OTEL Pipeline](deployment/otel-pipeline.md) — Collector config, PostgreSQL sink, Langfuse traces
 - [Releases and CI/CD](deployment/releases.md) — Versioning, tests, linting, self-update
 
 ## Reference

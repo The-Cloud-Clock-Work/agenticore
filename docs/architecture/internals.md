@@ -32,7 +32,7 @@ already provides natively:
 |--------|---------|---------------|
 | `server.py` | FastMCP server + REST routes | `run_task()`, `_build_asgi_app()` |
 | `config.py` | YAML config + env var overrides | `load_config()`, `get_config()` |
-| `profiles.py` | Load profile packages, build CLI args, materialize `.claude/` | `load_profiles()`, `build_cli_args()`, `materialize_profile()` |
+| `profiles.py` | Discover and load profiles from agentihooks + user dir, build CLI args, materialize `.claude/` | `load_profiles()`, `build_cli_args()`, `materialize_profile()` |
 | `repos.py` | Git clone/fetch with flock or Redis lock | `ensure_clone()`, `repo_dir()` |
 | `jobs.py` | Job store (Redis + file fallback) | `create_job()`, `get_job()`, `update_job()` |
 | `runner.py` | Spawn Claude subprocess | `submit_job()`, `run_job()` |

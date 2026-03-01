@@ -1,22 +1,43 @@
 # Agenticore
 
-Claude Code runner and orchestrator. Submit a task, get a PR.
-
-![Agenticore Architecture](docs/media/agenticore-readme-banner.png)
+Production-grade Claude Code runner and orchestrator. Submit a task, get a PR.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/The-Cloud-Clock-Work/agenticore/blob/main/LICENSE)
 [![Tests](https://github.com/The-Cloud-Clock-Work/agenticore/actions/workflows/test.yml/badge.svg)](https://github.com/The-Cloud-Clock-Work/agenticore/actions/workflows/test.yml)
 [![Docker](https://img.shields.io/docker/v/tccw/agenticore?label=Docker%20Hub)](https://hub.docker.com/r/tccw/agenticore)
+[![Helm](https://img.shields.io/badge/Helm-GHCR-blue)](https://ghcr.io/the-cloud-clock-work/charts/agenticore)
+[![PyPI](https://img.shields.io/pypi/v/agenticore)](https://pypi.org/project/agenticore/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
 
 ```
-Client (MCP / REST / CLI)
-    │
-    ▼
-Router → Clone repo → claude --worktree -p "task" → Auto-PR → Job result (Redis)
-                                    │
-                                    └──► OTEL Collector → Langfuse / PostgreSQL
+MCP Client / REST Client / CLI
+            │
+            ▼
+    ┌── Agenticore ──────────────────────────────────────────────┐
+    │   Auth · Router · Job Queue                                │
+    │                                                            │
+    │   Clone repo ──► Materialize profile ──► claude --worktree │
+    │   (cached, distributed lock)   (.claude/ + .mcp.json)     │
+    │                                         │                  │
+    │                                         ▼                  │
+    │                                   Auto-PR (gh)             │
+    │                                   Job result → Redis       │
+    └──────────────────────┬─────────────────────────────────────┘
+                           │
+                    OTEL Collector
+                    → Langfuse / PostgreSQL
 ```
+
+---
+
+Agenticore is a **thin orchestration layer** on top of Claude Code:
+
+- Accepts tasks from **MCP clients, REST, or CLI** — same API surface, one port
+- **Clones and caches repos**, serializes concurrent access with distributed locks
+- **Applies execution profiles** — `.claude/` config, `.mcp.json`, hooks, skills
+- Spawns `claude --worktree -p "<task>"` and **opens a PR when it succeeds**
+- Ships **full OTEL traces** (prompts, tool calls, token counts) to Langfuse / PostgreSQL
+- Runs standalone, in Docker, or on **Kubernetes** (Helm chart, KEDA autoscaling, graceful drain)
 
 ---
 
@@ -34,13 +55,23 @@ cd agenticore
 pip install -e .
 ```
 
-## Start the Server
+---
+
+## Quickstart
 
 ```bash
-agenticore serve
-```
+# 1. Set your credentials
+export ANTHROPIC_API_KEY=sk-ant-...
+export GITHUB_TOKEN=ghp_...
 
-Starts on `http://127.0.0.1:8200`. Both MCP and REST are available on the same port.
+# 2. Start the server
+agenticore serve
+
+# 3. Submit a task
+agenticore run "fix the null pointer in auth.py" \
+  --repo https://github.com/org/repo \
+  --wait
+```
 
 ---
 
@@ -67,7 +98,7 @@ agenticore run "fix the null pointer in auth.py" \
   --repo https://github.com/org/repo \
   --profile code
 
-# Wait for result and see output
+# Wait for result and see PR URL
 agenticore run "add unit tests for the parser" \
   --repo https://github.com/org/repo \
   --wait
@@ -107,7 +138,7 @@ curl -X POST http://localhost:8200/jobs \
   -H "Content-Type: application/json" \
   -d '{"task": "fix the auth bug", "repo_url": "https://github.com/org/repo", "wait": true}'
 
-# Get job status and output
+# Get job status, output, and PR URL
 curl http://localhost:8200/jobs/{job_id}
 
 # List jobs (with optional filters)
@@ -122,50 +153,6 @@ curl http://localhost:8200/profiles
 # Health check (no auth required)
 curl http://localhost:8200/health
 ```
-
----
-
-## Authentication
-
-Authentication is **optional**. When disabled, all endpoints are public.
-
-### API Keys (simple)
-
-```bash
-# Via environment variable (comma-separated for multiple keys)
-AGENTICORE_API_KEYS="key-1,key-2" agenticore serve
-```
-
-Pass the key in requests:
-
-| Method | Example |
-|--------|---------|
-| Header | `curl -H "X-Api-Key: key-1" http://localhost:8200/jobs` |
-| Query param | `curl "http://localhost:8200/jobs?api_key=key-1"` |
-| Bearer token | `curl -H "Authorization: Bearer key-1" http://localhost:8200/jobs` |
-
-### OAuth 2.1 (for claude.ai and MCP clients)
-
-Set `OAUTH_ISSUER_URL` to enable full OAuth 2.1 + PKCE. This lets claude.ai and other compliant MCP clients connect without a static API key — they go through the standard authorization code flow and get short-lived access tokens (1h) with automatic refresh (30 days).
-
-```bash
-OAUTH_ISSUER_URL=https://agenticore.example.com \
-OAUTH_CLIENT_ID=my-client \
-OAUTH_CLIENT_SECRET=my-secret \
-OAUTH_ALLOWED_REDIRECT_URIS=https://claude.ai/oauth/callback \
-agenticore serve
-```
-
-| Variable | Description |
-|----------|-------------|
-| `OAUTH_ISSUER_URL` | Master switch — your public server URL |
-| `OAUTH_CLIENT_ID` | Pre-configured client ID (optional — open registration if unset) |
-| `OAUTH_CLIENT_SECRET` | Pre-configured client secret |
-| `OAUTH_ALLOWED_REDIRECT_URIS` | Comma-separated allowed redirect URIs |
-| `OAUTH_ALLOWED_SCOPES` | Space-separated allowed scopes (optional) |
-| `OAUTH_RESOURCE_URL` | Resource server URL (defaults to `{issuer}/mcp`) |
-
-When OAuth is enabled, existing API keys still work as Bearer tokens — they are accepted in `load_access_token` as a fallback, so CLI and REST clients need no changes.
 
 ---
 
@@ -194,9 +181,7 @@ Add to your project's `.mcp.json` or `~/.mcp.json`:
 }
 ```
 
-### With Authentication
-
-Pass the API key in the `headers` object — never in the URL:
+### With API Key Authentication
 
 ```json
 {
@@ -214,12 +199,6 @@ Pass the API key in the `headers` object — never in the URL:
 
 ### stdio (Claude Code subprocess)
 
-```bash
-AGENTICORE_TRANSPORT=stdio python -m agenticore
-```
-
-Or in `.mcp.json`:
-
 ```json
 {
   "mcpServers": {
@@ -233,57 +212,177 @@ Or in `.mcp.json`:
 
 ---
 
+## Authentication
+
+Authentication is **optional**. When disabled, all endpoints are public.
+
+### API Keys
+
+```bash
+# Via environment variable (comma-separated for multiple keys)
+AGENTICORE_API_KEYS="key-1,key-2" agenticore serve
+```
+
+Pass the key in any of these ways:
+
+| Method | Example |
+|--------|---------|
+| Header | `curl -H "X-Api-Key: key-1" http://localhost:8200/jobs` |
+| Query param | `curl "http://localhost:8200/jobs?api_key=key-1"` |
+| Bearer token | `curl -H "Authorization: Bearer key-1" http://localhost:8200/jobs` |
+
+The `/health` endpoint is always public regardless of auth settings.
+
+---
+
 ## Profiles
 
-Profiles define how Claude runs — model, permissions, auto-PR, timeouts.
+Profiles are **directory packages** that configure how Claude Code runs. Each profile
+is a self-contained `.claude/` tree that Agenticore copies into the job's working
+directory before spawning Claude.
 
-| Profile | Model | Auto-PR | Description |
-|---------|-------|---------|-------------|
-| `code` (default) | Sonnet | Yes | Autonomous coding — writes, commits, opens PR |
-| `review` | Haiku | No | Read-only code review |
+```
+<profiles-dir>/{name}/
+├── profile.yml          ← Agenticore metadata (model, turns, auto_pr, timeout…)
+├── .claude/
+│   ├── settings.json    ← Hooks, tool permissions, env vars
+│   ├── CLAUDE.md        ← System instructions for Claude
+│   ├── agents/          ← Custom subagents
+│   └── skills/          ← Custom slash-command skills
+└── .mcp.json            ← MCP server config merged into the job
+```
 
-Pass `--profile <name>` to `run_task` or `agenticore run`. Omit it and the router picks for you.
+### Profile discovery
 
-Custom profiles live in `~/.agenticore/profiles/`. See the [Profile System docs](docs/architecture/profile-system.md).
+Profiles are **not bundled with Agenticore**. They live in two places:
+
+| Source | Path | Set via |
+|--------|------|---------|
+| agentihooks integration | `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/` | `AGENTICORE_AGENTIHOOKS_PATH` env var |
+| User profiles | `~/.agenticore/profiles/` | Always checked |
+
+Later sources override earlier ones when names collide.
+
+### Profile inheritance
+
+```yaml
+# ~/.agenticore/profiles/code-strict/profile.yml
+name: code-strict
+extends: code          # inherits all settings from 'code'
+
+claude:
+  max_turns: 20
+  effort: high
+```
+
+Child values override parent defaults. `.claude/` files are layered (child overlays
+parent) during materialization.
+
+### What Agenticore does with a profile at job start
+
+1. Resolves the `extends` chain
+2. Copies `.claude/` into the working directory (or `/shared/jobs/{id}/` in Kubernetes)
+3. Merges `.mcp.json` with any existing `.mcp.json` in the repo
+4. Translates `profile.yml` `claude:` fields into CLI flags:
+   `--worktree --model sonnet --max-turns 80 --permission-mode bypassPermissions …`
+
+Full profile reference: [Profile System docs](docs/architecture/profile-system.md)
 
 ---
 
 ## Helm (Kubernetes)
 
-Install from GHCR with a single command:
+Agenticore ships a production-ready Helm chart published to GHCR. The chart
+deploys a **StatefulSet** with a **shared RWX PVC** (NFS / EFS / Azure Files / Ceph)
+so all pods share the same repo cache and job state, with **KEDA autoscaling**
+based on Redis queue depth and **graceful drain** on pod shutdown.
+
+```
+Internet ──► LoadBalancer :8200
+                    │
+     ┌──────────────▼──────────────────────────┐
+     │  Agenticore StatefulSet (0..N pods)      │
+     │  Work-stealing from Redis queue          │
+     └──────────┬──────────────────────────────┘
+                │                │
+         ┌──────▼───────┐  ┌─────▼───────────┐
+         │  Redis        │  │  Shared RWX PVC  │
+         │  jobs · locks │  │  /shared/        │
+         │  KEDA queue   │  │  ├─ repos/       │
+         └───────────────┘  │  ├─ jobs/        │
+                            │  └─ job-state/   │
+         KEDA ScaledObject  └─────────────────┘
+         watches Redis queue
+```
+
+### Install
 
 ```bash
 # 1. Create the Kubernetes Secret (once per cluster)
 kubectl create secret generic agenticore-secrets \
-  --from-literal=redis-url="redis://:password@host:6379" \
+  --from-literal=redis-url="redis://:password@redis:6379" \
+  --from-literal=redis-address="redis:6379" \
   --from-literal=anthropic-api-key="sk-ant-..." \
   --from-literal=github-token="ghp_..."
 
 # 2. Install the chart
 helm install agenticore \
   oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
-  --version 0.1.5 \
   --set storage.className=your-rwx-storage-class
 ```
 
-Upgrade: `helm upgrade agenticore oci://ghcr.io/the-cloud-clock-work/charts/agenticore --version 0.1.6`
+### Key values
 
-Full configuration: [Kubernetes Deployment](docs/deployment/kubernetes.md)
+| Value | Default | Description |
+|-------|---------|-------------|
+| `storage.className` | `nfs-client` | RWX storage class (required) |
+| `storage.size` | `100Gi` | PVC size |
+| `replicas` | `2` | Static replica count (ignored when KEDA enabled) |
+| `image.tag` | `latest` | Container image tag |
+| `config.defaultProfile` | `code` | Default execution profile |
+| `config.maxParallelJobs` | `3` | Max Claude subprocesses per pod |
+| `keda.enabled` | `false` | Enable KEDA autoscaling |
+| `keda.minReplicas` | `1` | KEDA min replicas |
+| `keda.maxReplicas` | `10` | KEDA max replicas |
+| `ingress.enabled` | `false` | Enable Ingress resource |
+| `ingress.host` | `agenticore.example.com` | Ingress hostname |
+
+### Autoscaling with KEDA
+
+```bash
+helm upgrade agenticore \
+  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  --set keda.enabled=true \
+  --set keda.redisAddress=redis:6379 \
+  --set keda.maxReplicas=20
+```
+
+A `ScaledObject` watches the Redis job queue and adds one pod per 5 pending jobs.
+
+### Graceful drain
+
+StatefulSet pods run `agenticore drain --timeout 270` as a PreStop hook. Drain:
+1. Marks the pod as draining in Redis (new jobs route elsewhere)
+2. Waits for all in-progress jobs to finish
+3. Exits cleanly — Kubernetes then sends SIGTERM
+
+Full Kubernetes guide: [Kubernetes Deployment](docs/deployment/kubernetes.md)
 
 ---
 
 ## Docker
 
 ```bash
-# Local dev — full stack (agenticore + Redis + PostgreSQL + OTEL Collector)
+# Local dev — full stack (Agenticore + Redis + PostgreSQL + OTEL Collector)
 cp .env.example .env
 docker compose up --build -d
 
-# Production — agenticore only (point at your managed services)
+# Production — Agenticore only (point at your managed services)
 docker run -d \
   -p 8200:8200 \
   -e AGENTICORE_TRANSPORT=sse \
   -e AGENTICORE_HOST=0.0.0.0 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
   -e REDIS_URL=redis://your-redis:6379/0 \
   -e GITHUB_TOKEN=ghp_... \
   tccw/agenticore
@@ -299,12 +398,53 @@ docker run -d \
 | `AGENTICORE_HOST` | `127.0.0.1` | Bind address |
 | `AGENTICORE_PORT` | `8200` | Server port |
 | `AGENTICORE_API_KEYS` | _(empty)_ | Comma-separated API keys (optional) |
+| `ANTHROPIC_API_KEY` | _(empty)_ | Anthropic API key passed to Claude |
 | `REDIS_URL` | _(empty)_ | Redis URL — omit for file-based fallback |
 | `GITHUB_TOKEN` | _(empty)_ | GitHub token for auto-PR |
 | `AGENTICORE_DEFAULT_PROFILE` | `code` | Profile when none specified |
 | `AGENTICORE_CLAUDE_TIMEOUT` | `3600` | Max job runtime in seconds |
+| `AGENTICORE_AGENTIHOOKS_PATH` | _(empty)_ | Path to agentihooks repo for profiles |
+| `AGENTICORE_SHARED_FS_ROOT` | _(empty)_ | Shared FS root (Kubernetes mode) |
 
 Full reference: [Configuration docs](docs/reference/configuration.md)
+
+---
+
+## Auth Broker
+
+For environments where Claude Code jobs need **short-lived, human-authorized
+tokens** (rather than long-lived static keys), Agenticore integrates with
+**Auth Broker** — a companion service that handles OAuth flows on behalf of
+running jobs.
+
+When `AUTH_BROKER_URL` is set, the runner fetches credentials at job start
+instead of reading them from environment variables. A pod requests a token,
+Auth Broker notifies an operator, the operator approves via OAuth, and the
+token lands in the job environment — no secret rotation required.
+
+Auth Broker ships as a separate Docker image: `tccw/auth-broker`.
+
+---
+
+## OTEL Observability
+
+Every job produces a Langfuse trace with spans for each Claude turn, including
+prompts, tool calls, and token counts.
+
+```bash
+# Enable in .env
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_HOST=https://cloud.langfuse.com
+
+AGENTICORE_OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+```
+
+The bundled `docker-compose.yml` includes an OTEL Collector pre-wired to push
+traces to both Langfuse (SDK) and PostgreSQL (raw spans).
+
+Full setup: [OTEL Pipeline docs](docs/deployment/otel-pipeline.md)
 
 ---
 
@@ -312,12 +452,15 @@ Full reference: [Configuration docs](docs/reference/configuration.md)
 
 - [Quickstart](docs/getting-started/quickstart.md)
 - [Connecting Clients](docs/getting-started/connecting-clients.md)
+- [Profile System](docs/architecture/profile-system.md)
+- [Architecture Internals](docs/architecture/internals.md)
+- [Job Execution](docs/architecture/job-execution.md)
+- [Kubernetes Deployment](docs/deployment/kubernetes.md)
+- [Docker Compose](docs/deployment/docker-compose.md)
+- [OTEL Pipeline](docs/deployment/otel-pipeline.md)
 - [CLI Reference](docs/reference/cli-commands.md)
 - [API Reference](docs/reference/api-reference.md)
 - [Configuration](docs/reference/configuration.md)
-- [Profile System](docs/architecture/profile-system.md)
-- [Kubernetes Deployment](docs/deployment/kubernetes.md)
-- [OTEL Pipeline](docs/deployment/otel-pipeline.md)
 
 ---
 
@@ -326,6 +469,10 @@ Full reference: [Configuration docs](docs/reference/configuration.md)
 ```bash
 pip install -e ".[dev]"
 
+# Tests
 pytest tests/unit -v -m unit --cov=agenticore
+
+# Lint
 ruff check agenticore/ tests/
+ruff format --check agenticore/ tests/
 ```

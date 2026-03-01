@@ -5,23 +5,26 @@ nav_order: 3
 
 # Profile System
 
-Profiles are directory packages that configure Claude Code execution. Each profile
-is a directory containing a `profile.yml` for Agenticore metadata and a `.claude/`
-directory with native Claude Code config files.
+Profiles are **directory packages** that configure Claude Code execution. Each
+profile is a directory containing a `profile.yml` for Agenticore metadata and a
+`.claude/` directory with native Claude Code configuration files.
+
+Agenticore does **not** bundle any profiles. Profiles come from two external
+sources: your [agentihooks](https://github.com/The-Cloud-Clock-Work/agentihooks)
+integration and your user directory.
 
 ## Profile Directory Layout
 
 ```
-defaults/profiles/code/
+<profiles-dir>/{name}/
 ├── profile.yml          # Agenticore metadata (model, turns, auto_pr, etc.)
-└── .claude/
-    ├── settings.json    # Hooks, permissions, env vars
-    ├── CLAUDE.md        # System instructions for Claude
-    ├── agents/          # Custom subagents
-    └── skills/          # Custom skills
+├── .claude/
+│   ├── settings.json    # Hooks, tool permissions, env vars
+│   ├── CLAUDE.md        # System instructions for Claude
+│   ├── agents/          # Custom subagents
+│   └── skills/          # Custom slash-command skills
+└── .mcp.json            # MCP server config merged into the job
 ```
-
-An optional `.mcp.json` at the profile root adds MCP servers to the working directory.
 
 ## profile.yml Schema
 
@@ -41,20 +44,35 @@ An optional `.mcp.json` at the profile root adds MCP servers to the working dire
 | `auto_pr` | bool | `true` | Create PR on success |
 | `extends` | string/null | `null` | Inherit from another profile |
 
-## Bundled Profiles
+## Profile Discovery
 
-### code
+Profiles are loaded from two directories. Later sources override earlier ones
+when names collide.
 
-Autonomous coding worker. Default profile for most tasks.
+```
+{AGENTICORE_AGENTIHOOKS_PATH}/profiles/   ← agentihooks integration
+~/.agenticore/profiles/                   ← user profiles (always checked)
+```
+
+**agentihooks** is the authoritative source for organisation-wide profiles. It
+owns the full profile authoring pipeline — hook wiring, MCP categories, system
+prompts, and the `build_profiles.py` generator. Set `AGENTICORE_AGENTIHOOKS_PATH`
+to the path of your cloned agentihooks repo.
+
+**User profiles** (`~/.agenticore/profiles/`) are for personal overrides and
+local experimentation. They always take highest priority.
+
+## Writing a Profile
+
+Minimal `profile.yml`:
 
 ```yaml
 name: code
 description: "Autonomous coding worker"
 
 claude:
-  model: sonnet
+  model: claude-sonnet-4-6
   max_turns: 80
-  output_format: json
   permission_mode: bypassPermissions
   timeout: 3600
   worktree: true
@@ -62,62 +80,57 @@ claude:
 auto_pr: true
 ```
 
-The `.claude/settings.json` in this profile configures tool permissions and hooks.
-The `.claude/CLAUDE.md` provides task-execution guidelines to Claude.
+With `.claude/settings.json` granting the permissions Claude needs:
 
-### review
-
-Code review analyst. Read-only mode, uses a faster model.
-
-```yaml
-name: review
-description: "Code review analyst"
-
-claude:
-  model: haiku
-  max_turns: 20
-  output_format: json
-  permission_mode: bypassPermissions
-  worktree: true
-
-auto_pr: false
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "Task(*)"
+    ]
+  }
+}
 ```
 
-## Custom Profiles
+And `.claude/CLAUDE.md` providing system instructions:
 
-Profiles are loaded from up to three directories, in priority order (highest wins):
+```markdown
+# Agenticore Worker
 
+## Guidelines
+- Commit with descriptive messages
+- Do NOT create PRs — the system handles that
+- Focus on the task, be thorough, test your changes
 ```
-defaults/profiles/                        ← bundled (shipped with package)
-
-{AGENTICORE_AGENTIHOOKS_PATH}/profiles/   ← external (set via env var)
-
-~/.agenticore/profiles/                   ← user overrides (always checked)
-```
-
-Same-name profiles from a higher-priority directory replace the lower-priority
-version entirely.
 
 ## Profile Inheritance
 
-A profile can extend another profile using the `extends` field:
+A profile can extend another using the `extends` field:
 
 ```yaml
 name: code-strict
-extends: code
+extends: code          # inherits all settings from 'code'
 
 claude:
   max_turns: 20
   effort: high
 ```
 
-Child values override parent defaults. The `.claude/` files are merged
-(child overlays parent) during materialization.
+Child values override parent defaults. The `.claude/` files are **layered**
+(child overlays parent) during materialization — files present in the child
+profile replace the parent's versions; files only in the parent are kept.
 
 ## Materialization
 
 Before each job, `materialize_profile()` copies the profile's `.claude/` and
-`.mcp.json` into the job's working directory so Claude Code picks them up.
+`.mcp.json` into the job's target directory so Claude Code picks them up
+natively.
 
 ### Local / Docker mode (default)
 
@@ -128,13 +141,13 @@ Files are copied directly into the repo clone directory:
 ├── .claude/              ← copied from profile
 │   ├── settings.json
 │   └── CLAUDE.md
-└── .mcp.json             ← merged with any existing .mcp.json
+└── .mcp.json             ← merged with any existing repo .mcp.json
 ```
 
 ### Kubernetes / shared FS mode
 
-When `AGENTICORE_SHARED_FS_ROOT` is set, files are written to a per-job directory
-on the shared volume instead, keeping the repo tree clean:
+When `AGENTICORE_SHARED_FS_ROOT` is set, files are written to a per-job
+directory on the shared volume, keeping the repo tree clean:
 
 ```
 /shared/jobs/{job-id}/
@@ -144,21 +157,21 @@ on the shared volume instead, keeping the repo tree clean:
 └── .mcp.json
 ```
 
-The runner sets `CLAUDE_CONFIG_DIR=/shared/jobs/{job-id}` in the Claude subprocess
-environment so Claude reads config from there. The `job_config_dir` field is stored
-on the job record for auditing.
+The runner sets `CLAUDE_CONFIG_DIR=/shared/jobs/{job-id}` in the Claude
+subprocess environment so Claude reads config from there. The `job_config_dir`
+field is stored on the job record for auditing.
 
 ## Profile to CLI Args
 
 ```
 profile.yml (claude section)
-       |
-       v
+       │
+       ▼
 build_cli_args()
-       |
-       v
+       │
+       ▼
 claude --worktree
-       --model sonnet
+       --model claude-sonnet-4-6
        --max-turns 80
        --output-format json
        --permission-mode bypassPermissions
@@ -172,26 +185,26 @@ of `profile.yml` into CLI flags. The task is always last with `-p`.
 
 ```
 Request arrives (profile="" or profile="code")
-         |
-         v
-+--------+---------+
-|   router.py      |
-|   route()        |
-+--------+---------+
-         |
-   +-----+-----+
-   |             |
-   v             v
+         │
+         ▼
+ ┌───────┴────────┐
+ │   router.py    │
+ │   route()      │
+ └───────┬────────┘
+         │
+   ┌─────┴──────┐
+   │             │
+   ▼             ▼
 profile       no profile
 specified?    specified
-   |             |
-   v             v
+   │             │
+   ▼             ▼
 validate      use default
 exists?       (claude.default_profile)
-   |             |
-   +------+------+
-          |
-          v
+   │             │
+   └──────┬──────┘
+          │
+          ▼
    resolved profile name
 ```
 
@@ -210,4 +223,4 @@ job at execution time:
 | `REPO_URL` | Repository URL |
 | `BASE_REF` | Base branch |
 
-These are passed via `--append-system-prompt "Job: {id} | Task: {task} | ..."`.
+These are passed via `--append-system-prompt "Job: {id} | Task: {task} | …"`.
