@@ -24,7 +24,10 @@ class TestRoute:
         assert result == "code"
 
     def test_explicit_profile_review(self):
-        result = route(profile="review")
+        from agenticore.profiles import Profile
+
+        with patch("agenticore.router.get_profile", return_value=Profile(name="review")):
+            result = route(profile="review")
         assert result == "review"
 
     def test_unknown_profile_falls_to_default(self):

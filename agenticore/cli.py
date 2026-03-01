@@ -268,9 +268,8 @@ def _get_installed_version() -> str:
 
 
 def _cmd_init_shared_fs(args):
-    """Initialise shared FS layout and copy bundled profiles."""
+    """Initialise shared FS layout."""
     import os
-    import shutil
     from pathlib import Path
 
     shared_root = args.shared_root or os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
@@ -284,20 +283,6 @@ def _cmd_init_shared_fs(args):
     for subdir in ("profiles", "repos", "jobs", "job-state"):
         (root / subdir).mkdir(parents=True, exist_ok=True)
         print(f"  created {root / subdir}")
-
-    # Copy bundled profiles to shared FS
-    from agenticore.profiles import _defaults_dir
-
-    defaults = _defaults_dir()
-    if defaults.exists():
-        dst_profiles = root / "profiles"
-        for profile_dir in sorted(defaults.iterdir()):
-            if profile_dir.is_dir() and (profile_dir / "profile.yml").exists():
-                dst = dst_profiles / profile_dir.name
-                if dst.exists():
-                    shutil.rmtree(dst)
-                shutil.copytree(profile_dir, dst)
-                print(f"  copied profile: {profile_dir.name}")
 
     print(f"\nShared FS initialised at: {root}")
 

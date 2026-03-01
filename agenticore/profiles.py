@@ -5,7 +5,7 @@ Profiles are directories containing native Claude Code config files
 
 Layout::
 
-    defaults/profiles/code/
+    <profiles-dir>/code/
     ├── profile.yml          # Agenticore-only metadata
     ├── .claude/
     │   ├── settings.json    # Native: hooks, permissions, env vars
@@ -70,11 +70,6 @@ class Profile:
 # ── Paths ─────────────────────────────────────────────────────────────────
 
 
-def _defaults_dir() -> Path:
-    """Bundled default profiles directory."""
-    return Path(__file__).parent.parent / "defaults" / "profiles"
-
-
 def _user_profiles_dir() -> Path:
     """User profile directory: ~/.agenticore/profiles/"""
     return Path.home() / ".agenticore" / "profiles"
@@ -129,7 +124,7 @@ def _load_legacy_yaml(path: Path) -> Profile:
     """Load an old-format .yml profile with deprecation warning."""
     warnings.warn(
         f"Profile '{path.stem}' uses legacy YAML format. "
-        f"Migrate to directory-based profile: defaults/profiles/{path.stem}/profile.yml",
+        f"Migrate to directory-based profile: ~/.agenticore/profiles/{path.stem}/profile.yml",
         DeprecationWarning,
         stacklevel=3,
     )
@@ -208,7 +203,7 @@ def _resolve_extends(profile: Profile, all_profiles: Dict[str, Profile]) -> Prof
 
 def _get_search_dirs() -> List[Path]:
     """Build the list of profile search directories."""
-    search_dirs = [_defaults_dir()]
+    search_dirs = []
     agentihooks_dir = _agentihooks_profiles_dir()
     if agentihooks_dir:
         search_dirs.append(agentihooks_dir)
@@ -240,10 +235,10 @@ def _load_legacy_profiles(base_dir: Path, profiles: Dict[str, Profile]) -> None:
 
 
 def load_profiles() -> Dict[str, Profile]:
-    """Load all profiles from defaults/ and ~/.agenticore/profiles/.
+    """Load all profiles from AGENTICORE_AGENTIHOOKS_PATH and ~/.agenticore/profiles/.
 
     Supports both new directory-based profiles and legacy .yml files.
-    User profiles override defaults with the same name.
+    Later search dirs override earlier ones with the same name.
     """
     profiles: Dict[str, Profile] = {}
 

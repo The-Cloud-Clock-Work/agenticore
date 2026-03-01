@@ -66,7 +66,7 @@ Request → Router → Clone repo → claude --worktree -p "task" → OTEL → P
 ## Profile System
 
 Profiles are directory-based packages with `profile.yml` + `.claude/` config.
-Default profiles bundled in `defaults/profiles/`. Custom profiles in `~/.agenticore/profiles/`.
+Profiles are discovered from `AGENTICORE_AGENTIHOOKS_PATH` (set to agentihooks repo) and `~/.agenticore/profiles/`.
 
 ## Redis + File Fallback
 

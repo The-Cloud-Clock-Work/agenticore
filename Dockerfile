@@ -67,9 +67,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
-# Copy application source + defaults
+# Copy application source
 COPY agenticore/ agenticore/
-COPY defaults/ defaults/
 
 # Non-root user (Claude CLI refuses bypassPermissions as root)
 RUN useradd -m -s /bin/bash agenticore && \

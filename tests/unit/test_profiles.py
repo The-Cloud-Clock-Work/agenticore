@@ -10,7 +10,6 @@ from agenticore.profiles import (
     ProfileClaude,
     _copy_profile_chain_to,
     build_cli_args,
-    load_profiles,
     materialize_profile,
     profile_to_dict,
     render_template,
@@ -176,72 +175,50 @@ class TestBuildCliArgs:
         assert "--permission-mode" not in args
 
 
-@pytest.mark.unit
-class TestLoadProfiles:
-    def test_loads_bundled_defaults(self):
-        profiles = load_profiles()
-        assert "code" in profiles
-        assert "review" in profiles
+@pytest.fixture
+def minimal_profile(tmp_path):
+    """Minimal directory-based profile for materialization tests."""
+    profile_dir = tmp_path / "minimal_profile_code"
+    claude_dir = profile_dir / ".claude"
+    claude_dir.mkdir(parents=True)
+    (profile_dir / "profile.yml").write_text(
+        "name: code\ndescription: Minimal test profile\nauto_pr: true\nclaude:\n  model: sonnet\n  max_turns: 80\n"
+    )
+    (claude_dir / "settings.json").write_text(
+        '{"permissions": {"allow": ["Bash(*)", "Read(*)", "Write(*)", "Edit(*)", "Glob(*)"]}}'
+    )
+    (claude_dir / "CLAUDE.md").write_text("# Test Profile\n")
+    (profile_dir / ".mcp.json").write_text('{"mcpServers": {}}')
+    from agenticore.profiles import _load_profile_dir
 
-    def test_code_profile_values(self):
-        profiles = load_profiles()
-        code = profiles["code"]
-        assert code.name == "code"
-        assert code.claude.model == "sonnet"
-        assert code.claude.max_turns == 80
-        assert code.claude.worktree is True
-        assert code.auto_pr is True
-        assert code.path is not None
-        assert code._legacy is False
-
-    def test_review_profile_values(self):
-        profiles = load_profiles()
-        review = profiles["review"]
-        assert review.name == "review"
-        assert review.claude.model == "haiku"
-        assert review.claude.max_turns == 20
-        assert review.auto_pr is False
-
-    def test_profile_has_directory_path(self):
-        profiles = load_profiles()
-        code = profiles["code"]
-        assert code.path is not None
-        assert code.path.is_dir()
-        assert (code.path / "profile.yml").exists()
-        assert (code.path / ".claude").is_dir()
+    return _load_profile_dir(profile_dir)
 
 
 @pytest.mark.unit
 class TestMaterializeProfile:
-    def test_materialize_copies_claude_dir(self, tmp_path):
-        profiles = load_profiles()
-        code = profiles["code"]
+    def test_materialize_copies_claude_dir(self, tmp_path, minimal_profile):
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
-        result = materialize_profile(code, working_dir)
+        result = materialize_profile(minimal_profile, working_dir)
 
         assert (working_dir / ".claude" / "settings.json").exists()
         assert (working_dir / ".claude" / "CLAUDE.md").exists()
         assert result is not None
 
-    def test_materialize_copies_mcp_json(self, tmp_path):
-        profiles = load_profiles()
-        code = profiles["code"]
+    def test_materialize_copies_mcp_json(self, tmp_path, minimal_profile):
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
-        materialize_profile(code, working_dir)
+        materialize_profile(minimal_profile, working_dir)
 
         assert (working_dir / ".mcp.json").exists()
         with open(working_dir / ".mcp.json") as f:
             data = json.load(f)
         assert "mcpServers" in data
 
-    def test_materialize_overlays_existing(self, tmp_path):
+    def test_materialize_overlays_existing(self, tmp_path, minimal_profile):
         """Profile files overlay on top of existing repo .claude/ files."""
-        profiles = load_profiles()
-        code = profiles["code"]
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
@@ -250,17 +227,15 @@ class TestMaterializeProfile:
         claude_dir.mkdir()
         (claude_dir / "existing.txt").write_text("keep me")
 
-        materialize_profile(code, working_dir)
+        materialize_profile(minimal_profile, working_dir)
 
         # Original file preserved
         assert (claude_dir / "existing.txt").read_text() == "keep me"
         # Profile files added
         assert (claude_dir / "settings.json").exists()
 
-    def test_materialize_merges_mcp_json(self, tmp_path):
+    def test_materialize_merges_mcp_json(self, tmp_path, minimal_profile):
         """If repo already has .mcp.json, servers are merged."""
-        profiles = load_profiles()
-        code = profiles["code"]
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
@@ -269,7 +244,7 @@ class TestMaterializeProfile:
         with open(working_dir / ".mcp.json", "w") as f:
             json.dump(existing, f)
 
-        materialize_profile(code, working_dir)
+        materialize_profile(minimal_profile, working_dir)
 
         with open(working_dir / ".mcp.json") as f:
             data = json.load(f)
@@ -287,13 +262,11 @@ class TestMaterializeProfile:
         assert result is None
         assert not (working_dir / ".claude").exists()
 
-    def test_materialize_settings_content(self, tmp_path):
-        profiles = load_profiles()
-        code = profiles["code"]
+    def test_materialize_settings_content(self, tmp_path, minimal_profile):
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
-        materialize_profile(code, working_dir)
+        materialize_profile(minimal_profile, working_dir)
 
         with open(working_dir / ".claude" / "settings.json") as f:
             settings = json.load(f)
@@ -458,62 +431,54 @@ class TestProfileToDict:
 
 @pytest.mark.unit
 class TestMaterializeProfileSharedFs:
-    def test_shared_fs_mode_writes_to_job_dir(self, tmp_path, monkeypatch):
+    def test_shared_fs_mode_writes_to_job_dir(self, tmp_path, monkeypatch, minimal_profile):
         """When AGENTICORE_SHARED_FS_ROOT is set, files go to /shared/jobs/{job_id}/."""
         shared = tmp_path / "shared"
         monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
 
-        profiles = load_profiles()
-        code = profiles["code"]
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
-        result = materialize_profile(code, working_dir, job_id="job-abc")
+        result = materialize_profile(minimal_profile, working_dir, job_id="job-abc")
 
         assert result is not None
         assert result == shared / "jobs" / "job-abc"
         assert (result / ".claude" / "settings.json").exists()
 
-    def test_shared_fs_mode_does_not_write_to_working_dir(self, tmp_path, monkeypatch):
+    def test_shared_fs_mode_does_not_write_to_working_dir(self, tmp_path, monkeypatch, minimal_profile):
         """Working dir stays clean in Kubernetes mode."""
         shared = tmp_path / "shared"
         monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
 
-        profiles = load_profiles()
-        code = profiles["code"]
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
-        materialize_profile(code, working_dir, job_id="job-xyz")
+        materialize_profile(minimal_profile, working_dir, job_id="job-xyz")
 
         assert not (working_dir / ".claude").exists()
 
-    def test_shared_fs_mode_creates_job_dir(self, tmp_path, monkeypatch):
+    def test_shared_fs_mode_creates_job_dir(self, tmp_path, monkeypatch, minimal_profile):
         """The per-job directory is created automatically."""
         shared = tmp_path / "shared"
         monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
 
-        profiles = load_profiles()
-        code = profiles["code"]
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
-        result = materialize_profile(code, working_dir, job_id="job-new")
+        result = materialize_profile(minimal_profile, working_dir, job_id="job-new")
 
         assert result is not None
         assert result.is_dir()
 
-    def test_local_mode_without_job_id(self, tmp_path, monkeypatch):
+    def test_local_mode_without_job_id(self, tmp_path, monkeypatch, minimal_profile):
         """With shared FS set but no job_id, falls back to working_dir."""
         shared = tmp_path / "shared"
         monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared))
 
-        profiles = load_profiles()
-        code = profiles["code"]
         working_dir = tmp_path / "repo"
         working_dir.mkdir()
 
-        result = materialize_profile(code, working_dir, job_id="")
+        result = materialize_profile(minimal_profile, working_dir, job_id="")
 
         # Falls back to working_dir when no job_id
         assert result == working_dir
@@ -522,14 +487,12 @@ class TestMaterializeProfileSharedFs:
 
 @pytest.mark.unit
 class TestCopyProfileChainTo:
-    def test_copies_claude_dir(self, tmp_path):
+    def test_copies_claude_dir(self, tmp_path, minimal_profile):
         """_copy_profile_chain_to copies .claude/ from each profile in chain."""
-        profiles = load_profiles()
-        code = profiles["code"]
         target = tmp_path / "target"
         target.mkdir()
 
-        created = _copy_profile_chain_to([code], target)
+        created = _copy_profile_chain_to([minimal_profile], target)
 
         assert (target / ".claude").exists()
         assert len(created) > 0
@@ -544,13 +507,11 @@ class TestCopyProfileChainTo:
 
         assert created == []
 
-    def test_returns_created_paths(self, tmp_path):
+    def test_returns_created_paths(self, tmp_path, minimal_profile):
         """Returns list of paths that were created."""
-        profiles = load_profiles()
-        code = profiles["code"]
         target = tmp_path / "target"
         target.mkdir()
 
-        created = _copy_profile_chain_to([code], target)
+        created = _copy_profile_chain_to([minimal_profile], target)
 
         assert all(p.exists() for p in created)
