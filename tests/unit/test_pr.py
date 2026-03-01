@@ -1,6 +1,5 @@
 """Unit tests for pr.py — auto-PR creation."""
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
