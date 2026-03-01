@@ -68,7 +68,8 @@ async def oauth_callback(code: str, state: str) -> HTMLResponse:
     await store.update_status(request_id, AuthStatus.approved)
 
     try:
-        token_data = await oauth.exchange_code(provider, code)
+        pkce_verifier = data.get("pkce_verifier", "")
+        token_data = await oauth.exchange_code(provider, code, pkce_verifier)
         vault_data = {
             "token": token_data.get("access_token", ""),
             "refresh_token": token_data.get("refresh_token", ""),
@@ -143,7 +144,11 @@ async def create_auth_request(
     if provider.get("auth_type") == "oauth2":
         request_data = await store.get_request(request_id)
         state = request_data["oauth_state"]
-        auth_url = await oauth.build_auth_url(provider, state)
+        code_challenge = ""
+        if provider.get("pkce"):
+            verifier, code_challenge = oauth.generate_pkce()
+            await store.store_pkce_verifier(request_id, verifier)
+        auth_url = await oauth.build_auth_url(provider, state, code_challenge)
         await store.store_oauth_state(state, request_id)
         await store.update_status(request_id, AuthStatus.url_ready, auth_url=auth_url)
 

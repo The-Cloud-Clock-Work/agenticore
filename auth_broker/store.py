@@ -78,6 +78,10 @@ async def get_pending() -> List[dict]:
     return results
 
 
+async def store_pkce_verifier(request_id: str, verifier: str) -> None:
+    await _redis.hset(f"auth:request:{request_id}", "pkce_verifier", verifier)
+
+
 async def store_oauth_state(state: str, request_id: str) -> None:
     await _redis.setex(f"auth:state:{state}", 600, request_id)
 
