@@ -41,6 +41,7 @@ Internet / Claude.ai ──► LoadBalancer :8200
 ```
 /shared/
 ├── repos/{hash}/repo/          ← git clone cache (shared across pods)
+├── agentihooks/                ← cloned agentihooks repo (AGENTICORE_AGENTIHOOKS_URL)
 ├── jobs/{job-id}/              ← per-job CLAUDE_CONFIG_DIR (extends profiles only)
 │   ├── .claude/
 │   │   ├── settings.json
@@ -49,10 +50,11 @@ Internet / Claude.ai ──► LoadBalancer :8200
 └── job-state/{id}.json         ← job file fallback (AGENTICORE_JOBS_DIR)
 ```
 
-Profile files are **not** copied to the shared volume. Simple profiles are read
-directly from the agentihooks directory baked into the image (`/app/profiles/`).
-Only `extends` chains write to `/shared/jobs/{job-id}/` because their files must
-be merged before Claude reads them.
+**Agentihooks** is cloned to `/shared/agentihooks/` at startup when `AGENTICORE_AGENTIHOOKS_URL`
+is set. All pods and job-init containers share a single clone on the RWX PVC.
+`build_profiles.py` runs after every git-fetch so profile hooks always reference
+the correct install directory. A background watcher refreshes the clone every
+`AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` seconds (default 300) — no restart needed.
 
 ---
 
@@ -96,6 +98,26 @@ kubectl create secret generic agenticore-secrets \
 helm install agenticore \
   oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
   --version 0.1.5 \
+  --set storage.className=nfs-client
+```
+
+### Agentihooks
+
+To enable URL-based agentihooks cloning:
+
+```yaml
+agentihooks:
+  url: "https://github.com/your-org/agentihooks"
+  syncInterval: 300
+```
+
+Or via `--set`:
+
+```bash
+helm install agenticore \
+  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  --set agentihooks.url="https://github.com/your-org/agentihooks" \
+  --set agentihooks.syncInterval=300 \
   --set storage.className=nfs-client
 ```
 

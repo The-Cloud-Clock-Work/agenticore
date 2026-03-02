@@ -64,6 +64,8 @@ langfuse:
   secret_key: ""
 
 agentihooks_path: ""
+agentihooks_url: ""
+agentihooks_sync_interval: 300
 ```
 
 ## Environment Variables
@@ -133,7 +135,9 @@ agentihooks_path: ""
 
 | Variable | YAML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `AGENTICORE_AGENTIHOOKS_PATH` | `agentihooks_path` | (none) | Path to cloned agentihooks repo. Adds `{path}/profiles/` as a profile search directory |
+| `AGENTICORE_AGENTIHOOKS_PATH` | `agentihooks_path` | (none) | Explicit path override. Skips cloning. |
+| `AGENTICORE_AGENTIHOOKS_URL` | `agentihooks_url` | (none) | Git URL to clone agentihooks from. Supports private repos via `GITHUB_TOKEN`. |
+| `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `agentihooks_sync_interval` | `300` | Hot-reload interval in seconds. `0` disables the watcher. |
 
 ## File Paths
 
@@ -156,3 +160,4 @@ agentihooks_path: ""
 | `/shared/repos/{hash}/repo/` | Cloned repos on shared volume |
 | `/shared/jobs/{job-id}/` | Per-job `CLAUDE_CONFIG_DIR` (profile files for one job) |
 | `/shared/job-state/{id}.json` | Job data files (`AGENTICORE_JOBS_DIR=/shared/job-state`) |
+| `/shared/agentihooks/` | Cloned agentihooks repo (when `AGENTICORE_AGENTIHOOKS_URL` set) |

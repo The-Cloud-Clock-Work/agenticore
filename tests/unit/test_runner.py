@@ -122,3 +122,76 @@ class TestBuildEnvAuthBroker:
         with patch("agenticore.runner._fetch_from_auth_broker", side_effect=None, return_value=None):
             env = _build_env()
         assert env["ANTHROPIC_API_KEY"] == "existing-key"
+
+    def test_broker_clears_anthropic_base_url(self):
+        """When broker token received, ANTHROPIC_BASE_URL must be removed (direct Anthropic, not LiteLLM)."""
+        with patch.dict(
+            os.environ,
+            {
+                "AUTH_BROKER_URL": "http://broker",
+                "AUTH_BROKER_API_KEY": "key",
+                "ANTHROPIC_BASE_URL": "http://litellm-proxy:4000",
+            },
+            clear=False,
+        ):
+            with patch(
+                "agenticore.runner._fetch_from_auth_broker",
+                side_effect=lambda svc, **kw: "sk-ant-123" if svc == "anthropic" else None,
+            ):
+                env = _build_env()
+        assert env.get("ANTHROPIC_API_KEY") == "sk-ant-123"
+        assert "ANTHROPIC_BASE_URL" not in env
+
+    def test_broker_failure_warns(self, caplog):
+        """Broker configured but returns None → warning logged, static env preserved."""
+        import logging
+
+        with patch.dict(
+            os.environ,
+            {
+                "AUTH_BROKER_URL": "http://broker",
+                "AUTH_BROKER_API_KEY": "key",
+                "ANTHROPIC_API_KEY": "static-key",
+                "ANTHROPIC_BASE_URL": "http://litellm:4000",
+            },
+            clear=False,
+        ):
+            with patch("agenticore.runner._fetch_from_auth_broker", return_value=None):
+                with caplog.at_level(logging.WARNING, logger="agenticore.runner"):
+                    env = _build_env()
+        assert "falling back" in caplog.text
+        assert env.get("ANTHROPIC_BASE_URL") == "http://litellm:4000"
+
+    def test_cf_headers_auto_build(self):
+        """CF_ACCESS_CLIENT_ID + SECRET → ANTHROPIC_CUSTOM_HEADERS set automatically."""
+        import json
+
+        with patch.dict(
+            os.environ,
+            {
+                "CF_ACCESS_CLIENT_ID": "cf-id",
+                "CF_ACCESS_CLIENT_SECRET": "cf-secret",
+                "AUTH_BROKER_URL": "",
+            },
+            clear=False,
+        ):
+            os.environ.pop("ANTHROPIC_CUSTOM_HEADERS", None)
+            env = _build_env()
+        headers = json.loads(env["ANTHROPIC_CUSTOM_HEADERS"])
+        assert headers["CF-Access-Client-Id"] == "cf-id"
+        assert headers["CF-Access-Client-Secret"] == "cf-secret"
+
+    def test_cf_headers_not_overwritten(self):
+        """Existing ANTHROPIC_CUSTOM_HEADERS is not overwritten."""
+        with patch.dict(
+            os.environ,
+            {
+                "CF_ACCESS_CLIENT_ID": "cf-id",
+                "CF_ACCESS_CLIENT_SECRET": "cf-secret",
+                "ANTHROPIC_CUSTOM_HEADERS": '{"existing": "value"}',
+                "AUTH_BROKER_URL": "",
+            },
+            clear=False,
+        ):
+            env = _build_env()
+        assert env["ANTHROPIC_CUSTOM_HEADERS"] == '{"existing": "value"}'

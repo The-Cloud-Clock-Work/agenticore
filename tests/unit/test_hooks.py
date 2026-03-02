@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from agenticore.hooks import _install_dir, _run_build, sync_agentihooks
+from agenticore.hooks import _install_dir, _run_build, start_sync_watcher, sync_agentihooks
 
 
 @pytest.mark.unit
@@ -161,3 +161,58 @@ class TestSyncAgentihooks:
 
         assert result == tmp_path
         mock_clone.assert_called_once_with("https://github.com/config/repo", tmp_path)
+
+
+@pytest.mark.unit
+class TestSyncWatcher:
+    def test_returns_daemon_thread(self, tmp_path):
+        """start_sync_watcher returns a started daemon thread."""
+        with patch("agenticore.hooks._clone_or_fetch"):
+            t = start_sync_watcher("https://example.com/repo", tmp_path, interval=9999)
+        assert t.daemon is True
+        assert t.is_alive()
+        t.join(timeout=0)  # don't block
+
+    def test_calls_clone_or_fetch_after_interval(self, tmp_path):
+        """Watcher thread calls _clone_or_fetch after each sleep interval."""
+        import agenticore.hooks as hooks_mod
+
+        calls = []
+
+        def fake_clone(url, dest):
+            calls.append((url, dest))
+
+        call_count = [0]
+
+        def stop_after_one(n):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise SystemExit
+
+        with patch("agenticore.hooks._clone_or_fetch", side_effect=fake_clone):
+            with patch.object(hooks_mod.time, "sleep", side_effect=stop_after_one):
+                t = start_sync_watcher("https://example.com/repo", tmp_path, interval=1)
+                t.join(timeout=2)
+
+        assert len(calls) >= 1
+
+    def test_handles_clone_exception_without_crashing(self, tmp_path, caplog):
+        """Exception in _clone_or_fetch is caught and logged as warning; thread keeps running."""
+        import logging
+
+        import agenticore.hooks as hooks_mod
+
+        call_count = [0]
+
+        def fail_then_stop(n):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise SystemExit
+
+        with patch("agenticore.hooks._clone_or_fetch", side_effect=Exception("network error")):
+            with patch.object(hooks_mod.time, "sleep", side_effect=fail_then_stop):
+                with caplog.at_level(logging.WARNING, logger="agenticore.hooks"):
+                    t = start_sync_watcher("https://example.com/repo", tmp_path, interval=1)
+                    t.join(timeout=2)
+
+        assert "hot-reload failed" in caplog.text

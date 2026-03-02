@@ -91,6 +91,7 @@ agenticore run "fix the null pointer in auth.py" \
 | `agenticore update` | Update to latest version |
 | `agenticore init-shared-fs` | Initialise shared filesystem (Kubernetes) |
 | `agenticore drain` | Drain pod before shutdown (Kubernetes) |
+| `agenticore hooks sync [--url URL]` | Clone/fetch agentihooks and rebuild profiles |
 
 ```bash
 # Submit a task
@@ -403,7 +404,9 @@ docker run -d \
 | `GITHUB_TOKEN` | _(empty)_ | GitHub token for auto-PR |
 | `AGENTICORE_DEFAULT_PROFILE` | `code` | Profile when none specified |
 | `AGENTICORE_CLAUDE_TIMEOUT` | `3600` | Max job runtime in seconds |
-| `AGENTICORE_AGENTIHOOKS_PATH` | _(empty)_ | Path to agentihooks repo for profiles |
+| `AGENTICORE_AGENTIHOOKS_PATH` | _(empty)_ | Explicit path to agentihooks repo (skips cloning) |
+| `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Git URL to clone agentihooks from (supports `GITHUB_TOKEN`) |
+| `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `300` | Hot-reload interval in seconds (`0` disables) |
 | `AGENTICORE_SHARED_FS_ROOT` | _(empty)_ | Shared FS root (Kubernetes mode) |
 
 Full reference: [Configuration docs](docs/reference/configuration.md)
@@ -416,6 +419,11 @@ For environments where Claude Code jobs need **short-lived, human-authorized
 tokens** (rather than long-lived static keys), Agenticore integrates with
 **Auth Broker** — a companion service that handles OAuth flows on behalf of
 running jobs.
+
+Agenticore resolves Claude credentials in order:
+
+1. **Auth Broker** (`AUTH_BROKER_URL`) — returns a Claude Max subscription token; `ANTHROPIC_BASE_URL` is cleared so Claude Code hits Anthropic directly (not the LiteLLM proxy).
+2. **Static env** — `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL` as configured (typically pointing at the LiteLLM proxy).
 
 When `AUTH_BROKER_URL` is set, the runner fetches credentials at job start
 instead of reading them from environment variables. A pod requests a token,

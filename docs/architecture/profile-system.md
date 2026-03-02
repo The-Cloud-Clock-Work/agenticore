@@ -70,9 +70,11 @@ which owns the full profile authoring pipeline. The `.claude/settings.json` and
 `scripts/build_profiles.py`, which merges `profiles/_base/settings.base.json`
 (hook wiring, permissions) with any per-profile overrides.
 
-In Docker and Kubernetes deployments, agentihooks is baked into the agent image
-at `/app`. All hooks reference this canonical path (`cd /app && python -m hooks`),
-so no path substitution is needed at runtime.
+In Kubernetes deployments, agentihooks is cloned to `/shared/agentihooks/` at startup
+when `AGENTICORE_AGENTIHOOKS_URL` is set. All pods share a single clone on the RWX PVC.
+`build_profiles.py` runs after every git-fetch so profile hooks always reference
+the correct install directory. A background watcher refreshes the clone every
+`AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` seconds (default 300) — no restart needed.
 
 ## Writing a Profile
 
@@ -151,7 +153,7 @@ that will be passed to the Claude subprocess.
 are copied. The repo working directory is never touched.
 
 ```
-CLAUDE_CONFIG_DIR=/app/profiles/coding
+CLAUDE_CONFIG_DIR={AGENTICORE_AGENTIHOOKS_PATH}/profiles/coding
                        └── already contains .claude/ and .mcp.json
                            (pre-built by agentihooks build_profiles.py)
 ```

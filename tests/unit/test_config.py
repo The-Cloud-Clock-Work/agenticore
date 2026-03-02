@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from agenticore.config import load_config, reset_config
+from agenticore.config import get_config, load_config, reset_config
 
 # Env vars that could leak from the host and affect config defaults
 _CLEAN_ENV = {
@@ -168,3 +168,11 @@ class TestLoadConfig:
         cfg = load_config(str(config_file))
         assert cfg.auth_broker.url == "http://yaml-broker"
         assert cfg.auth_broker.api_key == "yaml-key"
+
+    def test_agentihooks_url_and_sync_interval(self, monkeypatch):
+        """AGENTICORE_AGENTIHOOKS_URL and AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL load from env."""
+        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_URL", "https://github.com/org/agentihooks")
+        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL", "600")
+        cfg = get_config()
+        assert cfg.agentihooks_url == "https://github.com/org/agentihooks"
+        assert cfg.agentihooks_sync_interval == 600
