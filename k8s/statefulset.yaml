@@ -73,6 +73,12 @@ spec:
               name: agenticore-secrets
               key: anthropic-api-key
               optional: true
+        - name: LITELLM_MCP_GATEWAY_KEY
+          valueFrom:
+            secretKeyRef:
+              name: agenticore-secrets
+              key: litellm-mcp-gateway-key
+              optional: true
         volumeMounts:
         - name: shared-fs
           mountPath: /shared
