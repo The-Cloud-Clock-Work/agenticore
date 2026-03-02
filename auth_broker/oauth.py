@@ -66,9 +66,11 @@ async def exchange_code(provider: dict, code: str, code_verifier: str = "") -> d
             data["client_secret"] = val
     extra: dict = provider.get("token_headers", {})
     async with httpx.AsyncClient() as client:
+        use_json = provider.get("token_format") == "json"
         resp = await client.post(
             provider["token_url"],
-            data=data,
+            json=data if use_json else None,
+            data=None if use_json else data,
             headers={"Accept": "application/json", **extra},
             timeout=15.0,
         )
