@@ -97,6 +97,8 @@ class Config:
     langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
     auth_broker: AuthBrokerConfig = field(default_factory=AuthBrokerConfig)
     agentihooks_path: str = ""
+    agentihooks_url: str = ""
+    agentihooks_sync_interval: int = 300  # seconds between background re-syncs; 0 to disable
 
 
 def _default_repos_root() -> str:
@@ -197,6 +199,10 @@ def load_config(config_path: Optional[str] = None) -> Config:
     )
 
     agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
+    agentihooks_url = _env("AGENTICORE_AGENTIHOOKS_URL", raw.get("agentihooks_url", ""))
+    agentihooks_sync_interval = _env_int(
+        "AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL", str(raw.get("agentihooks_sync_interval", 300))
+    )
 
     # Auth Broker — env overrides
     auth_broker_raw = raw.get("auth_broker", {})
@@ -215,6 +221,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
         langfuse=langfuse,
         auth_broker=auth_broker,
         agentihooks_path=agentihooks_path,
+        agentihooks_url=agentihooks_url,
+        agentihooks_sync_interval=agentihooks_sync_interval,
     )
 
 

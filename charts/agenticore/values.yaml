@@ -123,11 +123,25 @@ keda:
   redisAddress: redis:6379
 
 # -----------------------------------------------------------------------------
-# Init job — populates shared FS with bundled profiles
+# Agentihooks — external profile and hook library
+# -----------------------------------------------------------------------------
+agentihooks:
+  # Git URL to clone agentihooks from (https:// or git@). Leave empty to skip.
+  url: ""
+  # Explicit local path override. Normally derived from sharedFs.root.
+  # Set this only if you manage agentihooks outside of agenticore.
+  path: ""
+  # Background hot-reload interval (seconds). The server git-fetches + rebuilds
+  # agentihooks profiles on this schedule — no restart needed when main is updated.
+  # Set to 0 to disable (sync only at startup). Default: 300 (5 min).
+  syncInterval: 300
+
+# -----------------------------------------------------------------------------
+# Init job — initialises shared FS layout and syncs agentihooks if configured
 # -----------------------------------------------------------------------------
 initJob:
-  # Run once on install to copy bundled profiles to /shared/profiles/.
-  # Set to false if you manage profiles manually or have already run it.
+  # Run once on install to create shared FS directories and optionally clone
+  # agentihooks. Set to false if you manage this manually.
   enabled: true
 
 # -----------------------------------------------------------------------------

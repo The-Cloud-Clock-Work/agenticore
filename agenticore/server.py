@@ -11,11 +11,15 @@ Tools:
 """
 
 import json
+import logging
+import os
 import sys
 
 from mcp.server.fastmcp import FastMCP
 
 from agenticore.config import get_config
+
+logger = logging.getLogger(__name__)
 
 
 def _build_oauth_config():
@@ -425,6 +429,17 @@ def main():
     cfg = get_config()
 
     print("Starting Agenticore...", file=sys.stderr)
+
+    # Auto-sync agentihooks if URL is configured and path not already set
+    if cfg.agentihooks_url and not os.getenv("AGENTICORE_AGENTIHOOKS_PATH"):
+        try:
+            from agenticore.hooks import sync_agentihooks, start_sync_watcher
+
+            install_path = sync_agentihooks()
+            if install_path and cfg.agentihooks_sync_interval > 0:
+                start_sync_watcher(cfg.agentihooks_url, install_path, cfg.agentihooks_sync_interval)
+        except Exception as e:
+            logger.warning("agentihooks sync failed: %s — profiles may be unavailable", e)
 
     tools = mcp._tool_manager.list_tools()
     print(f"Tools: {len(tools)}", file=sys.stderr)

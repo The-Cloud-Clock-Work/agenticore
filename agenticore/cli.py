@@ -14,6 +14,7 @@ Usage::
     agenticore version                      Show version
     agenticore init-shared-fs               Initialise shared FS layout (Kubernetes)
     agenticore drain                        Drain pod before shutdown (Kubernetes)
+    agenticore hooks sync [--url URL]       Clone/update agentihooks repo
 """
 
 import argparse
@@ -286,6 +287,41 @@ def _cmd_init_shared_fs(args):
 
     print(f"\nShared FS initialised at: {root}")
 
+    # Sync agentihooks if URL is configured
+    agentihooks_url = os.getenv("AGENTICORE_AGENTIHOOKS_URL", "")
+    if agentihooks_url:
+        from agenticore.hooks import sync_agentihooks
+
+        try:
+            install_path = sync_agentihooks(agentihooks_url)
+            if install_path:
+                print(f"\nAgentihooks installed at: {install_path}")
+        except Exception as e:
+            print(f"\nWarning: agentihooks sync failed: {e}", file=sys.stderr)
+
+
+def _cmd_hooks_sync(args):
+    """Clone or update agentihooks repo."""
+    import os
+
+    from agenticore.hooks import sync_agentihooks
+
+    url = args.url or os.getenv("AGENTICORE_AGENTIHOOKS_URL", "")
+    try:
+        install_path = sync_agentihooks(url)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if install_path:
+        print(f"agentihooks installed at: {install_path}")
+    else:
+        print(
+            "No agentihooks URL configured. Set AGENTICORE_AGENTIHOOKS_URL or pass --url.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
 
 def _cmd_drain(args):
     """Mark this pod as draining and wait for in-progress jobs to finish."""
@@ -414,6 +450,22 @@ def main():
         help="Max seconds to wait for jobs (default: 300)",
     )
     p_drain.set_defaults(func=_cmd_drain)
+
+    # hooks
+    p_hooks = sub.add_parser("hooks", help="Manage agentihooks integration")
+    hooks_sub = p_hooks.add_subparsers(dest="hooks_command")
+    p_hooks_sync = hooks_sub.add_parser("sync", help="Clone or update agentihooks repo")
+    p_hooks_sync.add_argument(
+        "--url",
+        help="Git URL to clone (overrides AGENTICORE_AGENTIHOOKS_URL)",
+    )
+    p_hooks_sync.set_defaults(func=_cmd_hooks_sync)
+
+    def _cmd_hooks_default(args):
+        p_hooks.print_help()
+        sys.exit(0)
+
+    p_hooks.set_defaults(func=_cmd_hooks_default)
 
     args = parser.parse_args()
     if not args.command:
