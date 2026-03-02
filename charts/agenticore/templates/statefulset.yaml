@@ -94,13 +94,13 @@ spec:
                   name: {{ .Values.secretName }}
                   key: github-token
                   optional: true
-            {{- if .Values.agentihooks.url }}
+            {{- if ((.Values.agentihooks).url) }}
             - name: AGENTICORE_AGENTIHOOKS_URL
               value: {{ .Values.agentihooks.url | quote }}
             - name: AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL
               value: {{ .Values.agentihooks.syncInterval | default 300 | quote }}
             {{- end }}
-            {{- if .Values.agentihooks.path }}
+            {{- if ((.Values.agentihooks).path) }}
             - name: AGENTICORE_AGENTIHOOKS_PATH
               value: {{ .Values.agentihooks.path | quote }}
             {{- end }}

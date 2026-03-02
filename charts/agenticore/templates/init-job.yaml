@@ -31,7 +31,7 @@ spec:
           env:
             - name: AGENTICORE_SHARED_FS_ROOT
               value: {{ .Values.sharedFs.root | quote }}
-            {{- if .Values.agentihooks.url }}
+            {{- if ((.Values.agentihooks).url) }}
             - name: AGENTICORE_AGENTIHOOKS_URL
               value: {{ .Values.agentihooks.url | quote }}
             {{- end }}
