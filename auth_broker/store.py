@@ -1,7 +1,6 @@
 """Redis-backed request queue and state management."""
 
 import json
-import secrets
 import time
 import uuid
 from typing import List, Optional
@@ -94,25 +93,3 @@ async def get_request_by_state(state: str) -> Optional[str]:
 async def delete_request(request_id: str) -> None:
     await _redis.delete(f"auth:request:{request_id}")
     await _redis.zrem("auth:pending", request_id)
-
-
-# ── Dashboard sessions ────────────────────────────────────────────────────────
-
-
-async def create_session(email: str) -> str:
-    """Create a 24-hour dashboard session and return the opaque token."""
-    token = secrets.token_hex(32)
-    await _redis.setex(f"auth:session:{token}", 86400, email)
-    return token
-
-
-async def get_session(token: str) -> Optional[str]:
-    """Return email for a valid session token, or None if expired/missing."""
-    if not token:
-        return None
-    return await _redis.get(f"auth:session:{token}")
-
-
-async def delete_session(token: str) -> None:
-    if token:
-        await _redis.delete(f"auth:session:{token}")

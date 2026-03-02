@@ -18,6 +18,10 @@ COPY auth_broker/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && \
     pip uninstall -y pip 2>/dev/null; true
 
+# Install pluggable Google auth module
+COPY packages/anton_google_auth packages/anton_google_auth
+RUN pip install --no-cache-dir packages/anton_google_auth
+
 COPY auth_broker/ auth_broker/
 
 # Default providers.yaml — overridden by ConfigMap volume mount in K8s
