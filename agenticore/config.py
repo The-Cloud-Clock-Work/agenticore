@@ -47,6 +47,7 @@ class ClaudeConfig:
     timeout: int = 3600
     default_profile: str = "coding"
     config_dir: str = ""
+    default_mcp_file: str = ""  # AGENTICORE_DEFAULT_MCP_FILE — injected into every job
 
 
 @dataclass
@@ -204,6 +205,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         timeout=_env_int("AGENTICORE_CLAUDE_TIMEOUT", str(claude_raw.get("timeout", 3600))),
         default_profile=_env("AGENTICORE_DEFAULT_PROFILE", claude_raw.get("default_profile", "coding")),
         config_dir=_env("AGENTICORE_CLAUDE_CONFIG_DIR", claude_raw.get("config_dir", "")),
+        default_mcp_file=_env("AGENTICORE_DEFAULT_MCP_FILE", claude_raw.get("default_mcp_file", "")),
     )
 
     # Server — env overrides

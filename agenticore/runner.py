@@ -214,8 +214,9 @@ def _ensure_writable_config_dir(job_id: str, existing_config_dir: Optional[Path]
 
 
 def _inject_file_mcp(file_path: str, job_config_dir: Path) -> None:
-    """Merge mcpServers from file_path into {job_config_dir}/.mcp.json.
+    """Merge mcpServers from file_path into {job_config_dir}/settings.json.
 
+    Claude reads mcpServers from settings.json in CLAUDE_CONFIG_DIR.
     User-provided servers win on name collision.
     """
     src = Path(file_path)
@@ -228,15 +229,15 @@ def _inject_file_mcp(file_path: str, job_config_dir: Path) -> None:
     if "mcpServers" not in src_data:
         return  # not an MCP config, skip silently
 
-    target = job_config_dir / ".mcp.json"
-    target_data = json.loads(target.read_text()) if target.exists() else {}
+    settings_path = job_config_dir / "settings.json"
+    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
 
-    existing = target_data.get("mcpServers", {})
+    existing = settings.get("mcpServers", {})
     existing.update(src_data["mcpServers"])  # file_path wins on collision
-    target_data["mcpServers"] = existing
+    settings["mcpServers"] = existing
 
-    with open(target, "w") as f:
-        json.dump(target_data, f, indent=2)
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
 
 
 async def run_job(job: Job) -> Job:
@@ -283,6 +284,16 @@ async def run_job(job: Job) -> Job:
             error=f"Profile materialization failed: {e}",
             ended_at=_now_iso(),
         )
+
+    # Inject default MCP file first (lower priority), then job-specific file_path (higher priority)
+    default_mcp = cfg.claude.default_mcp_file
+    if default_mcp and Path(default_mcp).exists():
+        try:
+            job_config_dir = _ensure_writable_config_dir(job.id, job_config_dir)
+            _inject_file_mcp(default_mcp, job_config_dir)
+            update_job(job.id, job_config_dir=str(job_config_dir))
+        except Exception as e:
+            logger.warning("Default MCP injection failed: %s", e)
 
     if job.file_path:
         try:
