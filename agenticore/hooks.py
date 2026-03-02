@@ -123,6 +123,66 @@ def start_sync_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
     return t
 
 
+def _mcp_lib_install_dir() -> Path:
+    """Determine where the MCP library repo should be installed.
+
+    3-tier resolution: explicit env → shared FS → local default.
+    """
+    explicit = os.getenv("AGENTICORE_MCP_LIB_PATH", "")
+    if explicit:
+        return Path(explicit)
+    shared = os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
+    if shared:
+        return Path(shared) / "mcp-lib"
+    return Path.home() / ".agenticore" / "mcp-lib"
+
+
+def sync_mcp_lib(url: str = "") -> Optional[Path]:
+    """Clone/fetch MCP library repo. Sets AGENTICORE_MCP_LIB_PATH in-process.
+
+    Returns the install directory, or None if no URL is configured.
+    If AGENTICORE_MCP_LIB_PATH is already set and no URL is provided,
+    returns the existing path without cloning.
+    """
+    url = url or get_config().mcp_lib_url
+    if not url:
+        explicit = os.getenv("AGENTICORE_MCP_LIB_PATH")
+        if explicit:
+            return Path(explicit)
+        return None
+    dest = _mcp_lib_install_dir()
+    _clone_or_fetch(url, dest)
+    os.environ["AGENTICORE_MCP_LIB_PATH"] = str(dest)
+    logger.info("AGENTICORE_MCP_LIB_PATH → %s", dest)
+    return dest
+
+
+def start_mcp_lib_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
+    """Background daemon thread that periodically re-fetches the MCP lib repo.
+
+    Args:
+        url:      MCP lib git URL.
+        dest:     Install directory (already cloned).
+        interval: Seconds between re-syncs. Must be > 0.
+
+    Returns the started Thread (daemon, so it dies with the process).
+    """
+
+    def _watch():
+        while True:
+            time.sleep(interval)
+            try:
+                _clone_or_fetch(url, dest)
+                logger.info("mcp-lib hot-reload complete (%s)", dest)
+            except Exception as exc:
+                logger.warning("mcp-lib hot-reload failed: %s", exc)
+
+    t = threading.Thread(target=_watch, name="mcp-lib-watcher", daemon=True)
+    t.start()
+    logger.info("mcp-lib watcher started (interval=%ds, dest=%s)", interval, dest)
+    return t
+
+
 def sync_agentihooks(url: str = "") -> Optional[Path]:
     """Clone/fetch + build agentihooks. Sets AGENTICORE_AGENTIHOOKS_PATH in-process.
 

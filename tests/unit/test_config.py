@@ -50,7 +50,7 @@ class TestLoadConfig:
         assert cfg.server.port == 8200
         assert cfg.server.host == "127.0.0.1"
         assert cfg.claude.binary == "claude"
-        assert cfg.claude.default_profile == "code"
+        assert cfg.claude.default_profile == "coding"
         assert cfg.redis.key_prefix == "agenticore"
         assert cfg.otel.enabled is True
 

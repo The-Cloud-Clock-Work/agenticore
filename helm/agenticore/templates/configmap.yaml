@@ -21,3 +21,5 @@ data:
   AGENTICORE_OTEL_LOG_TOOL_DETAILS: {{ .Values.otel.logToolDetails | quote }}
   REDIS_URL: {{ .Values.redis.url | quote }}
   REDIS_KEY_PREFIX: {{ .Values.redis.keyPrefix | quote }}
+  AGENTICORE_MCP_LIB_URL: {{ .Values.mcpLib.url | quote }}
+  AGENTICORE_MCP_LIB_PATH: {{ .Values.mcpLib.path | quote }}

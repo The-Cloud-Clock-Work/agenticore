@@ -441,6 +441,17 @@ def main():
         except Exception as e:
             logger.warning("agentihooks sync failed: %s — profiles may be unavailable", e)
 
+    # Auto-sync MCP lib if URL is configured and path not already set
+    if cfg.mcp_lib_url and not os.getenv("AGENTICORE_MCP_LIB_PATH"):
+        try:
+            from agenticore.hooks import sync_mcp_lib, start_mcp_lib_watcher
+
+            mcp_lib_path = sync_mcp_lib()
+            if mcp_lib_path and cfg.agentihooks_sync_interval > 0:
+                start_mcp_lib_watcher(cfg.mcp_lib_url, mcp_lib_path, cfg.agentihooks_sync_interval)
+        except Exception as e:
+            logger.warning("mcp-lib sync failed: %s — extra MCPs unavailable", e)
+
     tools = mcp._tool_manager.list_tools()
     print(f"Tools: {len(tools)}", file=sys.stderr)
     for t in tools:

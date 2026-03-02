@@ -1,12 +1,20 @@
 """Unit tests for agenticore.hooks module."""
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from agenticore.hooks import _install_dir, _run_build, start_sync_watcher, sync_agentihooks
+from agenticore.hooks import (
+    _install_dir,
+    _mcp_lib_install_dir,
+    _run_build,
+    start_sync_watcher,
+    sync_agentihooks,
+    sync_mcp_lib,
+)
 
 
 @pytest.mark.unit
@@ -170,6 +178,98 @@ class TestSyncAgentihooks:
 
         assert result == tmp_path
         mock_clone.assert_called_once_with("https://github.com/config/repo", tmp_path)
+
+
+@pytest.mark.unit
+class TestMcpLibInstallDir:
+    def test_explicit_path(self, monkeypatch, tmp_path):
+        """Explicit AGENTICORE_MCP_LIB_PATH env var wins."""
+        monkeypatch.setenv("AGENTICORE_MCP_LIB_PATH", str(tmp_path))
+        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
+        assert _mcp_lib_install_dir() == tmp_path
+
+    def test_shared_fs(self, monkeypatch, tmp_path):
+        """AGENTICORE_SHARED_FS_ROOT → {root}/mcp-lib."""
+        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(tmp_path))
+        assert _mcp_lib_install_dir() == tmp_path / "mcp-lib"
+
+    def test_local_default(self, monkeypatch):
+        """Falls back to ~/.agenticore/mcp-lib."""
+        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
+        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
+        assert _mcp_lib_install_dir() == Path.home() / ".agenticore" / "mcp-lib"
+
+
+@pytest.mark.unit
+class TestSyncMcpLib:
+    def test_no_url_returns_none(self, monkeypatch):
+        """No URL configured and no path set → returns None."""
+        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
+
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.mcp_lib_url = ""
+            result = sync_mcp_lib()
+
+        assert result is None
+
+    def test_explicit_path_no_clone(self, monkeypatch, tmp_path):
+        """AGENTICORE_MCP_LIB_PATH already set, no URL → return path without cloning."""
+        monkeypatch.setenv("AGENTICORE_MCP_LIB_PATH", str(tmp_path))
+
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.mcp_lib_url = ""
+            with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
+                result = sync_mcp_lib()
+
+        assert result == tmp_path
+        mock_clone.assert_not_called()
+
+    def test_sets_env_var(self, monkeypatch, tmp_path):
+        """After sync with URL, AGENTICORE_MCP_LIB_PATH is set in os.environ."""
+        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
+        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
+
+        # Use patch.dict to sandbox env changes made by sync_mcp_lib
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.mcp_lib_url = ""
+            mock_cfg.return_value.repos.shared_fs_root = ""
+            with patch("agenticore.hooks._clone_or_fetch"):
+                with patch("agenticore.hooks._mcp_lib_install_dir", return_value=tmp_path):
+                    with patch.dict(os.environ, {}):
+                        result = sync_mcp_lib("https://github.com/example/mcp-lib")
+                        assert result == tmp_path
+                        assert os.environ.get("AGENTICORE_MCP_LIB_PATH") == str(tmp_path)
+        # patch.dict has exited — AGENTICORE_MCP_LIB_PATH is restored to pre-test state
+
+    def test_url_triggers_clone(self, monkeypatch, tmp_path):
+        """URL provided → _clone_or_fetch is called with that URL."""
+        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
+
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.mcp_lib_url = ""
+            mock_cfg.return_value.repos.shared_fs_root = ""
+            with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
+                with patch("agenticore.hooks._mcp_lib_install_dir", return_value=tmp_path):
+                    with patch.dict(os.environ, {}):
+                        sync_mcp_lib("https://github.com/example/mcp-lib")
+
+        mock_clone.assert_called_once_with("https://github.com/example/mcp-lib", tmp_path)
+
+    def test_config_url_used_when_no_arg(self, monkeypatch, tmp_path):
+        """Config mcp_lib_url is used when no URL arg provided."""
+        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
+
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.mcp_lib_url = "https://github.com/config/mcp-lib"
+            mock_cfg.return_value.repos.shared_fs_root = ""
+            with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
+                with patch("agenticore.hooks._mcp_lib_install_dir", return_value=tmp_path):
+                    with patch.dict(os.environ, {}):
+                        result = sync_mcp_lib()
+
+        assert result == tmp_path
+        mock_clone.assert_called_once_with("https://github.com/config/mcp-lib", tmp_path)
 
 
 @pytest.mark.unit

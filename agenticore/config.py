@@ -45,7 +45,7 @@ class ReposConfig:
 class ClaudeConfig:
     binary: str = "claude"
     timeout: int = 3600
-    default_profile: str = "code"
+    default_profile: str = "coding"
     config_dir: str = ""
 
 
@@ -106,6 +106,8 @@ class Config:
     agentihooks_path: str = ""
     agentihooks_url: str = ""
     agentihooks_sync_interval: int = 300  # seconds between background re-syncs; 0 to disable
+    mcp_lib_url: str = ""
+    mcp_lib_path: str = ""
 
 
 def _default_repos_root() -> str:
@@ -200,7 +202,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
     claude = ClaudeConfig(
         binary=_env("AGENTICORE_CLAUDE_BINARY", claude_raw.get("binary", "claude")),
         timeout=_env_int("AGENTICORE_CLAUDE_TIMEOUT", str(claude_raw.get("timeout", 3600))),
-        default_profile=_env("AGENTICORE_DEFAULT_PROFILE", claude_raw.get("default_profile", "code")),
+        default_profile=_env("AGENTICORE_DEFAULT_PROFILE", claude_raw.get("default_profile", "coding")),
         config_dir=_env("AGENTICORE_CLAUDE_CONFIG_DIR", claude_raw.get("config_dir", "")),
     )
 
@@ -256,6 +258,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
     agentihooks_sync_interval = _env_int(
         "AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL", str(raw.get("agentihooks_sync_interval", 300))
     )
+    mcp_lib_url = _env("AGENTICORE_MCP_LIB_URL", raw.get("mcp_lib_url", ""))
+    mcp_lib_path = _env("AGENTICORE_MCP_LIB_PATH", raw.get("mcp_lib_path", ""))
 
     # Auth Broker — env overrides
     auth_broker_raw = raw.get("auth_broker", {})
@@ -276,6 +280,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
         agentihooks_path=agentihooks_path,
         agentihooks_url=agentihooks_url,
         agentihooks_sync_interval=agentihooks_sync_interval,
+        mcp_lib_url=mcp_lib_url,
+        mcp_lib_path=mcp_lib_path,
     )
 
 

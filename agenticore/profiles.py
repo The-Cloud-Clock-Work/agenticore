@@ -84,6 +84,39 @@ def _agentihooks_profiles_dir() -> Optional[Path]:
     return None
 
 
+def _mcp_lib_dir() -> Optional[Path]:
+    """Return AGENTICORE_MCP_LIB_PATH if set, else None."""
+    p = os.getenv("AGENTICORE_MCP_LIB_PATH", "")
+    return Path(p) if p else None
+
+
+def _find_mcp_json_files(lib_dir: Path) -> List[Path]:
+    """Find all .json files in lib_dir (non-recursive) that have a mcpServers key."""
+    results = []
+    for f in sorted(lib_dir.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if "mcpServers" in data:
+                results.append(f)
+        except Exception:
+            pass
+    return results
+
+
+def _merge_mcp_lib_into(lib_dir: Path, target_dir: Path) -> None:
+    """Merge all MCP lib servers into target_dir/.mcp.json."""
+    files = _find_mcp_json_files(lib_dir)
+    if not files:
+        return
+    dst_mcp = target_dir / ".mcp.json"
+    existing = json.loads(dst_mcp.read_text(encoding="utf-8")) if dst_mcp.exists() else {}
+    existing.setdefault("mcpServers", {})
+    for f in files:
+        incoming = json.loads(f.read_text(encoding="utf-8"))
+        existing["mcpServers"].update(incoming.get("mcpServers", {}))
+    dst_mcp.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+
+
 # ── Loading ───────────────────────────────────────────────────────────────
 
 
@@ -337,15 +370,23 @@ def materialize_profile(
     """
     if profile._legacy or profile.path is None:
         return None
-    # Simple profile — zero I/O, point CLAUDE_CONFIG_DIR directly at the profile
-    if not profile.extends:
+
+    mcp_lib = _mcp_lib_dir()
+
+    # Fast-path: simple profile with no MCP lib — zero I/O
+    if not profile.extends and not mcp_lib:
         return profile.path
-    # Extends chain — merge into an isolated per-job directory (never the repo cwd)
+
+    # Need a writable per-job dir: either extends chain OR MCP lib merge
     profiles = all_profiles if all_profiles is not None else load_profiles()
     chain = _build_extends_chain(profile, profiles)
     target_dir = _job_config_dir(job_id)
     target_dir.mkdir(parents=True, exist_ok=True)
     _copy_profile_chain_to(chain, target_dir)
+
+    if mcp_lib and mcp_lib.exists():
+        _merge_mcp_lib_into(mcp_lib, target_dir)
+
     return target_dir
 
 

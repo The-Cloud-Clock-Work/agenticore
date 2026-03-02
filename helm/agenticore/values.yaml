@@ -20,7 +20,7 @@ server:
 claude:
   binary: claude
   timeout: 3600
-  defaultProfile: code
+  defaultProfile: coding
   configDir: ""
 
 redis:
@@ -69,6 +69,15 @@ redis-standalone:
   enabled: true
   image: redis:7-alpine
   port: 6379
+
+agentihooks:
+  url: ""
+  path: ""
+  syncInterval: 300
+
+mcpLib:
+  url: ""
+  path: ""
 
 # Deploy OTEL collector
 otelCollector:

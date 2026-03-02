@@ -94,7 +94,7 @@ def _cmd_run(args):
         job = data["job"]
         print(f"Job submitted: {job['id']}")
         print(f"  Status:  {job['status']}")
-        print(f"  Profile: {job.get('profile', 'code')}")
+        print(f"  Profile: {job.get('profile', 'coding')}")
         if job.get("repo_url"):
             print(f"  Repo:    {job['repo_url']}")
         if args.wait and job.get("output"):
