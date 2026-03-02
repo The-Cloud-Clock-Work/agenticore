@@ -147,6 +147,10 @@ def _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir: Optional[Pa
         "JOB_ID": job.id,
         "PROFILE": job.profile,
     }
+    if not job.repo_url and profile.claude.worktree:
+        import copy
+        profile = copy.deepcopy(profile)
+        profile.claude.worktree = False
     cli_args = build_cli_args(profile, job.task, variables)
     cmd = [cfg.claude.binary] + cli_args
     if job.session_id:
