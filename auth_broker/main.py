@@ -318,6 +318,7 @@ async def submit_oauth_code(
         )
         return {"request_id": request_id, "status": "completed"}
     except Exception as exc:
+        _log.error("submit_oauth_code failed at %s: %r", type(exc).__name__, exc)
         await store.update_status(request_id, AuthStatus.pending)
         raise HTTPException(status_code=502, detail=f"Code exchange failed: {exc}") from exc
 
