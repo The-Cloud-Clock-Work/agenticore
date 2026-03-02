@@ -35,6 +35,8 @@ class Job:
     pod_name: str = ""  # Which pod ran this job (K8s)
     worktree_path: str = ""  # Absolute path to worktree on shared FS
     job_config_dir: str = ""  # CLAUDE_CONFIG_DIR used for this job
+    plan_id: str = ""  # set when this job was created by execute_plan
+    file_path: str = ""  # path to a .mcp.json on the shared FS; merged into job config dir
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -63,6 +65,8 @@ class Job:
             pod_name=data.get("pod_name", ""),
             worktree_path=data.get("worktree_path", ""),
             job_config_dir=data.get("job_config_dir", ""),
+            plan_id=data.get("plan_id", ""),
+            file_path=data.get("file_path", ""),
         )
 
 
@@ -146,6 +150,7 @@ def create_job(
     mode: str = "fire_and_forget",
     session_id: Optional[str] = None,
     ttl_seconds: int = 86400,
+    file_path: str = "",
 ) -> Job:
     """Create a new job and persist it."""
     job = Job(
@@ -159,6 +164,7 @@ def create_job(
         status="queued",
         created_at=_now_iso(),
         ttl_seconds=ttl_seconds,
+        file_path=file_path,
     )
     _save_job(job)
     return job
@@ -170,7 +176,7 @@ def _coerce_redis_types(data: dict) -> dict:
         if key in data:
             data[key] = convert(data[key]) if data[key] != "None" else None
     # String fields stored as "None" in Redis — normalize to empty string
-    for key in ("pod_name", "worktree_path", "job_config_dir"):
+    for key in ("pod_name", "worktree_path", "job_config_dir", "plan_id", "file_path"):
         if data.get(key) == "None":
             data[key] = ""
     return data

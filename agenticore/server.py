@@ -90,6 +90,7 @@ async def run_task(
     base_ref: str = "main",
     wait: bool = False,
     session_id: str = "",
+    file_path: str = "",
 ) -> str:
     """Submit a task for Claude Code execution.
 
@@ -103,6 +104,7 @@ async def run_task(
         base_ref: Base branch (default: main)
         wait: Block until completion (default: false)
         session_id: Claude session ID to resume (optional)
+        file_path: Path to a .mcp.json on the shared FS to inject into the job config (optional)
 
     Returns:
         JSON with job_id, status, and (if wait=true) output
@@ -120,6 +122,7 @@ async def run_task(
             base_ref=base_ref,
             wait=wait,
             session_id=session_id or None,
+            file_path=file_path,
         )
 
         return json.dumps({"success": True, "job": job.to_dict()})
@@ -203,6 +206,128 @@ async def cancel_job(job_id: str) -> str:
 
 
 @mcp.tool()
+async def plan_task(
+    task: str,
+    repo_url: str = "",
+    wait: bool = False,
+    file_path: str = "",
+) -> str:
+    """Create an implementation plan without executing it.
+
+    Runs Claude in read-only mode (Read, Glob, Grep only) to analyse the
+    codebase and produce a markdown plan. The plan can later be executed
+    with execute_plan.
+
+    Args:
+        task: What to plan (same format as run_task)
+        repo_url: Repo to analyse (optional)
+        wait: Block until plan is ready (default: false)
+        file_path: Path to a .mcp.json on the shared FS to inject into the plan job config (optional)
+
+    Returns:
+        JSON with plan_id, job_id, status, and (if wait=true) the plan content
+    """
+    try:
+        from agenticore.runner import submit_plan_job
+
+        job, plan = await submit_plan_job(task=task, repo_url=repo_url, wait=wait, file_path=file_path)
+        return json.dumps(
+            {
+                "success": True,
+                "plan_id": plan.id,
+                "plan_name": plan.name,
+                "job_id": job.id,
+                "status": plan.status,
+                "content": plan.content if wait else None,
+            }
+        )
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def get_plan(plan_id: str) -> str:
+    """Get a plan by ID, including its markdown content once ready.
+
+    Args:
+        plan_id: Plan UUID returned by plan_task
+
+    Returns:
+        JSON with plan details including status and content
+    """
+    try:
+        from agenticore.plans import get_plan as _get_plan
+
+        plan = _get_plan(plan_id)
+        if plan is None:
+            return json.dumps({"success": False, "error": f"Plan not found: {plan_id}"})
+
+        return json.dumps({"success": True, "plan": plan.to_dict()})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def list_plans(limit: int = 20) -> str:
+    """List recent plans with status and name.
+
+    Args:
+        limit: Max plans to return (default: 20)
+
+    Returns:
+        JSON with plans list
+    """
+    try:
+        from agenticore.plans import list_plans as _list_plans
+
+        plans = _list_plans(limit=limit)
+        return json.dumps(
+            {
+                "success": True,
+                "count": len(plans),
+                "plans": [p.to_dict() for p in plans],
+            }
+        )
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def execute_plan(
+    plan_id: str,
+    repo_url: str = "",
+    profile: str = "",
+    wait: bool = False,
+    file_path: str = "",
+) -> str:
+    """Execute a ready plan by ID.
+
+    Submits a normal coding job with the plan injected as context.
+
+    Args:
+        plan_id: Plan ID returned by plan_task
+        repo_url: Override repo URL (defaults to the one used when planning)
+        profile: Execution profile (default: coding)
+        wait: Block until execution completes
+        file_path: Path to a .mcp.json on the shared FS to inject into the execution job config (optional)
+
+    Returns:
+        JSON with job_id and status
+    """
+    try:
+        from agenticore.runner import execute_plan_job
+
+        job = await execute_plan_job(
+            plan_id=plan_id, repo_url=repo_url, profile=profile, wait=wait, file_path=file_path
+        )
+        return json.dumps({"success": True, "job": job.to_dict()})
+    except ValueError as e:
+        return json.dumps({"success": False, "error": str(e)})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
 async def list_profiles() -> str:
     """List available execution profiles.
 
@@ -248,6 +373,7 @@ def _build_rest_app():
             base_ref=body.get("base_ref", "main"),
             wait=body.get("wait", False),
             session_id=body.get("session_id", ""),
+            file_path=body.get("file_path", ""),
         )
         data = json.loads(result)
         status_code = 200 if data.get("success") else 400
@@ -277,6 +403,44 @@ def _build_rest_app():
         result = await list_profiles()
         return JSONResponse(json.loads(result))
 
+    async def post_plans(request: Request):
+        body = await request.json()
+        result = await plan_task(
+            task=body.get("task", ""),
+            repo_url=body.get("repo_url", ""),
+            wait=body.get("wait", False),
+            file_path=body.get("file_path", ""),
+        )
+        data = json.loads(result)
+        status_code = 200 if data.get("success") else 400
+        return JSONResponse(data, status_code=status_code)
+
+    async def get_plans_route(request: Request):
+        limit = int(request.query_params.get("limit", "20"))
+        result = await list_plans(limit=limit)
+        return JSONResponse(json.loads(result))
+
+    async def get_plan_route(request: Request):
+        plan_id = request.path_params["plan_id"]
+        result = await get_plan(plan_id)
+        data = json.loads(result)
+        status_code = 200 if data.get("success") else 404
+        return JSONResponse(data, status_code=status_code)
+
+    async def post_execute_plan(request: Request):
+        plan_id = request.path_params["plan_id"]
+        body = await request.json()
+        result = await execute_plan(
+            plan_id=plan_id,
+            repo_url=body.get("repo_url", ""),
+            profile=body.get("profile", ""),
+            wait=body.get("wait", False),
+            file_path=body.get("file_path", ""),
+        )
+        data = json.loads(result)
+        status_code = 200 if data.get("success") else 400
+        return JSONResponse(data, status_code=status_code)
+
     routes = [
         Route("/health", health, methods=["GET"]),
         Route("/jobs", post_jobs, methods=["POST"]),
@@ -284,6 +448,10 @@ def _build_rest_app():
         Route("/jobs/{job_id}", get_job_route, methods=["GET"]),
         Route("/jobs/{job_id}", delete_job_route, methods=["DELETE"]),
         Route("/profiles", get_profiles_route, methods=["GET"]),
+        Route("/plans", post_plans, methods=["POST"]),
+        Route("/plans", get_plans_route, methods=["GET"]),
+        Route("/plans/{plan_id}", get_plan_route, methods=["GET"]),
+        Route("/plans/{plan_id}/execute", post_execute_plan, methods=["POST"]),
     ]
 
     return Starlette(routes=routes)

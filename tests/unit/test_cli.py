@@ -271,6 +271,7 @@ class TestCmdRun:
             base_ref="main",
             wait=False,
             session_id=None,
+            file_path=None,
         )
         _cmd_run(args)
 
@@ -302,6 +303,7 @@ class TestCmdRun:
             base_ref="develop",
             wait=False,
             session_id="sess-1",
+            file_path=None,
         )
         _cmd_run(args)
 
@@ -330,6 +332,7 @@ class TestCmdRun:
             base_ref="main",
             wait=True,
             session_id=None,
+            file_path=None,
         )
         _cmd_run(args)
 
@@ -353,6 +356,7 @@ class TestCmdRun:
             base_ref="main",
             wait=True,
             session_id=None,
+            file_path=None,
         )
         _cmd_run(args)
         out = capsys.readouterr().out
@@ -368,6 +372,7 @@ class TestCmdRun:
             base_ref="main",
             wait=False,
             session_id=None,
+            file_path=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             _cmd_run(args)
@@ -383,6 +388,7 @@ class TestCmdRun:
             base_ref="main",
             wait=False,
             session_id=None,
+            file_path=None,
         )
         with pytest.raises(SystemExit) as exc_info:
             _cmd_run(args)
@@ -404,6 +410,7 @@ class TestCmdRun:
             base_ref="main",
             wait=False,
             session_id=None,
+            file_path=None,
         )
         _cmd_run(args)
         payload = mock_post.call_args[0][1]
@@ -422,6 +429,7 @@ class TestCmdRun:
             base_ref="main",
             wait=False,
             session_id="s-abc",
+            file_path=None,
         )
         _cmd_run(args)
         payload = mock_post.call_args[0][1]
@@ -440,6 +448,7 @@ class TestCmdRun:
             base_ref="main",
             wait=False,
             session_id=None,
+            file_path=None,
         )
         _cmd_run(args)
         payload = mock_post.call_args[0][1]

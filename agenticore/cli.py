@@ -82,6 +82,8 @@ def _cmd_run(args):
     }
     if args.session_id:
         payload["session_id"] = args.session_id
+    if args.file_path:
+        payload["file_path"] = args.file_path
 
     try:
         data = _api_post("/jobs", payload)
@@ -368,6 +370,84 @@ def _cmd_drain(args):
         r.delete(f"{prefix}:pod:{pod_name}:draining")
 
 
+def _cmd_plan(args):
+    """Submit a planning task."""
+    payload = {
+        "task": args.task,
+        "repo_url": args.repo or "",
+        "wait": args.wait,
+    }
+    if args.file_path:
+        payload["file_path"] = args.file_path
+    try:
+        data = _api_post("/plans", payload)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if data.get("success"):
+        print(f"Plan submitted: {data['plan_id']}")
+        print(f"  Name:   {data.get('plan_name', '')}")
+        print(f"  Job:    {data['job_id']}")
+        print(f"  Status: {data['status']}")
+        if args.wait and data.get("content"):
+            print(f"\n{data['content']}")
+    else:
+        print(f"Error: {data.get('error', 'unknown')}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _cmd_plans(args):
+    """List recent plans."""
+    try:
+        data = _api_get(f"/plans?limit={args.limit}")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not data.get("success"):
+        print(f"Error: {data.get('error')}", file=sys.stderr)
+        sys.exit(1)
+
+    plans = data.get("plans", [])
+    if not plans:
+        print("No plans found.")
+        return
+
+    print(f"{'ID':<38} {'STATUS':<10} {'NAME':<35} {'TASK'}")
+    print("-" * 100)
+    for p in plans:
+        task_short = p.get("task", "")[:30]
+        print(f"{p['id']:<38} {p['status']:<10} {p.get('name', ''):<35} {task_short}")
+
+
+def _cmd_execute_plan(args):
+    """Execute a plan."""
+    payload = {
+        "repo_url": args.repo or "",
+        "profile": args.profile or "",
+        "wait": args.wait,
+    }
+    if args.file_path:
+        payload["file_path"] = args.file_path
+    try:
+        data = _api_post(f"/plans/{args.plan_id}/execute", payload)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if data.get("success"):
+        job = data["job"]
+        print(f"Execution job submitted: {job['id']}")
+        print(f"  Status:  {job['status']}")
+        print(f"  Profile: {job.get('profile', '')}")
+        if args.wait and job.get("output"):
+            print(f"\n{job['output']}")
+    else:
+        print(f"Error: {data.get('error', 'unknown')}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_version(args):
     print(f"agenticore {__version__}")
 
@@ -388,6 +468,7 @@ def main():
     p_run.add_argument("--base-ref", default="main", help="Base branch (default: main)")
     p_run.add_argument("--wait", "-w", action="store_true", help="Wait for completion")
     p_run.add_argument("--session-id", help="Claude session ID to resume")
+    p_run.add_argument("--file-path", dest="file_path", help="Path to .mcp.json to inject into job config")
     p_run.set_defaults(func=_cmd_run)
 
     # serve
@@ -450,6 +531,30 @@ def main():
         help="Max seconds to wait for jobs (default: 300)",
     )
     p_drain.set_defaults(func=_cmd_drain)
+
+    # plan
+    p_plan = sub.add_parser("plan", help="Create an implementation plan (read-only analysis)")
+    p_plan.add_argument("task", help="Task description to plan")
+    p_plan.add_argument("--repo", "-r", help="GitHub repo URL to analyse")
+    p_plan.add_argument("--wait", "-w", action="store_true", help="Wait for plan to complete")
+    p_plan.add_argument("--file-path", dest="file_path", help="Path to .mcp.json to inject into plan job config")
+    p_plan.set_defaults(func=_cmd_plan)
+
+    # plans
+    p_plans = sub.add_parser("plans", help="List recent plans")
+    p_plans.add_argument("--limit", "-n", type=int, default=20, help="Max plans")
+    p_plans.set_defaults(func=_cmd_plans)
+
+    # execute-plan
+    p_exec_plan = sub.add_parser("execute-plan", help="Execute a ready plan")
+    p_exec_plan.add_argument("plan_id", help="Plan UUID")
+    p_exec_plan.add_argument("--repo", "-r", help="Override repo URL")
+    p_exec_plan.add_argument("--profile", "-p", help="Execution profile")
+    p_exec_plan.add_argument("--wait", "-w", action="store_true", help="Wait for completion")
+    p_exec_plan.add_argument(
+        "--file-path", dest="file_path", help="Path to .mcp.json to inject into execution job config"
+    )
+    p_exec_plan.set_defaults(func=_cmd_execute_plan)
 
     # hooks
     p_hooks = sub.add_parser("hooks", help="Manage agentihooks integration")
