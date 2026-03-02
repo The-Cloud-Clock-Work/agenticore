@@ -213,10 +213,10 @@ def _ensure_writable_config_dir(job_id: str, existing_config_dir: Optional[Path]
     return job_dir
 
 
-def _inject_file_mcp(file_path: str, job_config_dir: Path) -> None:
-    """Merge mcpServers from file_path into {job_config_dir}/settings.json.
+def _inject_file_mcp(file_path: str, cwd: Path) -> None:
+    """Merge mcpServers from file_path into {cwd}/.mcp.json.
 
-    Claude reads mcpServers from settings.json in CLAUDE_CONFIG_DIR.
+    Claude reads .mcp.json from the working directory (CWD).
     User-provided servers win on name collision.
     """
     src = Path(file_path)
@@ -229,15 +229,15 @@ def _inject_file_mcp(file_path: str, job_config_dir: Path) -> None:
     if "mcpServers" not in src_data:
         return  # not an MCP config, skip silently
 
-    settings_path = job_config_dir / "settings.json"
-    settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    target = cwd / ".mcp.json"
+    target_data = json.loads(target.read_text()) if target.exists() else {}
 
-    existing = settings.get("mcpServers", {})
+    existing = target_data.get("mcpServers", {})
     existing.update(src_data["mcpServers"])  # file_path wins on collision
-    settings["mcpServers"] = existing
+    target_data["mcpServers"] = existing
 
-    with open(settings_path, "w") as f:
-        json.dump(settings, f, indent=2)
+    with open(target, "w") as f:
+        json.dump(target_data, f, indent=2)
 
 
 async def run_job(job: Job) -> Job:
@@ -285,28 +285,30 @@ async def run_job(job: Job) -> Job:
             ended_at=_now_iso(),
         )
 
-    # Inject default MCP file first (lower priority), then job-specific file_path (higher priority)
-    default_mcp = cfg.claude.default_mcp_file
-    if default_mcp and Path(default_mcp).exists():
-        try:
-            job_config_dir = _ensure_writable_config_dir(job.id, job_config_dir)
-            _inject_file_mcp(default_mcp, job_config_dir)
-            update_job(job.id, job_config_dir=str(job_config_dir))
-        except Exception as e:
-            logger.warning("Default MCP injection failed: %s", e)
+    # For no-repo jobs, run Claude in the job_config_dir so .mcp.json is in the CWD
+    if not job.repo_url and job_config_dir:
+        cwd = job_config_dir
 
-    if job.file_path:
-        try:
-            job_config_dir = _ensure_writable_config_dir(job.id, job_config_dir)
-            _inject_file_mcp(job.file_path, job_config_dir)
-            update_job(job.id, job_config_dir=str(job_config_dir))
-        except Exception as e:
-            return update_job(
-                job.id,
-                status="failed",
-                error=f"MCP injection failed: {e}",
-                ended_at=_now_iso(),
-            )
+    # Inject MCP configs into CWD/.mcp.json — Claude reads .mcp.json from the working directory
+    mcp_cwd = cwd or job_config_dir
+    if mcp_cwd:
+        default_mcp = cfg.claude.default_mcp_file
+        if default_mcp and Path(default_mcp).exists():
+            try:
+                _inject_file_mcp(default_mcp, mcp_cwd)
+            except Exception as e:
+                logger.warning("Default MCP injection failed: %s", e)
+
+        if job.file_path:
+            try:
+                _inject_file_mcp(job.file_path, mcp_cwd)
+            except Exception as e:
+                return update_job(
+                    job.id,
+                    status="failed",
+                    error=f"MCP injection failed: {e}",
+                    ended_at=_now_iso(),
+                )
 
     cmd, env = _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir=job_config_dir)
 
