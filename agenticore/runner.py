@@ -17,7 +17,7 @@ from typing import Optional
 from agenticore.config import get_config
 from agenticore.jobs import Job, create_job, get_job, update_job
 from agenticore.profiles import build_cli_args, get_profile, materialize_profile
-from agenticore.repos import ensure_clone, get_default_branch
+from agenticore.repos import ensure_clone, get_default_branch, resolve_github_token
 from agenticore.telemetry import end_job_trace, ship_transcript, start_job_trace
 
 # Set to prevent GC of fire-and-forget background tasks
@@ -93,15 +93,12 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
                 "falling back to static ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL"
             )
 
-        gh = _fetch_from_auth_broker("github")
-        if gh:
-            env["GITHUB_TOKEN"] = gh
-        elif cfg.github.token:
-            env["GITHUB_TOKEN"] = cfg.github.token
-    elif cfg.github.token:
-        # No broker — static config only
-        env["GITHUB_TOKEN"] = cfg.github.token
-        _log.debug("auth: no Auth Broker configured, using static credentials")
+    # GitHub token — delegate to the centralized resolver
+    gh_token = resolve_github_token()
+    if gh_token:
+        env["GITHUB_TOKEN"] = gh_token
+    else:
+        env.pop("GITHUB_TOKEN", None)
 
     # Auto-build ANTHROPIC_CUSTOM_HEADERS for CF Access-protected proxies
     cf_id = env.get("CF_ACCESS_CLIENT_ID", "")

@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Optional
 
 from agenticore.config import get_config
-from agenticore.repos import _authenticated_url, _run_git, _with_redis_lock
+from agenticore.git_credentials import git_askpass_env
+from agenticore.repos import _run_git, _with_redis_lock, resolve_github_token
 
 logger = logging.getLogger(__name__)
 
@@ -74,19 +75,15 @@ def _clone_or_fetch(url: str, dest: Path) -> None:
     """Clone or update agentihooks repo, flock/Redis-protected."""
     dest.mkdir(parents=True, exist_ok=True)
     lock_path = dest.parent / ".agentihooks.lock"
-    auth_url = _authenticated_url(url)
-
-    if (dest / ".git").exists():
-        cmd = ["git", "-C", str(dest), "fetch", "--all", "--prune"]
-        checkout: Optional[list] = ["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"]
-    else:
-        cmd = ["git", "clone", auth_url, str(dest)]
-        checkout = None
 
     def _do():
-        _run_git(cmd)
-        if checkout:
-            _run_git(checkout)
+        token = resolve_github_token()
+        with git_askpass_env(token) as extra_env:
+            if (dest / ".git").exists():
+                _run_git(["git", "-C", str(dest), "fetch", "--all", "--prune"], extra_env=extra_env)
+                _run_git(["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"], extra_env=extra_env)
+            else:
+                _run_git(["git", "clone", url, str(dest)], extra_env=extra_env)
         _run_build(dest)
 
     if get_config().repos.shared_fs_root:

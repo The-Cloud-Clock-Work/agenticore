@@ -67,7 +67,14 @@ sharedFs:
 #   kubectl create secret generic agenticore-secrets \
 #     --from-literal=redis-url="redis://:password@host:6379" \
 #     --from-literal=anthropic-api-key="sk-ant-..." \
-#     --from-literal=github-token="ghp_..."
+#     --from-literal=github-token="ghp_..." \
+#     --from-literal=github-app-id="123456" \
+#     --from-literal=github-app-installation-id="78901234" \
+#     --from-file=github-app-private-key=./your-app.private-key.pem
+#
+# GitHub App auth is preferred over static github-token. If both are present,
+# the App takes priority (short-lived installation tokens vs long-lived PAT).
+# Token priority: GitHub App → Auth Broker → static github-token → none.
 #
 secretName: agenticore-secrets
 

@@ -26,6 +26,11 @@ _CLEAN_ENV = {
     "AGENTICORE_OTEL_LOG_TOOL_DETAILS": "",
     "GITHUB_TOKEN": "",
     "AGENTICORE_CLAUDE_CONFIG_DIR": "",
+    "GITHUB_APP_ID": "",
+    "GITHUB_APP_INSTALLATION_ID": "",
+    "GITHUB_APP_PRIVATE_KEY_PATH": "",
+    "GITHUB_APP_PRIVATE_KEY": "",
+    "GITHUB_APP_PRIVATE_KEY_BASE64": "",
 }
 
 
@@ -176,3 +181,96 @@ class TestLoadConfig:
         cfg = get_config()
         assert cfg.agentihooks_url == "https://github.com/org/agentihooks"
         assert cfg.agentihooks_sync_interval == 600
+
+
+@pytest.mark.unit
+class TestGithubAppConfig:
+    @patch.dict(
+        os.environ,
+        {
+            **_CLEAN_ENV,
+            "GITHUB_APP_ID": "12345",
+            "GITHUB_APP_INSTALLATION_ID": "67890",
+            "GITHUB_APP_PRIVATE_KEY_PATH": "",
+            "GITHUB_APP_PRIVATE_KEY_BASE64": "",
+        },
+        clear=False,
+    )
+    def test_app_id_and_installation_id_from_env(self, tmp_path):
+        """GitHub App ID and installation ID load from env vars."""
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.github.app_id == "12345"
+        assert cfg.github.app_installation_id == "67890"
+
+    @patch.dict(
+        os.environ, {**_CLEAN_ENV, "GITHUB_APP_PRIVATE_KEY_PATH": "", "GITHUB_APP_PRIVATE_KEY_BASE64": ""}, clear=False
+    )
+    def test_private_key_from_file(self, tmp_path):
+        """Private key resolved from GITHUB_APP_PRIVATE_KEY_PATH."""
+        key_file = tmp_path / "key.pem"
+        key_file.write_text("-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----")
+
+        with patch.dict(os.environ, {"GITHUB_APP_PRIVATE_KEY_PATH": str(key_file)}, clear=False):
+            cfg = load_config(str(tmp_path / "x.yml"))
+        assert "BEGIN RSA PRIVATE KEY" in cfg.github.app_private_key
+
+    @patch.dict(
+        os.environ,
+        {**_CLEAN_ENV, "GITHUB_APP_PRIVATE_KEY_PATH": "", "GITHUB_APP_PRIVATE_KEY_BASE64": ""},
+        clear=False,
+    )
+    def test_private_key_from_raw_env(self, tmp_path):
+        """Private key resolved from GITHUB_APP_PRIVATE_KEY (raw PEM, K8s --from-file)."""
+        raw_pem = "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"
+        with patch.dict(os.environ, {"GITHUB_APP_PRIVATE_KEY": raw_pem}, clear=False):
+            cfg = load_config(str(tmp_path / "x.yml"))
+        assert "BEGIN RSA PRIVATE KEY" in cfg.github.app_private_key
+
+    @patch.dict(os.environ, {**_CLEAN_ENV, "GITHUB_APP_PRIVATE_KEY_PATH": ""}, clear=False)
+    def test_private_key_from_base64(self, tmp_path):
+        """Private key resolved from GITHUB_APP_PRIVATE_KEY_BASE64."""
+        import base64
+
+        pem = "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"
+        b64 = base64.b64encode(pem.encode()).decode()
+
+        with patch.dict(os.environ, {"GITHUB_APP_PRIVATE_KEY_BASE64": b64}, clear=False):
+            cfg = load_config(str(tmp_path / "x.yml"))
+        assert "BEGIN RSA PRIVATE KEY" in cfg.github.app_private_key
+
+    @patch.dict(
+        os.environ,
+        {**_CLEAN_ENV, "GITHUB_APP_PRIVATE_KEY_BASE64": ""},
+        clear=False,
+    )
+    def test_missing_key_file_warns(self, tmp_path, caplog):
+        """Non-existent key path logs warning."""
+        import logging
+
+        with patch.dict(
+            os.environ,
+            {"GITHUB_APP_PRIVATE_KEY_PATH": "/nonexistent/key.pem"},
+            clear=False,
+        ):
+            with caplog.at_level(logging.WARNING):
+                cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.github.app_private_key == ""
+        assert "does not exist" in caplog.text
+
+    @patch.dict(
+        os.environ,
+        {
+            **_CLEAN_ENV,
+            "GITHUB_APP_ID": "",
+            "GITHUB_APP_INSTALLATION_ID": "",
+            "GITHUB_APP_PRIVATE_KEY_PATH": "",
+            "GITHUB_APP_PRIVATE_KEY_BASE64": "",
+        },
+        clear=False,
+    )
+    def test_defaults_empty(self, tmp_path):
+        """GitHub App fields default to empty when not configured."""
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.github.app_id == ""
+        assert cfg.github.app_private_key == ""
+        assert cfg.github.app_installation_id == ""

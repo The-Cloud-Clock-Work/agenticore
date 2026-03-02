@@ -10,6 +10,15 @@ from agenticore.hooks import _install_dir, _run_build, start_sync_watcher, sync_
 
 
 @pytest.mark.unit
+class TestNoAuthenticatedUrlImport:
+    def test_hooks_does_not_import_authenticated_url(self):
+        """_authenticated_url is no longer imported by hooks module."""
+        import agenticore.hooks as hooks_mod
+
+        assert not hasattr(hooks_mod, "_authenticated_url")
+
+
+@pytest.mark.unit
 class TestInstallDir:
     def test_explicit_path(self, monkeypatch, tmp_path):
         """Explicit AGENTICORE_AGENTIHOOKS_PATH env var wins."""

@@ -13,12 +13,18 @@ worktree creation inside the repo.
 
 import fcntl
 import hashlib
+import logging
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from agenticore.config import get_config
+from agenticore.git_credentials import git_askpass_env, sanitize_remote_url, strip_credentials_from_url
+
+logger = logging.getLogger(__name__)
 
 
 def _repo_key(repo_url: str) -> str:
@@ -36,13 +42,51 @@ def repo_dir(repo_url: str) -> Path:
     return _repos_root() / _repo_key(repo_url) / "repo"
 
 
-def _authenticated_url(repo_url: str) -> str:
-    """Inject GITHUB_TOKEN into HTTPS clone URLs for private repo access."""
+def resolve_github_token() -> Optional[str]:
+    """Resolve a GitHub token using the priority chain.
+
+    1. GitHub App (app_id + private key + installation_id)
+    2. Auth Broker (AUTH_BROKER_URL, service="github")
+    3. Static GITHUB_TOKEN
+    4. None (public repos only, no PRs)
+    """
+    # 1. GitHub App
+    try:
+        from agenticore.github_app import get_github_app_auth
+
+        app = get_github_app_auth()
+        if app.enabled:
+            token = app.get_token()
+            if token:
+                logger.debug("github auth: using GitHub App installation token")
+                return token
+            logger.debug("github auth: GitHub App configured but token exchange failed, falling through")
+    except Exception as exc:
+        logger.debug("github auth: GitHub App error: %s", exc)
+
+    # 2. Auth Broker
     cfg = get_config()
-    token = cfg.github.token
-    if token and repo_url.startswith("https://github.com/"):
-        return repo_url.replace("https://github.com/", f"https://x-access-token:{token}@github.com/")
-    return repo_url
+    if cfg.auth_broker.url:
+        try:
+            from agenticore.auth_client import AuthClient
+
+            client = AuthClient()
+            if client.enabled:
+                cred = client.get_credential("github")
+                if cred:
+                    logger.debug("github auth: using Auth Broker token")
+                    return cred
+        except Exception as exc:
+            logger.debug("github auth: Auth Broker error: %s", exc)
+
+    # 3. Static token
+    if cfg.github.token:
+        logger.debug("github auth: using static GITHUB_TOKEN")
+        return cfg.github.token
+
+    # 4. None
+    logger.debug("github auth: no token available (public repos only)")
+    return None
 
 
 def _redis_lock_acquire(lock_key: str, ttl: int = 300) -> bool:
@@ -114,11 +158,13 @@ def ensure_clone(repo_url: str) -> Path:
     key_dir.mkdir(parents=True, exist_ok=True)
 
     def _do_clone_or_fetch():
-        if rdir.exists() and (rdir / ".git").exists():
-            _run_git(["git", "fetch", "--all", "--prune"], cwd=rdir)
-        else:
-            clone_url = _authenticated_url(repo_url)
-            _run_git(["git", "clone", clone_url, str(rdir)])
+        token = resolve_github_token()
+        with git_askpass_env(token) as extra_env:
+            if rdir.exists() and (rdir / ".git").exists():
+                _run_git(["git", "fetch", "--all", "--prune"], cwd=rdir, extra_env=extra_env)
+            else:
+                _run_git(["git", "clone", repo_url, str(rdir)], extra_env=extra_env)
+            sanitize_remote_url(str(rdir))
 
     cfg = get_config()
     if cfg.repos.shared_fs_root:
@@ -138,19 +184,26 @@ def ensure_clone(repo_url: str) -> Path:
     return rdir
 
 
-def _run_git(cmd: list, cwd: Path | None = None) -> subprocess.CompletedProcess:
+def _run_git(cmd: list, cwd: Path | None = None, extra_env: dict | None = None) -> subprocess.CompletedProcess:
     """Run a git command, raising on failure."""
+    env = None
+    if extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
     result = subprocess.run(
         cmd,
         cwd=cwd,
         capture_output=True,
         text=True,
         timeout=300,
+        env=env,
     )
     if result.returncode != 0:
-        print(f"git command failed: {' '.join(cmd)}", file=sys.stderr)
-        print(f"  stderr: {result.stderr}", file=sys.stderr)
-        raise RuntimeError(f"git failed: {result.stderr.strip()}")
+        safe_cmd = " ".join(strip_credentials_from_url(c) for c in cmd)
+        safe_stderr = strip_credentials_from_url(result.stderr)
+        print(f"git command failed: {safe_cmd}", file=sys.stderr)
+        print(f"  stderr: {safe_stderr}", file=sys.stderr)
+        raise RuntimeError(f"git failed: {safe_stderr.strip()}")
     return result
 
 

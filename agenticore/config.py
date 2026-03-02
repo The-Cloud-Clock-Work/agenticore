@@ -3,12 +3,16 @@
 Loads from ``~/.agenticore/config.yml`` with environment variable overrides.
 """
 
+import base64
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 import yaml
+
+_log = logging.getLogger(__name__)
 
 
 def _env(key: str, default: str = "") -> str:
@@ -71,6 +75,9 @@ class OtelConfig:
 @dataclass
 class GithubConfig:
     token: str = ""
+    app_id: str = ""
+    app_private_key: str = ""  # resolved PEM text
+    app_installation_id: str = ""
 
 
 @dataclass
@@ -114,6 +121,49 @@ def _load_yaml(path: Path) -> dict:
         with open(path) as f:
             return yaml.safe_load(f) or {}
     return {}
+
+
+def _resolve_private_key(github_raw: dict) -> str:
+    """Resolve GitHub App private key PEM from file path, raw PEM, base64, or YAML.
+
+    Priority:
+      1. GITHUB_APP_PRIVATE_KEY_PATH env → read file
+      2. GITHUB_APP_PRIVATE_KEY env → raw PEM text (K8s --from-file secrets)
+      3. GITHUB_APP_PRIVATE_KEY_BASE64 env → base64 decode
+      4. github.app.private_key_path in YAML → read file
+    """
+    # 1. File path from env
+    key_path = _env("GITHUB_APP_PRIVATE_KEY_PATH", "")
+    if key_path:
+        p = Path(key_path).expanduser()
+        if p.exists():
+            return p.read_text().strip()
+        _log.warning("GITHUB_APP_PRIVATE_KEY_PATH does not exist: %s", p)
+        return ""
+
+    # 2. Raw PEM from env (K8s secretKeyRef with --from-file injects raw PEM text)
+    raw_pem = os.getenv("GITHUB_APP_PRIVATE_KEY", "")
+    if raw_pem and raw_pem.startswith("-----"):
+        return raw_pem.strip()
+
+    # 3. Base64-encoded PEM from env
+    b64 = _env("GITHUB_APP_PRIVATE_KEY_BASE64", "")
+    if b64:
+        try:
+            return base64.b64decode(b64).decode().strip()
+        except Exception as exc:
+            _log.warning("Failed to decode GITHUB_APP_PRIVATE_KEY_BASE64: %s", exc)
+            return ""
+
+    # 4. File path from YAML
+    yaml_path = github_raw.get("app", {}).get("private_key_path", "")
+    if yaml_path:
+        p = Path(yaml_path).expanduser()
+        if p.exists():
+            return p.read_text().strip()
+        _log.warning("github.app.private_key_path does not exist: %s", p)
+
+    return ""
 
 
 def load_config(config_path: Optional[str] = None) -> Config:
@@ -188,6 +238,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
     # GitHub — env overrides
     github = GithubConfig(
         token=_env("GITHUB_TOKEN", github_raw.get("token", "")),
+        app_id=_env("GITHUB_APP_ID", github_raw.get("app_id", "")),
+        app_private_key=_resolve_private_key(github_raw),
+        app_installation_id=_env("GITHUB_APP_INSTALLATION_ID", github_raw.get("app_installation_id", "")),
     )
 
     # Langfuse — env overrides

@@ -8,12 +8,17 @@ When ``profile.auto_pr: true`` and the job succeeds (exit_code == 0):
 """
 
 import asyncio
+import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
 
+from agenticore.git_credentials import git_askpass_env
 from agenticore.jobs import Job
-from agenticore.repos import repo_dir
+from agenticore.repos import repo_dir, resolve_github_token
+
+logger = logging.getLogger(__name__)
 
 
 async def create_auto_pr(job: Job) -> Optional[str]:
@@ -27,6 +32,11 @@ async def create_auto_pr(job: Job) -> Optional[str]:
         PR URL string, or None if no changes or PR creation failed.
     """
     if not job.repo_url:
+        return None
+
+    token = resolve_github_token()
+    if not token:
+        logger.warning("No GitHub token available — skipping auto-PR for job %s", job.id)
         return None
 
     rdir = repo_dir(job.repo_url)
@@ -135,28 +145,38 @@ async def _has_changes(rdir, branch: str) -> bool:
 
 
 async def _push_branch(rdir, branch: str) -> bool:
-    """Push the branch to origin."""
-    try:
-        result = await asyncio.create_subprocess_exec(
-            "git",
-            "push",
-            "origin",
-            branch,
-            cwd=rdir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await result.communicate()
-        return result.returncode == 0
-    except Exception as e:
-        print(f"Push failed: {e}", file=sys.stderr)
-        return False
+    """Push the branch to origin using GIT_ASKPASS for credentials."""
+    token = resolve_github_token()
+    with git_askpass_env(token) as extra_env:
+        try:
+            env = os.environ.copy()
+            env.update(extra_env)
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "push",
+                "origin",
+                branch,
+                cwd=rdir,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await result.communicate()
+            return result.returncode == 0
+        except Exception as e:
+            print(f"Push failed: {e}", file=sys.stderr)
+            return False
 
 
 async def _create_pr(rdir, branch: str, job: Job) -> Optional[str]:
     """Create a PR using the gh CLI."""
     title = job.task[:70] if len(job.task) > 70 else job.task
     body = f"Job: {job.id}\n\nTask: {job.task}\n\nProfile: {job.profile}"
+
+    token = resolve_github_token()
+    env = os.environ.copy()
+    if token:
+        env["GITHUB_TOKEN"] = token
 
     try:
         result = await asyncio.create_subprocess_exec(
@@ -170,6 +190,7 @@ async def _create_pr(rdir, branch: str, job: Job) -> Optional[str]:
             "--head",
             branch,
             cwd=rdir,
+            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

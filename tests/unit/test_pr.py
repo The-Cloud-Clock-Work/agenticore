@@ -8,6 +8,27 @@ import pytest
 from agenticore.jobs import Job
 from agenticore.pr import _commit_untracked, create_auto_pr
 
+# ---------------------------------------------------------------------------
+# Token guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestCreateAutoPrTokenGuard:
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_token(self):
+        """create_auto_pr returns None when resolve_github_token() returns None."""
+        job = Job(
+            id="job-1",
+            repo_url="https://github.com/org/repo",
+            task="test",
+            profile="code",
+            status="succeeded",
+        )
+        with patch("agenticore.pr.resolve_github_token", return_value=None):
+            result = await create_auto_pr(job)
+        assert result is None
+
 
 def _make_job(**kwargs) -> Job:
     defaults = dict(
@@ -91,6 +112,7 @@ class TestCreateAutoPrCommitsUntracked:
         job = _make_job(worktree_path=str(tmp_path))
 
         with (
+            patch("agenticore.pr.resolve_github_token", return_value="ghp_test"),
             patch("agenticore.pr.repo_dir") as mock_repo_dir,
             patch("agenticore.pr._commit_untracked", new_callable=AsyncMock) as mock_commit,
             patch("agenticore.pr._get_worktree_branch", new_callable=AsyncMock, return_value="cc-abc"),
@@ -107,6 +129,7 @@ class TestCreateAutoPrCommitsUntracked:
         job = _make_job(worktree_path="")
 
         with (
+            patch("agenticore.pr.resolve_github_token", return_value="ghp_test"),
             patch("agenticore.pr.repo_dir") as mock_repo_dir,
             patch("agenticore.pr._commit_untracked", new_callable=AsyncMock) as mock_commit,
             patch("agenticore.pr._get_worktree_branch", new_callable=AsyncMock, return_value="cc-abc"),
@@ -123,6 +146,7 @@ class TestCreateAutoPrCommitsUntracked:
         job = _make_job(worktree_path=str(tmp_path))
 
         with (
+            patch("agenticore.pr.resolve_github_token", return_value="ghp_test"),
             patch("agenticore.pr.repo_dir") as mock_repo_dir,
             patch("agenticore.pr._commit_untracked", new_callable=AsyncMock),
             patch("agenticore.pr._get_worktree_branch", new_callable=AsyncMock, return_value="cc-abc"),

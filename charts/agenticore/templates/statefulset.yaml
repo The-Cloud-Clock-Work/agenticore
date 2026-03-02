@@ -94,6 +94,25 @@ spec:
                   name: {{ .Values.secretName }}
                   key: github-token
                   optional: true
+            # GitHub App auth (preferred over static GITHUB_TOKEN)
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: github-app-id
+                  optional: true
+            - name: GITHUB_APP_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: github-app-installation-id
+                  optional: true
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: github-app-private-key
+                  optional: true
             {{- if ((.Values.agentihooks).url) }}
             - name: AGENTICORE_AGENTIHOOKS_URL
               value: {{ .Values.agentihooks.url | quote }}

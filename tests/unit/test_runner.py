@@ -77,10 +77,13 @@ class TestBuildEnvAuthBroker:
         {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
         clear=False,
     )
-    def test_broker_sets_github_token(self):
-        with patch(
-            "agenticore.runner._fetch_from_auth_broker",
-            side_effect=lambda svc, **kw: "gh-tok" if svc == "github" else None,
+    def test_resolve_github_token_sets_env(self):
+        with (
+            patch(
+                "agenticore.runner._fetch_from_auth_broker",
+                side_effect=lambda svc, **kw: "sk-ant-123" if svc == "anthropic" else None,
+            ),
+            patch("agenticore.runner.resolve_github_token", return_value="gh-tok"),
         ):
             env = _build_env()
         assert env["GITHUB_TOKEN"] == "gh-tok"
@@ -90,9 +93,22 @@ class TestBuildEnvAuthBroker:
         {"AUTH_BROKER_URL": "", "AUTH_BROKER_API_KEY": "", "GITHUB_TOKEN": "static-token"},
         clear=False,
     )
-    def test_broker_disabled_preserves_static_github_token(self):
-        env = _build_env()
+    def test_resolve_github_token_static(self):
+        with patch("agenticore.runner.resolve_github_token", return_value="static-token"):
+            env = _build_env()
         assert env["GITHUB_TOKEN"] == "static-token"
+
+    @patch.dict(
+        os.environ,
+        {"AUTH_BROKER_URL": "", "AUTH_BROKER_API_KEY": ""},
+        clear=False,
+    )
+    def test_no_github_token_removes_from_env(self):
+        # Set a GITHUB_TOKEN in os.environ to verify it gets removed
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "should-be-removed"}, clear=False):
+            with patch("agenticore.runner.resolve_github_token", return_value=None):
+                env = _build_env()
+        assert "GITHUB_TOKEN" not in env
 
     @patch.dict(
         os.environ,

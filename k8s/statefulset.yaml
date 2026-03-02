@@ -48,6 +48,25 @@ spec:
               name: agenticore-secrets
               key: github-token
               optional: true
+        # GitHub App auth (preferred over static GITHUB_TOKEN)
+        - name: GITHUB_APP_ID
+          valueFrom:
+            secretKeyRef:
+              name: agenticore-secrets
+              key: github-app-id
+              optional: true
+        - name: GITHUB_APP_INSTALLATION_ID
+          valueFrom:
+            secretKeyRef:
+              name: agenticore-secrets
+              key: github-app-installation-id
+              optional: true
+        - name: GITHUB_APP_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: agenticore-secrets
+              key: github-app-private-key
+              optional: true
         - name: ANTHROPIC_API_KEY
           valueFrom:
             secretKeyRef:
