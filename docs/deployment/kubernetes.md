@@ -40,14 +40,19 @@ Internet / Claude.ai ──► LoadBalancer :8200
 
 ```
 /shared/
-├── profiles/{name}/.claude/    ← static profile files (init-shared-fs)
 ├── repos/{hash}/repo/          ← git clone cache (shared across pods)
-├── jobs/{job-id}/              ← per-job CLAUDE_CONFIG_DIR
-│   ├── settings.json
-│   ├── CLAUDE.md
+├── jobs/{job-id}/              ← per-job CLAUDE_CONFIG_DIR (extends profiles only)
+│   ├── .claude/
+│   │   ├── settings.json
+│   │   └── CLAUDE.md
 │   └── .mcp.json
 └── job-state/{id}.json         ← job file fallback (AGENTICORE_JOBS_DIR)
 ```
+
+Profile files are **not** copied to the shared volume. Simple profiles are read
+directly from the agentihooks directory baked into the image (`/app/profiles/`).
+Only `extends` chains write to `/shared/jobs/{job-id}/` because their files must
+be merged before Claude reads them.
 
 ---
 
@@ -213,16 +218,16 @@ helm install agenticore \
 
 ## Migration from Docker Compose
 
-Docker Compose mode remains fully supported. `AGENTICORE_SHARED_FS_ROOT` is
-unset by default, so `materialize_profile()` falls back to the existing
-copy-into-repo behaviour. No code changes are needed to continue using Docker
-Compose.
+Docker Compose mode remains fully supported. No code changes are needed to
+continue using Docker Compose.
 
 | Feature | Docker Compose | Kubernetes |
 |---------|---------------|------------|
 | Shared FS | No (local volume) | RWX PVC |
 | Clone locking | `fcntl` flock | Redis `SET NX` |
-| Profile materialization | Into repo working dir | `/shared/jobs/{id}/` |
+| Profile materialization (simple) | `CLAUDE_CONFIG_DIR` → profile dir in image | Same |
+| Profile materialization (extends) | Merged to `/tmp/agenticore-jobs/{id}/` | Merged to `/shared/jobs/{id}/` |
+| Repo working dir | Never touched | Never touched |
 | Pod identity | hostname | StatefulSet name (Downward API) |
 | Scaling | Single container | KEDA ScaledObject |
 | Drain | N/A | `agenticore drain` PreStop hook |
@@ -237,7 +242,6 @@ They require manual image tag substitution before applying.
 | File | Resource | Purpose |
 |------|----------|---------|
 | `pvc-shared.yaml` | PersistentVolumeClaim | 100Gi RWX shared volume |
-| `init-profiles.yaml` | Job | One-time: populate shared FS with profiles |
 | `statefulset.yaml` | StatefulSet | Agenticore pods (2 replicas default) |
 | `headless-service.yaml` | Service | Stable pod DNS (`agenticore-0.agenticore-headless`) |
 | `service.yaml` | Service | LoadBalancer for external traffic |
