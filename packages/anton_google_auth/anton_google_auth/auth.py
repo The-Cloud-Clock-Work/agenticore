@@ -129,9 +129,9 @@ _LOGIN_TEMPLATE = """\
 </head>
 <body>
   <div class="container">
-    <img class="logo" src="data:image/png;base64,{{logo_b64}}" alt="{{title}}">
-    <div class="title">{{title}}</div>
-    <div class="subtitle">{{subtitle}}</div>
+    <img class="logo" src="data:image/png;base64,{logo_b64}" alt="{title}">
+    <div class="title">{title}</div>
+    <div class="subtitle">{subtitle}</div>
     <a href="/auth/google" class="google-btn">
       <svg class="google-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
         <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
@@ -141,7 +141,7 @@ _LOGIN_TEMPLATE = """\
       </svg>
       Sign in with Google
     </a>
-    {{error_html}}
+    {error_html}
     <div class="footer">AUTHORIZED PERSONNEL ONLY</div>
   </div>
 </body>
