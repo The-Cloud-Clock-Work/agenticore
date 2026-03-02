@@ -23,3 +23,6 @@ data:
   REDIS_KEY_PREFIX: {{ .Values.redis.keyPrefix | quote }}
   AGENTICORE_MCP_LIB_URL: {{ .Values.mcpLib.url | quote }}
   AGENTICORE_MCP_LIB_PATH: {{ .Values.mcpLib.path | quote }}
+  # hooks-utils MCP tool restrictions — inherited by Claude subprocesses
+  MCP_CATEGORIES: {{ .Values.agentihooks.mcpCategories | quote }}
+  ALLOWED_TOOLS: {{ .Values.agentihooks.allowedTools | quote }}
