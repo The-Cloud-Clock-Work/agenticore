@@ -239,8 +239,8 @@
 
       const codeSection = isManualCode
         ? `<div style="margin-top:0.75rem;font-size:0.75rem;color:#888;">
-             After authorizing, you land on <code style="color:#aaa">platform.claude.com/oauth/code/callback</code>.<br>
-             Copy the <strong>code=</strong> value from the URL bar (or paste the full URL — it auto-extracts):
+             After authorizing, copy everything shown on <code style="color:#aaa">platform.claude.com</code> and paste below.<br>
+             All formats auto-extracted: plain code, <code style="color:#888">code#state</code>, or full URL.
            </div>
            <div class="manual-input">
              <input id="code-${r.id}" type="text" placeholder="Paste code or full redirect URL..." />

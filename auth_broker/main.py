@@ -8,9 +8,12 @@ Flow:
   5. Pod polls GET /auth/token/{id} until completed
 """
 
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
+
+_log = logging.getLogger(__name__)
 
 from anton_google_auth import AntonGoogleAuth
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -293,13 +296,18 @@ async def submit_oauth_code(
 
     await store.update_status(request_id, AuthStatus.approved)
     try:
-        # If user pasted the full redirect URL, extract just the code param
+        # Normalize pasted value — handle three formats:
+        #   1. plain code:  "gBJZMY..."
+        #   2. code#state:  "gBJZMY...#a882c231-..."  (platform.claude.com format)
+        #   3. full URL:    "https://platform.claude.com/oauth/code/callback?code=...&state=..."
         raw_code = body.token.strip()
         if raw_code.startswith("http"):
             from urllib.parse import urlparse, parse_qs
             parsed = urlparse(raw_code)
             qs = parse_qs(parsed.query)
             raw_code = qs.get("code", [raw_code])[0]
+        elif "#" in raw_code:
+            raw_code = raw_code.split("#")[0]
         pkce_verifier = data.get("pkce_verifier", "")
         oauth_state = data.get("oauth_state", "")
         _log.warning("Exchanging code len=%d service=%s pkce=%s state=%s",
