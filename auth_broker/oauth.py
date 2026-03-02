@@ -50,7 +50,7 @@ async def build_auth_url(provider: dict, state: str, code_challenge: str = "") -
     return f"{provider['authorize_url']}?{urlencode(params)}"
 
 
-async def exchange_code(provider: dict, code: str, code_verifier: str = "") -> dict:
+async def exchange_code(provider: dict, code: str, code_verifier: str = "", state: str = "") -> dict:
     """Exchange authorization code for access token."""
     data: dict = {
         "client_id": _resolve_client_id(provider),
@@ -58,13 +58,18 @@ async def exchange_code(provider: dict, code: str, code_verifier: str = "") -> d
         "redirect_uri": _callback_url(provider),
         "grant_type": "authorization_code",
     }
+    if state:
+        data["state"] = state
     if code_verifier:
         data["code_verifier"] = code_verifier
     else:
         val = os.getenv(provider.get("client_secret_env", ""), "")
         if val:
             data["client_secret"] = val
-    extra: dict = provider.get("token_headers", {})
+    # token_headers used for auth headers (e.g. Accept), NOT for body format hints
+    # strip any keys that should not go on the token request
+    extra: dict = {k: v for k, v in provider.get("token_headers", {}).items()
+                   if k.lower() not in ("anthropic-beta",)}
     async with httpx.AsyncClient() as client:
         use_json = provider.get("token_format") == "json"
         resp = await client.post(

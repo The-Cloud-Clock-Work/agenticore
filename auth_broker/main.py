@@ -85,7 +85,7 @@ async def oauth_callback(code: str, state: str) -> HTMLResponse:
 
     try:
         pkce_verifier = data.get("pkce_verifier", "")
-        token_data = await oauth.exchange_code(provider, code, pkce_verifier)
+        token_data = await oauth.exchange_code(provider, code, pkce_verifier, state)
         vault_data = {
             "token": token_data.get("access_token", ""),
             "refresh_token": token_data.get("refresh_token", ""),
@@ -301,9 +301,10 @@ async def submit_oauth_code(
             qs = parse_qs(parsed.query)
             raw_code = qs.get("code", [raw_code])[0]
         pkce_verifier = data.get("pkce_verifier", "")
-        _log.info("Exchanging code (len=%d) for service=%s pkce=%s",
-                  len(raw_code), data["service"], bool(pkce_verifier))
-        token_data = await oauth.exchange_code(provider, raw_code, pkce_verifier)
+        oauth_state = data.get("oauth_state", "")
+        _log.warning("Exchanging code len=%d service=%s pkce=%s state=%s",
+                     len(raw_code), data["service"], bool(pkce_verifier), bool(oauth_state))
+        token_data = await oauth.exchange_code(provider, raw_code, pkce_verifier, oauth_state)
         vault_data = {
             "token": token_data.get("access_token", ""),
             "refresh_token": token_data.get("refresh_token", ""),
