@@ -239,10 +239,11 @@
 
       const codeSection = isManualCode
         ? `<div style="margin-top:0.75rem;font-size:0.75rem;color:#888;">
-             After authorizing, copy the code shown on Claude.ai and paste it below:
+             After authorizing, you land on <code style="color:#aaa">platform.claude.com/oauth/code/callback</code>.<br>
+             Copy the <strong>code=</strong> value from the URL bar (or paste the full URL — it auto-extracts):
            </div>
            <div class="manual-input">
-             <input id="code-${r.id}" type="text" placeholder="Paste authorization code..." />
+             <input id="code-${r.id}" type="text" placeholder="Paste code or full redirect URL..." />
              <button class="primary" onclick="submitCode('${r.id}')">Exchange</button>
            </div>`
         : '';

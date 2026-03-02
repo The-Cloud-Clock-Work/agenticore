@@ -293,8 +293,17 @@ async def submit_oauth_code(
 
     await store.update_status(request_id, AuthStatus.approved)
     try:
+        # If user pasted the full redirect URL, extract just the code param
+        raw_code = body.token.strip()
+        if raw_code.startswith("http"):
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(raw_code)
+            qs = parse_qs(parsed.query)
+            raw_code = qs.get("code", [raw_code])[0]
         pkce_verifier = data.get("pkce_verifier", "")
-        token_data = await oauth.exchange_code(provider, body.token, pkce_verifier)
+        _log.info("Exchanging code (len=%d) for service=%s pkce=%s",
+                  len(raw_code), data["service"], bool(pkce_verifier))
+        token_data = await oauth.exchange_code(provider, raw_code, pkce_verifier)
         vault_data = {
             "token": token_data.get("access_token", ""),
             "refresh_token": token_data.get("refresh_token", ""),
