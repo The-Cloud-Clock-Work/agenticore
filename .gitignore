@@ -9,6 +9,7 @@ dist/
 *.egg-info/
 *.egg
 package/
+packages/
 
 # Virtual environments
 .venv/
