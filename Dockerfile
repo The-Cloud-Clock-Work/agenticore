@@ -61,6 +61,9 @@ COPY --from=node-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-builder /usr/local/lib/node_modules/@anthropic-ai /usr/local/lib/node_modules/@anthropic-ai
 COPY --from=node-builder /usr/local/bin/claude /usr/local/bin/claude
 
+# Claude looks for ripgrep at /usr/local/bin/vendor/ (relative to its install location)
+RUN ln -s /usr/local/lib/node_modules/@anthropic-ai/claude-code/vendor /usr/local/bin/vendor
+
 # Python venv with all dependencies
 COPY --from=python-builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
