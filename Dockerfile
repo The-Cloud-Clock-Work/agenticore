@@ -82,6 +82,9 @@ RUN useradd -m -s /bin/bash agenticore && \
              /app/logs && \
     chown -R agenticore:agenticore /app /home/agenticore
 
+# Interactive Claude alias for exec'd shell sessions
+RUN echo 'anton() { ANTHROPIC_API_KEY="${LITELLM_MCP_GATEWAY_KEY:-${ANTHROPIC_API_KEY:-}}" claude --dangerously-skip-permissions "$@"; }' >> /etc/bash.bashrc
+
 ENV AGENTICORE_TRANSPORT=sse \
     AGENTICORE_HOST=0.0.0.0 \
     AGENTICORE_PORT=8200 \
