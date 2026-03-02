@@ -30,6 +30,7 @@ def client():
         patch("auth_broker.vault.connect", new_callable=AsyncMock),
         patch("auth_broker.vault.close", new_callable=AsyncMock),
         patch("auth_broker.providers.load_providers"),
+        patch("auth_broker.store.append_event", new_callable=AsyncMock),
     ):
         with TestClient(app, raise_server_exceptions=False) as c:
             yield c
@@ -284,3 +285,60 @@ class TestWebSocket:
         with pytest.raises(Exception):
             with client.websocket_connect("/auth/ws?token=wrong-key") as ws:
                 ws.receive_text()
+
+
+class TestListEvents:
+    def test_returns_events_list(self, client):
+        events = [
+            {"ts": 1700000001, "event": "new_request", "data": {"service": "github"}},
+            {"ts": 1700000000, "event": "token_ready", "data": {"service": "github"}},
+        ]
+        with patch("auth_broker.store.get_events", new_callable=AsyncMock, return_value=events):
+            resp = client.get("/auth/events", headers=auth_headers())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["count"] == 2
+        assert body["events"][0]["event"] == "new_request"
+
+    def test_empty_events(self, client):
+        with patch("auth_broker.store.get_events", new_callable=AsyncMock, return_value=[]):
+            resp = client.get("/auth/events", headers=auth_headers())
+        assert resp.status_code == 200
+        assert resp.json() == {"count": 0, "events": []}
+
+    def test_limit_param_forwarded(self, client):
+        with patch("auth_broker.store.get_events", new_callable=AsyncMock, return_value=[]) as mock_get:
+            client.get("/auth/events?limit=10", headers=auth_headers())
+        mock_get.assert_called_once_with(limit=10)
+
+    def test_no_auth_returns_401(self, client):
+        resp = client.get("/auth/events")
+        assert resp.status_code in (401, 403)
+
+
+class TestListHistory:
+    def test_returns_history_list(self, client):
+        reqs = [
+            {"id": "req-1", "service": "anthropic", "status": "completed", "consumer_id": "default", "created_at": "1700000000"},
+        ]
+        with patch("auth_broker.store.get_history", new_callable=AsyncMock, return_value=reqs):
+            resp = client.get("/auth/history", headers=auth_headers())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["count"] == 1
+        assert body["requests"][0]["service"] == "anthropic"
+
+    def test_empty_history(self, client):
+        with patch("auth_broker.store.get_history", new_callable=AsyncMock, return_value=[]):
+            resp = client.get("/auth/history", headers=auth_headers())
+        assert resp.status_code == 200
+        assert resp.json() == {"count": 0, "requests": []}
+
+    def test_limit_param_forwarded(self, client):
+        with patch("auth_broker.store.get_history", new_callable=AsyncMock, return_value=[]) as mock_get:
+            client.get("/auth/history?limit=25", headers=auth_headers())
+        mock_get.assert_called_once_with(limit=25)
+
+    def test_no_auth_returns_401(self, client):
+        resp = client.get("/auth/history")
+        assert resp.status_code in (401, 403)

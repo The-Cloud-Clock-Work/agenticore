@@ -132,6 +132,11 @@
     </div>
   </section>
 
+  <section>
+    <h2>Request History</h2>
+    <div id="history-list"><div class="empty">Loading...</div></div>
+  </section>
+
   <div class="toast" id="toast"></div>
 
   <script>
@@ -153,6 +158,7 @@
         logEntry(`${msg.event}: ${JSON.stringify(msg.data)}`);
         if (['new_request', 'token_ready', 'token_failed', 'request_denied'].includes(msg.event)) {
           loadPending();
+          loadHistory();
           toast(eventLabel(msg));
         }
       };
@@ -178,6 +184,27 @@
       const r = await fetch('/auth/pending', { headers });
       const data = await r.json();
       renderPending(data.requests || []);
+    }
+
+    async function loadEvents() {
+      try {
+        const r = await fetch('/auth/events?limit=200', { headers });
+        const data = await r.json();
+        _logEntries = (data.events || []).map(e => ({
+          ts: new Date(e.ts * 1000).toLocaleTimeString(),
+          msg: `${e.event}: ${JSON.stringify(e.data)}`
+        }));
+        _logPage = 0;
+        renderLog();
+      } catch (_) {}
+    }
+
+    async function loadHistory() {
+      try {
+        const r = await fetch('/auth/history?limit=50', { headers });
+        const data = await r.json();
+        renderHistory(data.requests || []);
+      } catch (_) {}
     }
 
     async function deny(id) {
@@ -270,6 +297,25 @@
       </div>`;
     }
 
+    function renderHistory(requests) {
+      const el = document.getElementById('history-list');
+      if (requests.length === 0) {
+        el.innerHTML = '<div class="empty">No history yet.</div>';
+        return;
+      }
+      el.innerHTML = requests.map(r => {
+        const ts = r.created_at ? new Date(parseInt(r.created_at) * 1000).toLocaleString() : '';
+        const shortId = (r.id || '').slice(0, 8);
+        return `<div class="card">
+          <div class="card-header">
+            <span class="service-name">${r.service || 'unknown'}</span>
+            <span class="status-badge status-${r.status}">${r.status}</span>
+          </div>
+          <div class="card-meta">ID: ${shortId} | Consumer: ${r.consumer_id || 'default'} | ${ts}</div>
+        </div>`;
+      }).join('');
+    }
+
     // ── Utils ────────────────────────────────────────────────────────────────
     const LOG_PAGE_SIZE = 15;
     const LOG_MAX = 500;
@@ -330,6 +376,8 @@
     // ── Init ─────────────────────────────────────────────────────────────────
     connectWS();
     loadPending();
+    loadEvents();
+    loadHistory();
     setInterval(loadPending, 30000);  // fallback poll every 30s
   </script>
 </body>

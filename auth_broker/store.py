@@ -11,6 +11,9 @@ from auth_broker.models import AuthStatus
 
 _redis: Optional[aioredis.Redis] = None
 
+EVENT_MAX = 1000
+HISTORY_MAX = 200
+
 
 async def connect(redis_url: str) -> None:
     global _redis
@@ -66,6 +69,9 @@ async def update_status(request_id: str, status: AuthStatus, **extra) -> None:
     await _redis.hset(f"auth:request:{request_id}", mapping=updates)
     if status in (AuthStatus.completed, AuthStatus.denied):
         await _redis.zrem("auth:pending", request_id)
+        data = await get_request(request_id)
+        if data:
+            await push_history(data)
 
 
 async def get_pending() -> List[dict]:
@@ -93,3 +99,31 @@ async def get_request_by_state(state: str) -> Optional[str]:
 async def delete_request(request_id: str) -> None:
     await _redis.delete(f"auth:request:{request_id}")
     await _redis.zrem("auth:pending", request_id)
+
+
+async def append_event(event: str, data: dict) -> None:
+    """Append an event to the persistent event log (Redis list, newest-first)."""
+    entry = json.dumps({"ts": int(time.time()), "event": event, "data": data})
+    await _redis.lpush("auth:events", entry)
+    await _redis.ltrim("auth:events", 0, EVENT_MAX - 1)
+
+
+async def get_events(limit: int = 200) -> list:
+    """Return up to `limit` events, newest first."""
+    raw = await _redis.lrange("auth:events", 0, limit - 1)
+    return [json.loads(r) for r in raw]
+
+
+async def push_history(request_data: dict) -> None:
+    """Add completed/denied request to history ZSET (scored by timestamp)."""
+    ts = int(time.time())
+    await _redis.zadd("auth:history", {json.dumps(request_data): ts})
+    count = await _redis.zcard("auth:history")
+    if count > HISTORY_MAX:
+        await _redis.zremrangebyrank("auth:history", 0, count - HISTORY_MAX - 1)
+
+
+async def get_history(limit: int = 50) -> list:
+    """Return up to `limit` historical requests, newest first."""
+    raw = await _redis.zrevrange("auth:history", 0, limit - 1)
+    return [json.loads(r) for r in raw]

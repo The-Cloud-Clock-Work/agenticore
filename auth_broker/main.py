@@ -100,6 +100,7 @@ async def oauth_callback(code: str, state: str) -> HTMLResponse:
         await ws_module.ws_manager.broadcast(
             "token_ready", {"id": request_id, "service": data["service"]}
         )
+        await store.append_event("token_ready", {"id": request_id, "service": data["service"]})
         return HTMLResponse(
             "<html><body style='font-family:monospace;padding:2rem'>"
             "<h2>✅ Authorized</h2>"
@@ -111,6 +112,7 @@ async def oauth_callback(code: str, state: str) -> HTMLResponse:
         await ws_module.ws_manager.broadcast(
             "token_failed", {"id": request_id, "service": data["service"], "error": str(e)}
         )
+        await store.append_event("token_failed", {"id": request_id, "service": data["service"], "error": str(e)})
         raise HTTPException(status_code=500, detail=f"Token exchange failed: {e}")
 
 
@@ -196,18 +198,17 @@ async def create_auth_request(
             manual_code="1" if manual_code else "0",
         )
 
-    await ws_module.ws_manager.broadcast(
-        "new_request",
-        {
-            "id": request_id,
-            "service": req.service,
-            "consumer_id": req.consumer_id,
-            "auth_type": provider.get("auth_type"),
-            "auth_url": auth_url,
-            "manual_code": provider.get("manual_code", False),
-            "display_name": provider.get("display_name", req.service),
-        },
-    )
+    _event_data = {
+        "id": request_id,
+        "service": req.service,
+        "consumer_id": req.consumer_id,
+        "auth_type": provider.get("auth_type"),
+        "auth_url": auth_url,
+        "manual_code": provider.get("manual_code", False),
+        "display_name": provider.get("display_name", req.service),
+    }
+    await ws_module.ws_manager.broadcast("new_request", _event_data)
+    await store.append_event("new_request", _event_data)
 
     return {
         "request_id": request_id,
@@ -279,6 +280,7 @@ async def deny_request(request_id: str, _: None = Depends(require_auth)) -> dict
         raise HTTPException(status_code=404, detail="Request not found")
     await store.update_status(request_id, AuthStatus.denied)
     await ws_module.ws_manager.broadcast("request_denied", {"id": request_id})
+    await store.append_event("request_denied", {"id": request_id})
     return {"request_id": request_id, "status": "denied"}
 
 
@@ -324,6 +326,7 @@ async def submit_oauth_code(
         await ws_module.ws_manager.broadcast(
             "token_ready", {"id": request_id, "service": data["service"]}
         )
+        await store.append_event("token_ready", {"id": request_id, "service": data["service"]})
         return {"request_id": request_id, "status": "completed"}
     except Exception as exc:
         _log.error("submit_oauth_code failed at %s: %r", type(exc).__name__, exc)
@@ -351,7 +354,22 @@ async def manual_token(
     await ws_module.ws_manager.broadcast(
         "token_ready", {"id": request_id, "service": data["service"]}
     )
+    await store.append_event("token_ready", {"id": request_id, "service": data["service"]})
     return {"request_id": request_id, "status": "completed"}
+
+
+@app.get("/auth/events")
+async def list_events(limit: int = 200, _: None = Depends(require_auth)) -> dict:
+    """Persistent event log — newest first."""
+    events = await store.get_events(limit=limit)
+    return {"count": len(events), "events": events}
+
+
+@app.get("/auth/history")
+async def list_history(limit: int = 50, _: None = Depends(require_auth)) -> dict:
+    """Completed/denied request audit trail — newest first."""
+    history = await store.get_history(limit=limit)
+    return {"count": len(history), "requests": history}
 
 
 # ── WebSocket ────────────────────────────────────────────────────────────────

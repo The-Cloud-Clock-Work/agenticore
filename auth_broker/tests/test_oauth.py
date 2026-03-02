@@ -81,7 +81,10 @@ class TestExchangeCode:
     @patch.dict(os.environ, {"GITHUB_CLIENT_ID": "cid", "GITHUB_CLIENT_SECRET": "sec"})
     async def test_4xx_raises(self):
         mock_resp = MagicMock()
-        mock_resp.raise_for_status.side_effect = Exception("400 Bad Request")
+        mock_resp.is_success = False
+        mock_resp.status_code = 400
+        mock_resp.text = "Bad Request"
+        mock_resp.request = MagicMock()
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
