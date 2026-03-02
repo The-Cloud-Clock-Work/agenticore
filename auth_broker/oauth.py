@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import logging
 import os
 import secrets as _secrets
 from urllib.parse import urlencode
@@ -9,6 +10,8 @@ from urllib.parse import urlencode
 import httpx
 
 from auth_broker.config import get_config
+
+_log = logging.getLogger(__name__)
 
 
 def _callback_url(provider: dict | None = None) -> str:
@@ -69,5 +72,11 @@ async def exchange_code(provider: dict, code: str, code_verifier: str = "") -> d
             headers={"Accept": "application/json", **extra},
             timeout=15.0,
         )
-        resp.raise_for_status()
+        if not resp.is_success:
+            _log.error("Token exchange failed: %s %s — %s", resp.status_code, provider["token_url"], resp.text)
+            raise httpx.HTTPStatusError(
+                f"HTTP {resp.status_code}: {resp.text}",
+                request=resp.request,
+                response=resp,
+            )
         return resp.json()
