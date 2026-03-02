@@ -87,7 +87,10 @@
   </style>
 </head>
 <body>
-  <h1>⚡ Auth Broker</h1>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+    <h1>⚡ Auth Broker</h1>
+    <a href="/logout" style="font-size:0.75rem;color:#555;text-decoration:none;border:1px solid #333;padding:0.2rem 0.6rem;border-radius:3px;font-family:monospace" onmouseover="this.style.color='#ff4444';this.style.borderColor='#ff4444'" onmouseout="this.style.color='#555';this.style.borderColor='#333'">logout</a>
+  </div>
   <div class="status-bar">
     <div class="dot" id="ws-dot"></div>
     <span id="ws-status">connecting...</span>
