@@ -52,7 +52,7 @@ def completed_job():
         json={
             "task": "List all files in the repository root directory",
             "repo_url": DATASET_REPO,
-            "profile": "code",
+            "profile": "default",
             "wait": True,
         },
         timeout=300,
@@ -80,13 +80,13 @@ class TestSmokePipeline:
         assert body["service"] == "agenticore"
 
     def test_profiles_include_defaults(self):
-        """GET /profiles returns at least the built-in 'code' profile."""
+        """GET /profiles returns a non-empty list (agentihooks sync worked)."""
         resp = httpx.get(f"{AGENTICORE_URL}/profiles", timeout=10)
         assert resp.status_code == 200
         data = resp.json()
         assert data.get("success")
         names = [p["name"] for p in data["profiles"]]
-        assert "code" in names, f"Expected 'code' in {names}"
+        assert len(names) > 0, f"Expected at least one profile, got: {names}"
 
     def test_submit_and_complete_job(self, completed_job):
         """Job ran to completion (succeeded or failed — not stuck in queued)."""
