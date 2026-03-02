@@ -28,6 +28,7 @@ COPY pyproject.toml .
 COPY agenticore/ agenticore/
 
 RUN pip install --no-cache-dir . && \
+    pip install --no-cache-dir "agentihooks @ git+https://github.com/The-Cloud-Clock-Work/agentihooks.git" && \
     pip uninstall -y pip setuptools wheel 2>/dev/null; true
 
 # ── Stage 3: Runtime ─────────────────────────────────────────────
