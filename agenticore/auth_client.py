@@ -48,7 +48,11 @@ class AuthClient:
                     headers=self._headers(),
                 )
             if resp.status_code == 200:
-                return resp.json().get("token"), True
+                data = resp.json()
+                if not data.get("valid"):
+                    logger.warning("Auth Broker token invalid/expired for service=%s — using static fallback", service)
+                    return None, True
+                return data.get("token"), True
         except httpx.ConnectError as e:
             logger.warning("Auth Broker unreachable: %s", e)
             return None, True
