@@ -191,7 +191,8 @@ class AntonGoogleAuth:
         title: str = "ANTON",
         subtitle: str = "Auth Broker",
     ) -> None:
-        self.admin_email = admin_email or os.getenv("AUTH_BROKER_ADMIN_EMAIL", "")
+        raw = admin_email or os.getenv("AUTH_BROKER_ADMIN_EMAIL", "")
+        self._allowed = {e.strip().lower() for e in raw.split(",") if e.strip()}
         self._redis_url = redis_url or os.getenv("AUTH_REDIS_URL", os.getenv("REDIS_URL", ""))
         self._base = (callback_base_url or os.getenv("AUTH_CALLBACK_BASE_URL", "")).rstrip("/")
         self._cid = google_client_id or os.getenv("GOOGLE_CLIENT_ID", "")
@@ -241,7 +242,7 @@ class AntonGoogleAuth:
         if email:
             return email
         cf_email = request.headers.get("Cf-Access-Authenticated-User-Email", "")
-        if cf_email and (not self.admin_email or cf_email == self.admin_email):
+        if cf_email and (not self._allowed or cf_email.lower() in self._allowed):
             await self._store.create(cf_email)
             return cf_email
         return None
@@ -305,7 +306,7 @@ class AntonGoogleAuth:
             except Exception:
                 return RedirectResponse("/login?error=exchange_failed")
 
-            if _auth.admin_email and email != _auth.admin_email:
+            if _auth._allowed and email.lower() not in _auth._allowed:
                 return RedirectResponse("/login?error=unauthorized")
 
             token = await _auth._store.create(email)
