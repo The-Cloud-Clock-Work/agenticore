@@ -80,6 +80,7 @@ jobs:
           ANTHROPIC_API_KEY=${{ steps.resolve_key.outputs.api_key }}
           ANTHROPIC_BASE_URL=${{ steps.anthropic.outputs.url }}
           GITHUB_TOKEN=${{ secrets.ORG_GITHUB_TOKEN }}
+          AGENTICORE_AGENTIHOOKS_URL=https://github.com/The-Cloud-Clock-Work/agentihooks
           EOF
 
           # Build ANTHROPIC_CUSTOM_HEADERS for Claude CLI when using CF Access-protected proxy

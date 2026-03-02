@@ -9,7 +9,8 @@ dist/
 *.egg-info/
 *.egg
 package/
-packages/
+packages/*
+!packages/anton_google_auth
 
 # Virtual environments
 .venv/
