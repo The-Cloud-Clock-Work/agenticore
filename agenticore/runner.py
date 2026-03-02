@@ -56,7 +56,19 @@ def _fetch_from_auth_broker(service: str, consumer_id: str = "agenticore") -> Op
 
 
 def _build_env(_cwd: Optional[Path] = None) -> dict:
-    """Build full environment for the Claude subprocess."""
+    """Build full environment for the Claude subprocess.
+
+    Credential resolution order:
+      1. Auth Broker (AUTH_BROKER_URL) — Claude Max subscription token, direct Anthropic.
+         When broker returns a token, ANTHROPIC_BASE_URL is cleared so the CLI hits
+         Anthropic directly (not the LiteLLM proxy).
+      2. Static env fallback — ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL as configured
+         in the container (typically pointing at the LiteLLM proxy).
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+
     env = os.environ.copy()
     env.update(_build_otel_env())
 
@@ -65,16 +77,31 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
         env["CLAUDE_CONFIG_DIR"] = cfg.claude.config_dir
 
     if cfg.auth_broker.url:
-        # Auth Broker takes priority over static config
+        # Attempt Auth Broker — returns Claude Max subscription token
         key = _fetch_from_auth_broker("anthropic")
         if key:
             env["ANTHROPIC_API_KEY"] = key
+            # Broker token is a real Anthropic credential — route directly,
+            # not through the LiteLLM proxy
+            env.pop("ANTHROPIC_BASE_URL", None)
+            _log.debug("auth: using Auth Broker token (direct Anthropic)")
+        else:
+            # Broker configured but unavailable or no token — fall back to
+            # static ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from env (LiteLLM)
+            _log.warning(
+                "Auth Broker unreachable or returned no Anthropic token — "
+                "falling back to static ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL"
+            )
+
         gh = _fetch_from_auth_broker("github")
         if gh:
             env["GITHUB_TOKEN"] = gh
+        elif cfg.github.token:
+            env["GITHUB_TOKEN"] = cfg.github.token
     elif cfg.github.token:
-        # Fallback to static config when broker not configured
+        # No broker — static config only
         env["GITHUB_TOKEN"] = cfg.github.token
+        _log.debug("auth: no Auth Broker configured, using static credentials")
 
     # Auto-build ANTHROPIC_CUSTOM_HEADERS for CF Access-protected proxies
     cf_id = env.get("CF_ACCESS_CLIENT_ID", "")
