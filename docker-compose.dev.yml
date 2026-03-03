@@ -1,0 +1,16 @@
+services:
+  agenticore:
+    build: .
+    ports:
+      - "8200:8200"
+    volumes:
+      - agenticore-shared:/shared
+      - /home/iamroot/dev/agentihooks:/opt/agentihooks-src
+    env_file:
+      - .env
+    environment:
+      HOME: /shared
+      AGENTIHOOKS_MCP_FILE: /shared/gateway-mcp.json
+
+volumes:
+  agenticore-shared:

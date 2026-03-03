@@ -28,8 +28,7 @@ COPY pyproject.toml .
 COPY agenticore/ agenticore/
 
 RUN pip install --no-cache-dir . && \
-    pip install --no-cache-dir "agentihooks @ git+https://github.com/The-Cloud-Clock-Work/agentihooks.git" && \
-    pip uninstall -y pip setuptools wheel 2>/dev/null; true
+    pip install --no-cache-dir "agentihooks @ git+https://github.com/The-Cloud-Clock-Work/agentihooks.git"
 
 # ── Stage 3: Runtime ─────────────────────────────────────────────
 FROM python:3.13-slim
@@ -40,11 +39,21 @@ LABEL org.opencontainers.image.licenses="MIT"
 
 ARG GH_VERSION
 
-# Minimal runtime packages — no gnupg, no npm
+# Runtime packages — dev/debug tools + AWS CLI deps
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git curl && \
-    rm -rf /var/lib/apt/lists/* && \
-    pip uninstall -y pip setuptools 2>/dev/null; true
+    apt-get install -y --no-install-recommends \
+      git curl wget jq vim less \
+      unzip groff \
+      netcat-openbsd iputils-ping dnsutils procps && \
+    rm -rf /var/lib/apt/lists/*
+
+# AWS CLI
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip && \
+    unzip -q /tmp/awscliv2.zip -d /tmp && \
+    /tmp/aws/install && \
+    rm -rf /tmp/awscliv2.zip /tmp/aws && \
+    aws --version
 
 # gh CLI — direct tarball, no apt key needed
 RUN ARCH=$(dpkg --print-architecture) && \
@@ -79,12 +88,14 @@ RUN useradd -m -s /bin/bash agenticore && \
     mkdir -p /home/agenticore/.agenticore/jobs \
              /home/agenticore/.agenticore/profiles \
              /home/agenticore/agenticore-repos \
+             /opt/agenticore \
              /app/logs && \
-    chown -R agenticore:agenticore /app /home/agenticore
+    chown -R agenticore:agenticore /app /home/agenticore /opt/venv /opt/agenticore
 
-# Interactive shell functions for exec'd sessions
-COPY docker/custom-bashrc /etc/bash.bashrc.d/custom-bashrc
-RUN cat /etc/bash.bashrc.d/custom-bashrc >> /etc/bash.bashrc
+# Pod-specific shell functions + entrypoint
+COPY docker/bashrc /opt/agenticore/bashrc
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 ENV AGENTICORE_TRANSPORT=sse \
     AGENTICORE_HOST=0.0.0.0 \
@@ -98,4 +109,5 @@ EXPOSE 8200
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf http://localhost:8200/health || exit 1
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "agenticore"]
