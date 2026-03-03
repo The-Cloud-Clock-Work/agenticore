@@ -88,6 +88,24 @@ class AuthBrokerConfig:
 
 
 @dataclass
+class AgentModeConfig:
+    enabled: bool = False
+    package_dir: str = "/app/package"
+    evaluation_dir: str = "/app/evaluation"
+    repo_url: str = ""
+    repo_branch: str = "main"
+    model: str = "sonnet"
+    max_turns: int = 80
+    permission_mode: str = "bypassPermissions"
+    output_format: str = "json"
+    effort: str = ""
+    timeout: int = 3600
+    max_retry_attempts: int = 3
+    session_ttl: int = 86400
+    append_system_prompt: bool = True
+
+
+@dataclass
 class LangfuseConfig:
     host: str = "https://cloud.langfuse.com"
     public_key: str = ""
@@ -104,6 +122,7 @@ class Config:
     github: GithubConfig = field(default_factory=GithubConfig)
     langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
     auth_broker: AuthBrokerConfig = field(default_factory=AuthBrokerConfig)
+    agent_mode: AgentModeConfig = field(default_factory=AgentModeConfig)
     agentihooks_path: str = ""
     agentihooks_url: str = ""
     agentihooks_sync_interval: int = 300  # seconds between background re-syncs; 0 to disable
@@ -255,6 +274,24 @@ def load_config(config_path: Optional[str] = None) -> Config:
         secret_key=_env("LANGFUSE_SECRET_KEY", langfuse_raw.get("secret_key", "")),
     )
 
+    # Agent Mode — env overrides
+    agent_mode = AgentModeConfig(
+        enabled=_env_bool("AGENT_MODE", "false"),
+        package_dir=_env("AGENT_MODE_PACKAGE_DIR", "/app/package"),
+        evaluation_dir=_env("AGENT_MODE_EVALUATION_DIR", "/app/evaluation"),
+        repo_url=_env("PACKAGE_REPO_URL", ""),
+        repo_branch=_env("PACKAGE_REPO_BRANCH", "main"),
+        model=_env("AGENT_MODE_MODEL", "sonnet"),
+        max_turns=_env_int("AGENT_MODE_MAX_TURNS", "80"),
+        permission_mode=_env("AGENT_MODE_PERMISSION_MODE", "bypassPermissions"),
+        output_format=_env("AGENT_MODE_OUTPUT_FORMAT", "json"),
+        effort=_env("AGENT_MODE_EFFORT", ""),
+        timeout=_env_int("AGENT_MODE_TIMEOUT", "3600"),
+        max_retry_attempts=_env_int("AGENT_MODE_MAX_RETRIES", "3"),
+        session_ttl=_env_int("AGENT_MODE_SESSION_TTL", "86400"),
+        append_system_prompt=_env_bool("AGENT_MODE_APPEND_SYSTEM_PROMPT", "true"),
+    )
+
     agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
     agentihooks_url = _env("AGENTICORE_AGENTIHOOKS_URL", raw.get("agentihooks_url", ""))
     agentihooks_sync_interval = _env_int(
@@ -279,6 +316,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         github=github,
         langfuse=langfuse,
         auth_broker=auth_broker,
+        agent_mode=agent_mode,
         agentihooks_path=agentihooks_path,
         agentihooks_url=agentihooks_url,
         agentihooks_sync_interval=agentihooks_sync_interval,

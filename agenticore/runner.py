@@ -119,6 +119,10 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
     return env
 
 
+# Public alias for agent_mode and other modules that need the subprocess env
+build_subprocess_env = _build_env
+
+
 def _extract_session_id(output_text: str) -> Optional[str]:
     """Extract session_id from Claude's JSON output (last JSON line containing it)."""
     for line in reversed(output_text.splitlines()):

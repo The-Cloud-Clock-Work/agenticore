@@ -327,6 +327,133 @@ async def execute_plan(
         return json.dumps({"success": False, "error": str(e)})
 
 
+def _register_agent_mode_tools():
+    """Register agent_completions MCP tool. Called only when AGENT_MODE=true."""
+
+    @mcp.tool()
+    async def agent_completions(
+        message: str,
+        uuid: str,
+        wait: bool = True,
+        stateless: bool = False,
+        model: str = "",
+        max_turns: int = 0,
+        system_prompt: str = "",
+        append_system_prompt: bool = True,
+        permission_mode: str = "",
+        output_format: str = "",
+        effort: str = "",
+        max_budget_usd: float = 0,
+        fallback_model: str = "",
+        allowed_tools: str = "",
+        disallowed_tools: str = "",
+        timeout: int = 0,
+        context: str = "",
+        meta: str = "{}",
+    ) -> str:
+        """Call the agent with a message. Returns JSON with result.
+
+        Args:
+            message: The task/prompt for the agent
+            uuid: External correlation ID for session tracking
+            wait: True=sync (block until done), False=fire-and-forget (202)
+            stateless: True=fresh session each call, False=resume conversation
+            model: Model alias or full ID (default from config)
+            max_turns: Agentic turn limit (default from config)
+            system_prompt: Inline system prompt override (replaces system.md)
+            append_system_prompt: True=append to defaults, False=replace defaults
+            permission_mode: bypassPermissions, dontAsk, plan, etc.
+            output_format: json, text, stream-json
+            effort: low, medium, high
+            max_budget_usd: Spending cap
+            fallback_model: Auto-fallback on overload
+            allowed_tools: Comma-separated tools that skip permission prompts
+            disallowed_tools: Comma-separated tools removed entirely
+            timeout: Max execution time in seconds
+            context: JSON dict passed via stdin to Claude
+            meta: Platform metadata JSON for hooks
+
+        Returns:
+            JSON with agent response or acceptance message
+        """
+        try:
+            from agenticore.agent_mode.agent import AgentExecutor
+
+            ctx = None
+            if context:
+                try:
+                    ctx = json.loads(context)
+                except json.JSONDecodeError:
+                    return json.dumps({"success": False, "error": "Invalid context JSON"})
+
+            try:
+                meta_dict = json.loads(meta) if meta else {}
+            except json.JSONDecodeError:
+                meta_dict = {}
+
+            executor = AgentExecutor()
+
+            if wait:
+                result = await executor.execute(
+                    message=message,
+                    external_uuid=uuid,
+                    wait=wait,
+                    stateless=stateless,
+                    model=model,
+                    max_turns=max_turns,
+                    system_prompt=system_prompt,
+                    append_system_prompt=append_system_prompt,
+                    permission_mode=permission_mode,
+                    output_format=output_format,
+                    effort=effort,
+                    max_budget_usd=max_budget_usd,
+                    fallback_model=fallback_model,
+                    allowed_tools=allowed_tools,
+                    disallowed_tools=disallowed_tools,
+                    timeout=timeout,
+                    context=ctx,
+                    meta=meta_dict,
+                )
+                return json.dumps({"success": not result.get("is_error", False), **result})
+            else:
+                # Fire-and-forget: launch in background
+                import asyncio
+
+                _bg = set()
+                t = asyncio.create_task(
+                    executor.execute(
+                        message=message,
+                        external_uuid=uuid,
+                        wait=False,
+                        stateless=stateless,
+                        model=model,
+                        max_turns=max_turns,
+                        system_prompt=system_prompt,
+                        append_system_prompt=append_system_prompt,
+                        permission_mode=permission_mode,
+                        output_format=output_format,
+                        effort=effort,
+                        max_budget_usd=max_budget_usd,
+                        fallback_model=fallback_model,
+                        allowed_tools=allowed_tools,
+                        disallowed_tools=disallowed_tools,
+                        timeout=timeout,
+                        context=ctx,
+                        meta=meta_dict,
+                    )
+                )
+                _agent_bg_tasks.add(t)
+                t.add_done_callback(_agent_bg_tasks.discard)
+                return json.dumps({"success": True, "status": "accepted", "uuid": uuid})
+
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
+
+# Background task references for agent mode fire-and-forget
+_agent_bg_tasks: set = set()
+
+
 @mcp.tool()
 async def list_profiles() -> str:
     """List available execution profiles.
@@ -362,7 +489,13 @@ def _build_rest_app():
     from starlette.routing import Route
 
     def health(request: Request):  # noqa: ARG001 — Starlette requires request param
-        return JSONResponse({"status": "ok", "service": "agenticore"})
+        cfg = get_config()
+        info = {"status": "ok", "service": "agenticore"}
+        if cfg.agent_mode.enabled:
+            info["agent_mode"] = True
+            info["package_dir"] = cfg.agent_mode.package_dir
+            info["default_model"] = cfg.agent_mode.model
+        return JSONResponse(info)
 
     async def post_jobs(request: Request):
         body = await request.json()
@@ -441,6 +574,77 @@ def _build_rest_app():
         status_code = 200 if data.get("success") else 400
         return JSONResponse(data, status_code=status_code)
 
+    # Agent mode routes (conditional)
+    cfg = get_config()
+    if cfg.agent_mode.enabled:
+
+        async def post_completions(request: Request):
+            body = await request.json()
+            if "message" not in body or "uuid" not in body:
+                return JSONResponse({"success": False, "error": "message and uuid are required"}, status_code=400)
+
+            from agenticore.agent_mode.agent import AgentExecutor
+
+            ctx = body.get("context")
+            meta_dict = body.get("meta", {})
+            executor = AgentExecutor()
+            wait = body.get("wait", True)
+
+            if wait:
+                result = await executor.execute(
+                    message=body["message"],
+                    external_uuid=body["uuid"],
+                    wait=wait,
+                    stateless=body.get("stateless", False),
+                    model=body.get("model", ""),
+                    max_turns=body.get("max_turns", 0),
+                    system_prompt=body.get("system_prompt", ""),
+                    append_system_prompt=body.get("append_system_prompt", True),
+                    permission_mode=body.get("permission_mode", ""),
+                    output_format=body.get("output_format", ""),
+                    effort=body.get("effort", ""),
+                    max_budget_usd=body.get("max_budget_usd", 0),
+                    fallback_model=body.get("fallback_model", ""),
+                    allowed_tools=body.get("allowed_tools", ""),
+                    disallowed_tools=body.get("disallowed_tools", ""),
+                    timeout=body.get("timeout", 0),
+                    context=ctx,
+                    meta=meta_dict,
+                )
+                is_error = result.get("is_error", False)
+                return JSONResponse(
+                    {"success": not is_error, **result},
+                    status_code=200 if not is_error else 500,
+                )
+            else:
+                import asyncio
+
+                t = asyncio.create_task(
+                    executor.execute(
+                        message=body["message"],
+                        external_uuid=body["uuid"],
+                        wait=False,
+                        stateless=body.get("stateless", False),
+                        model=body.get("model", ""),
+                        max_turns=body.get("max_turns", 0),
+                        system_prompt=body.get("system_prompt", ""),
+                        append_system_prompt=body.get("append_system_prompt", True),
+                        permission_mode=body.get("permission_mode", ""),
+                        output_format=body.get("output_format", ""),
+                        effort=body.get("effort", ""),
+                        max_budget_usd=body.get("max_budget_usd", 0),
+                        fallback_model=body.get("fallback_model", ""),
+                        allowed_tools=body.get("allowed_tools", ""),
+                        disallowed_tools=body.get("disallowed_tools", ""),
+                        timeout=body.get("timeout", 0),
+                        context=ctx,
+                        meta=meta_dict,
+                    )
+                )
+                _agent_bg_tasks.add(t)
+                t.add_done_callback(_agent_bg_tasks.discard)
+                return JSONResponse({"success": True, "status": "accepted", "uuid": body["uuid"]}, status_code=202)
+
     routes = [
         Route("/health", health, methods=["GET"]),
         Route("/jobs", post_jobs, methods=["POST"]),
@@ -453,6 +657,9 @@ def _build_rest_app():
         Route("/plans/{plan_id}", get_plan_route, methods=["GET"]),
         Route("/plans/{plan_id}/execute", post_execute_plan, methods=["POST"]),
     ]
+
+    if cfg.agent_mode.enabled:
+        routes.insert(1, Route("/completions", post_completions, methods=["POST"]))
 
     return Starlette(routes=routes)
 
@@ -628,6 +835,14 @@ def main():
 
     _auto_sync_agentihooks(cfg)
     _auto_sync_mcp_lib(cfg)
+
+    # Agent mode initialization
+    if cfg.agent_mode.enabled:
+        print("Agent mode enabled — initializing...", file=sys.stderr)
+        _register_agent_mode_tools()
+        from agenticore.agent_mode.initializer import initialize_agent_mode
+
+        initialize_agent_mode()
 
     tools = mcp._tool_manager.list_tools()
     print(f"Tools: {len(tools)}", file=sys.stderr)
