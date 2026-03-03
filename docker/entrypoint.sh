@@ -16,7 +16,7 @@ fi
 PROFILE="${AGENTICORE_DEFAULT_PROFILE:-default}"
 agentihooks global --profile "$PROFILE"
 
-# Install gateway MCP servers if file path is configured
+# Install gateway MCP servers if file path is configured and exists on the volume
 if [ -n "${AGENTIHOOKS_MCP_FILE:-}" ] && [ -f "$AGENTIHOOKS_MCP_FILE" ]; then
   agentihooks --mcp "$AGENTIHOOKS_MCP_FILE"
 fi

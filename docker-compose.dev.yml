@@ -6,6 +6,7 @@ services:
     volumes:
       - agenticore-shared:/shared
       - /home/iamroot/dev/agentihooks:/opt/agentihooks-src
+      - ./docker/gateway-mcp.json:/shared/gateway-mcp.json:ro
     env_file:
       - .env
     environment:

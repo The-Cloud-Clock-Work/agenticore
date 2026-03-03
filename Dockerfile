@@ -89,8 +89,9 @@ RUN useradd -m -s /bin/bash agenticore && \
              /opt/agenticore \
              /app/logs \
              /app/package \
-             /app/evaluation && \
-    chown -R agenticore:agenticore /app /home/agenticore /opt/venv /opt/agenticore
+             /app/evaluation \
+             /shared && \
+    chown -R agenticore:agenticore /app /home/agenticore /opt/venv /opt/agenticore /shared
 
 # Pod-specific shell functions + entrypoint
 COPY docker/bashrc /opt/agenticore/bashrc
