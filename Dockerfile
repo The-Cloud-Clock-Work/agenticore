@@ -21,6 +21,8 @@ FROM python:3.13-slim AS python-builder
 
 WORKDIR /build
 
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
