@@ -1,4 +1,13 @@
+# Agenticore container shell config
+
+# Core aliases & functions
+alias cc='claude --dangerously-skip-permissions'
+alias gs='git status'
+alias gp='git push'
+gc() { git add -A && git commit -m "$(claude -p 'Write a short conventional commit message for this diff. Output ONLY the message, nothing else.' <<< "$(git diff --cached --stat)")"; }
 anton() { ANTHROPIC_AUTH_TOKEN="${LITELLM_MCP_GATEWAY_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}" claude --dangerously-skip-permissions "$@"; }
+
+# wkt-get — search Claude projects, pick one, cd into it
 wkt-get() {
   local query="${1:-}" projects_dir="$HOME/.claude/projects"
   local -a base_paths=()
@@ -18,3 +27,32 @@ wkt-get() {
   [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#base_paths[@]}" ] || { echo "Invalid"; return 1; }
   echo "-> ${base_paths[$((sel-1))]}"; cd "${base_paths[$((sel-1))]}" || return 1
 }
+
+# Welcome banner
+helpme() {
+  echo "========================================"
+  echo "  Agenticore - Claude Code Runner"
+  echo "========================================"
+  echo ""
+  echo "  Shell Commands:"
+  echo "    anton [args]     Claude with LiteLLM gateway auth"
+  echo "    cc [args]        Claude (skip permissions)"
+  echo "    gc               Auto-commit with AI message"
+  echo "    gs / gp          Git status / push"
+  echo "    wkt-get [q]      Find Claude project, cd into it"
+  echo "    helpme           Show this help"
+  echo ""
+  echo "  Installed Tools:"
+  echo "    claude           Claude Code CLI"
+  echo "    gh               GitHub CLI"
+  echo "    aws              AWS CLI v2"
+  echo "    uv               Python package manager"
+  echo "    git curl jq vim  Standard dev tools"
+  echo ""
+  echo "  Agenticore CLI:"
+  echo "    agenticore       Server management"
+  echo "    agentihooks      Hooks/skills/profile manager"
+  echo ""
+}
+
+helpme
