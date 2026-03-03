@@ -82,7 +82,7 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secretName }}
                   key: redis-url
-            - name: ANTHROPIC_AUTH_TOKEN
+            - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secretName }}
