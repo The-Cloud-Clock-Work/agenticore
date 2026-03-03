@@ -103,6 +103,10 @@ class AgentModeConfig:
     max_retry_attempts: int = 3
     session_ttl: int = 86400
     append_system_prompt: bool = True
+    completion_queue_enabled: bool = True
+    notification_timeout: int = 5
+    max_queue_workers: int = 1
+    default_notifications: str = "status"
 
 
 @dataclass
@@ -290,6 +294,10 @@ def load_config(config_path: Optional[str] = None) -> Config:
         max_retry_attempts=_env_int("AGENT_MODE_MAX_RETRIES", "3"),
         session_ttl=_env_int("AGENT_MODE_SESSION_TTL", "86400"),
         append_system_prompt=_env_bool("AGENT_MODE_APPEND_SYSTEM_PROMPT", "true"),
+        completion_queue_enabled=_env_bool("AGENT_MODE_QUEUE_ENABLED", "true"),
+        notification_timeout=_env_int("AGENT_MODE_NOTIFICATION_TIMEOUT", "5"),
+        max_queue_workers=_env_int("AGENT_MODE_MAX_QUEUE_WORKERS", "1"),
+        default_notifications=_env("AGENT_MODE_DEFAULT_NOTIFICATIONS", "status"),
     )
 
     agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))

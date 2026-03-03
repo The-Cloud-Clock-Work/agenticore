@@ -350,13 +350,15 @@ def _register_agent_mode_tools():
         timeout: int = 0,
         context: str = "",
         meta: str = "{}",
+        callback_url: str = "",
+        notifications: str = "status",
     ) -> str:
         """Call the agent with a message. Returns JSON with result.
 
         Args:
             message: The task/prompt for the agent
             uuid: External correlation ID for session tracking
-            wait: True=sync (block until done), False=fire-and-forget (202)
+            wait: True=sync (block until done), False=async (queued, poll or callback)
             stateless: True=fresh session each call, False=resume conversation
             model: Model alias or full ID (default from config)
             max_turns: Agentic turn limit (default from config)
@@ -372,13 +374,13 @@ def _register_agent_mode_tools():
             timeout: Max execution time in seconds
             context: JSON dict passed via stdin to Claude
             meta: Platform metadata JSON for hooks
+            callback_url: Webhook URL for async notifications
+            notifications: Comma-separated notification types (status,tool_call,thinking)
 
         Returns:
             JSON with agent response or acceptance message
         """
         try:
-            from agenticore.agent_mode.agent import AgentExecutor
-
             ctx = None
             if context:
                 try:
@@ -391,9 +393,10 @@ def _register_agent_mode_tools():
             except json.JSONDecodeError:
                 meta_dict = {}
 
-            executor = AgentExecutor()
-
             if wait:
+                from agenticore.agent_mode.agent import AgentExecutor
+
+                executor = AgentExecutor()
                 result = await executor.execute(
                     message=message,
                     external_uuid=uuid,
@@ -416,42 +419,84 @@ def _register_agent_mode_tools():
                 )
                 return json.dumps({"success": not result.get("is_error", False), **result})
             else:
-                # Fire-and-forget: launch in background
-                import asyncio
-
-                _bg = set()
-                t = asyncio.create_task(
-                    executor.execute(
+                return json.dumps(
+                    _enqueue_async_completion(
                         message=message,
-                        external_uuid=uuid,
-                        wait=False,
-                        stateless=stateless,
-                        model=model,
-                        max_turns=max_turns,
-                        system_prompt=system_prompt,
-                        append_system_prompt=append_system_prompt,
-                        permission_mode=permission_mode,
-                        output_format=output_format,
-                        effort=effort,
-                        max_budget_usd=max_budget_usd,
-                        fallback_model=fallback_model,
-                        allowed_tools=allowed_tools,
-                        disallowed_tools=disallowed_tools,
-                        timeout=timeout,
-                        context=ctx,
-                        meta=meta_dict,
+                        uuid=uuid,
+                        callback_url=callback_url,
+                        notifications_param=notifications,
+                        request_params=dict(
+                            stateless=stateless,
+                            model=model,
+                            max_turns=max_turns,
+                            system_prompt=system_prompt,
+                            append_system_prompt=append_system_prompt,
+                            permission_mode=permission_mode,
+                            output_format=output_format,
+                            effort=effort,
+                            max_budget_usd=max_budget_usd,
+                            fallback_model=fallback_model,
+                            allowed_tools=allowed_tools,
+                            disallowed_tools=disallowed_tools,
+                            timeout=timeout,
+                            context=ctx,
+                            meta=meta_dict,
+                        ),
                     )
                 )
-                _agent_bg_tasks.add(t)
-                t.add_done_callback(_agent_bg_tasks.discard)
-                return json.dumps({"success": True, "status": "accepted", "uuid": uuid})
 
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)})
 
 
-# Background task references for agent mode fire-and-forget
-_agent_bg_tasks: set = set()
+def _enqueue_async_completion(
+    message: str,
+    uuid: str,
+    callback_url: str = "",
+    notifications_param=None,
+    request_params: dict = None,
+) -> dict:
+    """Create and enqueue an async completion. Returns response dict."""
+    from agenticore.agent_mode.completions import create_completion, enqueue_completion
+    from agenticore.agent_mode.notifications import (
+        NotificationConfig,
+        parse_notifications_param,
+        save_notification_config,
+    )
+
+    completion = create_completion(
+        uuid=uuid,
+        message=message,
+        callback_url=callback_url,
+        request_params=request_params or {},
+    )
+
+    # Save notification config
+    notif_types = parse_notifications_param(notifications_param)
+    config = NotificationConfig(
+        callback_url=callback_url,
+        status=notif_types.get("status", True),
+        tool_call=notif_types.get("tool_call", False),
+        thinking=notif_types.get("thinking", False),
+    )
+    save_notification_config(uuid, config)
+
+    # Enqueue — returns None if Redis available, dict if fallback needed
+    fallback = enqueue_completion(completion)
+    if fallback is not None:
+        # No Redis — run inline as background task
+        import asyncio
+
+        from agenticore.agent_mode.worker import run_inline_completion
+
+        asyncio.create_task(run_inline_completion(fallback))
+
+    return {
+        "success": True,
+        "status": "queued",
+        "uuid": uuid,
+        "poll_url": f"/completions/{uuid}",
+    }
 
 
 @mcp.tool()
@@ -583,14 +628,14 @@ def _build_rest_app():
             if "message" not in body or "uuid" not in body:
                 return JSONResponse({"success": False, "error": "message and uuid are required"}, status_code=400)
 
-            from agenticore.agent_mode.agent import AgentExecutor
-
             ctx = body.get("context")
             meta_dict = body.get("meta", {})
-            executor = AgentExecutor()
             wait = body.get("wait", True)
 
             if wait:
+                from agenticore.agent_mode.agent import AgentExecutor
+
+                executor = AgentExecutor()
                 result = await executor.execute(
                     message=body["message"],
                     external_uuid=body["uuid"],
@@ -617,13 +662,12 @@ def _build_rest_app():
                     status_code=200 if not is_error else 500,
                 )
             else:
-                import asyncio
-
-                t = asyncio.create_task(
-                    executor.execute(
-                        message=body["message"],
-                        external_uuid=body["uuid"],
-                        wait=False,
+                result = _enqueue_async_completion(
+                    message=body["message"],
+                    uuid=body["uuid"],
+                    callback_url=body.get("callback_url", ""),
+                    notifications_param=body.get("notifications", "status"),
+                    request_params=dict(
                         stateless=body.get("stateless", False),
                         model=body.get("model", ""),
                         max_turns=body.get("max_turns", 0),
@@ -639,11 +683,50 @@ def _build_rest_app():
                         timeout=body.get("timeout", 0),
                         context=ctx,
                         meta=meta_dict,
-                    )
+                    ),
                 )
-                _agent_bg_tasks.add(t)
-                t.add_done_callback(_agent_bg_tasks.discard)
-                return JSONResponse({"success": True, "status": "accepted", "uuid": body["uuid"]}, status_code=202)
+                return JSONResponse(result, status_code=202)
+
+        async def get_completions_list(request: Request):
+            from agenticore.agent_mode.completions import list_completions
+
+            limit = int(request.query_params.get("limit", "20"))
+            status_filter = request.query_params.get("status", "")
+            completions = list_completions(limit=limit, status=status_filter or None)
+            return JSONResponse(
+                {
+                    "success": True,
+                    "count": len(completions),
+                    "completions": [c.to_dict() for c in completions],
+                }
+            )
+
+        async def get_completion_route(request: Request):
+            from agenticore.agent_mode.completions import get_completion
+
+            uuid = request.path_params["uuid"]
+            completion = get_completion(uuid)
+            if completion is None:
+                return JSONResponse(
+                    {"success": False, "error": f"Completion not found: {uuid}"},
+                    status_code=404,
+                )
+            return JSONResponse({"success": True, "completion": completion.to_dict()})
+
+        async def patch_notifications_route(request: Request):
+            from agenticore.agent_mode.notifications import update_notification_config
+
+            uuid = request.path_params["uuid"]
+            body = await request.json()
+            config = update_notification_config(uuid, **body)
+            if config is None:
+                return JSONResponse(
+                    {"success": False, "error": f"Notification config not found: {uuid}"},
+                    status_code=404,
+                )
+            from dataclasses import asdict
+
+            return JSONResponse({"success": True, "notifications": asdict(config)})
 
     routes = [
         Route("/health", health, methods=["GET"]),
@@ -659,7 +742,14 @@ def _build_rest_app():
     ]
 
     if cfg.agent_mode.enabled:
-        routes.insert(1, Route("/completions", post_completions, methods=["POST"]))
+        routes.extend(
+            [
+                Route("/completions", post_completions, methods=["POST"]),
+                Route("/completions", get_completions_list, methods=["GET"]),
+                Route("/completions/{uuid:path}", get_completion_route, methods=["GET"]),
+                Route("/completions/{uuid:path}/notifications", patch_notifications_route, methods=["PATCH"]),
+            ]
+        )
 
     return Starlette(routes=routes)
 

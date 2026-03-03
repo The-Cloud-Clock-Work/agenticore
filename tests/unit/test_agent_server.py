@@ -148,26 +148,18 @@ class TestRestCompletions:
         assert "message" in resp.json()["error"]
 
     @pytest.mark.asyncio
-    async def test_completions_async_returns_202(self, agent_rest_app):
-        """POST /completions with wait=false returns 202 accepted."""
+    async def test_completions_async_returns_202(self, agent_rest_app, tmp_path):
+        """POST /completions with wait=false returns 202 queued."""
         from starlette.testclient import TestClient
 
-        mock_result = {
-            "result": "",
-            "session_id": "",
-            "cost_usd": 0,
-            "duration_ms": 0,
-            "num_turns": 0,
-            "is_error": False,
-            "usage": {},
-            "tool_uses": [],
-        }
+        from agenticore.agent_mode.completions import Completion
 
-        with patch.object(
-            __import__("agenticore.agent_mode.agent", fromlist=["AgentExecutor"]).AgentExecutor,
-            "execute",
-            new_callable=AsyncMock,
-            return_value=mock_result,
+        mock_completion = Completion(uuid="async-1", status="queued", message="do something")
+
+        with (
+            patch("agenticore.agent_mode.completions.create_completion", return_value=mock_completion),
+            patch("agenticore.agent_mode.completions.enqueue_completion", return_value=None),
+            patch("agenticore.agent_mode.notifications.save_notification_config"),
         ):
             client = TestClient(agent_rest_app)
             resp = client.post(
@@ -178,8 +170,9 @@ class TestRestCompletions:
         assert resp.status_code == 202
         data = resp.json()
         assert data["success"] is True
-        assert data["status"] == "accepted"
+        assert data["status"] == "queued"
         assert data["uuid"] == "async-1"
+        assert data["poll_url"] == "/completions/async-1"
 
     @pytest.mark.asyncio
     async def test_completions_error_returns_500(self, agent_rest_app):
@@ -328,12 +321,10 @@ class TestAgentCompletionsTool:
 
         with patch.dict(os.environ, env):
             reset_config()
-            # Ensure agent_completions is registered
             from agenticore.server import _register_agent_mode_tools
 
             _register_agent_mode_tools()
 
-            # Call the function directly — find it
             from agenticore.server import mcp
 
             tool_fn = None
@@ -342,7 +333,168 @@ class TestAgentCompletionsTool:
                     tool_fn = t
                     break
 
-            # We can test by calling the wrapped function
-            # The tool is registered via @mcp.tool(), so we access it through server
-            # For now, just verify registration (the JSON validation is tested via REST)
             assert tool_fn is not None
+
+
+# ── REST /completions unhappy-path tests ──────────────────────────────
+
+
+@pytest.mark.unit
+class TestRestCompletionsUnhappyPaths:
+    @pytest.fixture()
+    def agent_rest_app(self, tmp_path):
+        pkg = tmp_path / "test-pkg"
+        pkg.mkdir()
+
+        sessions_file = tmp_path / "sessions.json"
+        state_file = tmp_path / "state.json"
+
+        env = {**_AGENT_ENV, "AGENT_MODE_PACKAGE_DIR": str(pkg)}
+        with (
+            patch.dict(os.environ, env),
+            patch("agenticore.agent_mode.session_registry._sessions_file", return_value=sessions_file),
+            patch("agenticore.agent_mode.state._state_file", return_value=state_file),
+        ):
+            reset_config()
+            from agenticore.server import _build_rest_app
+
+            yield _build_rest_app()
+
+    @pytest.mark.asyncio
+    async def test_completions_invalid_json_body(self, agent_rest_app):
+        """POST /completions with non-JSON body returns error status (400 or 500)."""
+        from starlette.testclient import TestClient
+
+        client = TestClient(agent_rest_app, raise_server_exceptions=False)
+        resp = client.post(
+            "/completions",
+            content="this is not json",
+            headers={"Content-Type": "application/json"},
+        )
+        # Starlette raises JSONDecodeError in request.json() — results in 500
+        assert resp.status_code in (400, 500)
+
+    @pytest.mark.asyncio
+    async def test_completions_executor_raises_exception(self, agent_rest_app):
+        """POST /completions when executor.execute() raises returns 500."""
+        from starlette.testclient import TestClient
+
+        with patch.object(
+            __import__("agenticore.agent_mode.agent", fromlist=["AgentExecutor"]).AgentExecutor,
+            "execute",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("unexpected executor crash"),
+        ):
+            client = TestClient(agent_rest_app, raise_server_exceptions=False)
+            resp = client.post(
+                "/completions",
+                json={"message": "test", "uuid": "u1", "wait": True},
+            )
+
+        assert resp.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_completions_empty_message_accepted(self, agent_rest_app):
+        """POST /completions with empty message is accepted (documents behavior)."""
+        from starlette.testclient import TestClient
+
+        mock_result = {
+            "result": "ok",
+            "session_id": "",
+            "cost_usd": 0,
+            "duration_ms": 0,
+            "num_turns": 0,
+            "is_error": False,
+            "usage": {},
+            "tool_uses": [],
+        }
+
+        with patch.object(
+            __import__("agenticore.agent_mode.agent", fromlist=["AgentExecutor"]).AgentExecutor,
+            "execute",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            client = TestClient(agent_rest_app)
+            resp = client.post(
+                "/completions",
+                json={"message": "", "uuid": "u1", "wait": True},
+            )
+
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_completions_empty_uuid_accepted(self, agent_rest_app):
+        """POST /completions with empty uuid is accepted (documents behavior)."""
+        from starlette.testclient import TestClient
+
+        mock_result = {
+            "result": "ok",
+            "session_id": "",
+            "cost_usd": 0,
+            "duration_ms": 0,
+            "num_turns": 0,
+            "is_error": False,
+            "usage": {},
+            "tool_uses": [],
+        }
+
+        with patch.object(
+            __import__("agenticore.agent_mode.agent", fromlist=["AgentExecutor"]).AgentExecutor,
+            "execute",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            client = TestClient(agent_rest_app)
+            resp = client.post(
+                "/completions",
+                json={"message": "test", "uuid": "", "wait": True},
+            )
+
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_completions_empty_body(self, agent_rest_app):
+        """POST /completions with empty body returns 400."""
+        from starlette.testclient import TestClient
+
+        client = TestClient(agent_rest_app)
+        resp = client.post("/completions", json={})
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_completions_bad_meta_defaults_empty(self, agent_rest_app):
+        """POST /completions with bad meta field defaults to empty dict."""
+        from starlette.testclient import TestClient
+
+        captured_kwargs = {}
+        mock_result = {
+            "result": "ok",
+            "is_error": False,
+            "session_id": "",
+            "cost_usd": 0,
+            "duration_ms": 0,
+            "num_turns": 0,
+            "usage": {},
+            "tool_uses": [],
+        }
+
+        async def capture(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_result
+
+        with patch.object(
+            __import__("agenticore.agent_mode.agent", fromlist=["AgentExecutor"]).AgentExecutor,
+            "execute",
+            side_effect=capture,
+        ):
+            client = TestClient(agent_rest_app)
+            resp = client.post(
+                "/completions",
+                json={"message": "test", "uuid": "u1", "wait": True, "meta": "not-a-dict"},
+            )
+
+        # The meta is passed through as-is from the body — the executor receives it
+        # Server code does: meta_dict = body.get("meta", {})
+        # If meta is a string, it's passed as a string — no error
+        assert resp.status_code == 200

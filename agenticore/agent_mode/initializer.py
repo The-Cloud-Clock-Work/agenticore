@@ -135,6 +135,59 @@ def _run_startup_scripts(package_dir: str) -> None:
             _log.info("  Script %s completed successfully", script.name)
 
 
+def _install_notification_hook(package_dir: str) -> None:
+    """Install hook_notifier.py into .claude/hooks/ and wire settings.json."""
+    import json
+    import shutil
+
+    pkg = Path(package_dir)
+    hooks_dir = pkg / ".claude" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy hook_notifier.py to package hooks dir
+    src = Path(__file__).parent / "hook_notifier.py"
+    dst = hooks_dir / "notifier.py"
+    if src.exists():
+        shutil.copy2(src, dst)
+        _log.info("Installed notification hook: %s", dst)
+    else:
+        _log.warning("hook_notifier.py not found at %s", src)
+        return
+
+    # Wire hooks into settings.json
+    settings_path = pkg / ".claude" / "settings.json"
+    settings = {}
+    if settings_path.exists():
+        try:
+            with open(settings_path) as f:
+                settings = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            settings = {}
+
+    hooks = settings.get("hooks", {})
+    notifier_cmd = f"python3 {dst}"
+
+    hook_entries = {
+        "PostToolUse": [{"matcher": ".*", "command": notifier_cmd}],
+        "SubprocessOutputLine": [{"command": notifier_cmd}],
+        "Notification": [{"command": notifier_cmd}],
+    }
+
+    for hook_name, entries in hook_entries.items():
+        existing = hooks.get(hook_name, [])
+        # Don't duplicate if already wired
+        existing_cmds = {e.get("command", "") for e in existing}
+        for entry in entries:
+            if entry["command"] not in existing_cmds:
+                existing.append(entry)
+        hooks[hook_name] = existing
+
+    settings["hooks"] = hooks
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
+    _log.info("Notification hooks wired in settings.json")
+
+
 def initialize_agent_mode() -> None:
     """Main initialization entry point for agent mode.
 
@@ -179,6 +232,12 @@ def initialize_agent_mode() -> None:
         _log.info("Default system prompt loaded (%d chars)", len(prompt))
     else:
         _log.info("No default system prompt (system.md not found)")
+
+    # Step 5: Install notification hooks
+    try:
+        _install_notification_hook(am.package_dir)
+    except Exception as e:
+        _log.warning("Notification hook install failed (non-fatal): %s", e)
 
     _log.info("=== Agent Mode Ready ===")
     _log.info("  Package dir: %s", am.package_dir)

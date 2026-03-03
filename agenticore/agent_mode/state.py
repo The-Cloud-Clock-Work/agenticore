@@ -47,7 +47,12 @@ def _save_file_state(all_state: dict) -> None:
         json.dump(all_state, f, indent=2)
 
 
-def save_state(external_uuid: str, wait: bool = True, meta: Optional[dict] = None) -> dict:
+def save_state(
+    external_uuid: str,
+    wait: bool = True,
+    meta: Optional[dict] = None,
+    notifications: Optional[dict] = None,
+) -> dict:
     """Save conversation state for a request.
 
     Returns the state dict that was persisted.
@@ -57,6 +62,7 @@ def save_state(external_uuid: str, wait: bool = True, meta: Optional[dict] = Non
         "uuid": external_uuid,
         "wait": wait,
         "meta": meta or {},
+        "notifications": notifications or {},
         "updated_at": now,
     }
 
