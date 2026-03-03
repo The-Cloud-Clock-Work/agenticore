@@ -77,7 +77,7 @@ jobs:
           LANGFUSE_BASIC_AUTH=${{ secrets.LANGFUSE_BASIC_AUTH }}
           CF_ACCESS_CLIENT_ID=${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET=${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          ANTHROPIC_API_KEY=${{ steps.resolve_key.outputs.api_key }}
+          ANTHROPIC_AUTH_TOKEN=${{ steps.resolve_key.outputs.api_key }}
           ANTHROPIC_BASE_URL=${{ steps.anthropic.outputs.url }}
           GITHUB_TOKEN=${{ secrets.ORG_GITHUB_TOKEN }}
           AGENTICORE_AGENTIHOOKS_URL=https://github.com/The-Cloud-Clock-Work/agentihooks

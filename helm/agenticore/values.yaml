@@ -81,7 +81,7 @@ agentihooks:
   #           compute (lambda), messaging (webhook/SSRF), agent, aws, email, confluence.
   mcpCategories: "github,utilities"
   # Allowlist of exact tool names within the loaded categories.
-  # get_env is excluded: it would expose K8s secrets (GITHUB_TOKEN, ANTHROPIC_API_KEY, etc.)
+  # get_env is excluded: it would expose K8s secrets (GITHUB_TOKEN, ANTHROPIC_AUTH_TOKEN, etc.)
   # to the Claude agent. All other github + utilities tools are safe for coding workflows.
   allowedTools: "github_get_token,github_clone_repo,github_create_pr,github_get_repo_info,git_summary,validate_mermaid,write_markdown,hooks_list_tools"
 

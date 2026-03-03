@@ -61,7 +61,7 @@ pip install -e .
 
 ```bash
 # 1. Set your credentials
-export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_AUTH_TOKEN=sk-ant-...
 export GITHUB_TOKEN=ghp_...
 
 # 2. Start the server
@@ -383,7 +383,7 @@ docker run -d \
   -p 8200:8200 \
   -e AGENTICORE_TRANSPORT=sse \
   -e AGENTICORE_HOST=0.0.0.0 \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e ANTHROPIC_AUTH_TOKEN=sk-ant-... \
   -e REDIS_URL=redis://your-redis:6379/0 \
   -e GITHUB_TOKEN=ghp_... \
   tccw/agenticore
@@ -399,7 +399,7 @@ docker run -d \
 | `AGENTICORE_HOST` | `127.0.0.1` | Bind address |
 | `AGENTICORE_PORT` | `8200` | Server port |
 | `AGENTICORE_API_KEYS` | _(empty)_ | Comma-separated API keys (optional) |
-| `ANTHROPIC_API_KEY` | _(empty)_ | Anthropic API key passed to Claude |
+| `ANTHROPIC_AUTH_TOKEN` | _(empty)_ | Anthropic API key passed to Claude |
 | `REDIS_URL` | _(empty)_ | Redis URL — omit for file-based fallback |
 | `GITHUB_TOKEN` | _(empty)_ | GitHub token for auto-PR |
 | `AGENTICORE_DEFAULT_PROFILE` | `code` | Profile when none specified |
@@ -423,7 +423,7 @@ running jobs.
 Agenticore resolves Claude credentials in order:
 
 1. **Auth Broker** (`AUTH_BROKER_URL`) — returns a Claude Max subscription token; `ANTHROPIC_BASE_URL` is cleared so Claude Code hits Anthropic directly (not the LiteLLM proxy).
-2. **Static env** — `ANTHROPIC_API_KEY` + `ANTHROPIC_BASE_URL` as configured (typically pointing at the LiteLLM proxy).
+2. **Static env** — `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` as configured (typically pointing at the LiteLLM proxy).
 
 When `AUTH_BROKER_URL` is set, the runner fetches credentials at job start
 instead of reading them from environment variables. A pod requests a token,

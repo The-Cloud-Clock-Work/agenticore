@@ -89,7 +89,7 @@ kubectl create secret generic agenticore-secrets \
   --from-literal=redis-url="redis://redis:6379/0" \
   --from-literal=redis-address="redis:6379" \
   --from-literal=github-token="$GITHUB_TOKEN" \
-  --from-literal=anthropic-api-key="$ANTHROPIC_API_KEY"
+  --from-literal=anthropic-api-key="$ANTHROPIC_AUTH_TOKEN"
 ```
 
 ### 2. Install the chart
