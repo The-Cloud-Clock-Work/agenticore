@@ -27,10 +27,6 @@ alias logs_agent='"'"'agenticore agent --logs'"'"'
 # Registry image push
 alias push_main='"'"'agenticore push --main'"'"'
 
-# Environment helpers
-alias loadenv='"'"'set -a; source .env; set +a'"'"'
-alias sourcebash='"'"'source ~/.bashrc'"'"'
-
 # Help - show all available aliases
 agenticore_help() {
     echo ""
@@ -47,11 +43,6 @@ agenticore_help() {
     echo ""
     echo "  REGISTRY PUSH:"
     echo "    push_main            Build and push main image to registry"
-    echo ""
-    echo "  ENVIRONMENT:"
-    echo "    loadenv              Load .env file into current shell"
-    echo "    sourcebash           Reload ~/.bashrc"
-    echo "    agenticore_help      Show this help message"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
