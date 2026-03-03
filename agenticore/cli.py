@@ -508,18 +508,14 @@ def _check_docker() -> bool:
 def _container_exists(name: str) -> bool:
     import subprocess
 
-    r = subprocess.run(
-        ["docker", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True
-    )
+    r = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True)
     return name in r.stdout.strip().split("\n")
 
 
 def _container_running(name: str) -> bool:
     import subprocess
 
-    r = subprocess.run(
-        ["docker", "ps", "--format", "{{.Names}}"], capture_output=True, text=True
-    )
+    r = subprocess.run(["docker", "ps", "--format", "{{.Names}}"], capture_output=True, text=True)
     return name in r.stdout.strip().split("\n")
 
 
@@ -558,145 +554,171 @@ _AGENT_IMAGE = "agenticore:latest"
 _DEV_COMPOSE_FILE = "docker-compose.dev.yml"
 
 
-def _cmd_agent(args):
-    """Build, run, and manage the agenticore container."""
+def _agent_list():
     import subprocess
-    import time
+
+    print("\nLocal containers:")
+    r = subprocess.run(
+        ["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"],
+        capture_output=True,
+        text=True,
+    )
+    for line in r.stdout.strip().splitlines():
+        print(f"  {line}")
+
+
+def _agent_build():
     from pathlib import Path
 
+    dockerfile = _find_file_up("Dockerfile")
+    project_root = dockerfile.parent if dockerfile else Path.cwd()
+    _log_info(f"Building {_AGENT_IMAGE} ...")
+    _log_info(f"  Dockerfile : {dockerfile}")
+    _log_info(f"  Context    : {project_root}")
+    _run_cmd(["docker", "build", "-t", _AGENT_IMAGE, str(project_root)])
+    _log_success(f"Built: {_AGENT_IMAGE}")
+
+
+def _agent_run(name):
+    import time
+
+    if _container_exists(name) and _container_running(name):
+        _log_warning(f"Container '{name}' is already running")
+        _log_info("Use --enter to access it or --stop to stop it first")
+        return
+    if _container_exists(name):
+        _log_info("Removing existing stopped container...")
+        _run_cmd(["docker", "rm", name], check=False)
+
+    cmd = ["docker", "run", "-d", "--name", name, "-p", "8200:8200"]
+    env_path = _find_env_file()
+    if env_path:
+        cmd.extend(["--env-file", str(env_path)])
+        cmd.extend(["-v", f"{env_path}:/app/.env:ro"])
+        _log_info(f"Loading env: {env_path}")
+    else:
+        _log_warning("No .env found (checked repo root and $HOME)")
+
+    cmd.append(_AGENT_IMAGE)
+    _run_cmd(cmd)
+    time.sleep(2)
+
+    if _container_running(name):
+        _log_success(f"Container '{name}' started")
+        _log_info("API   : http://localhost:8200")
+        _log_info("Enter : agenticore agent --enter")
+        _log_info("Logs  : agenticore agent --logs")
+        _log_info("Stop  : agenticore agent --stop")
+    else:
+        _log_error("Container failed to start")
+        _log_info(f"Check: docker logs {name}")
+        sys.exit(1)
+
+
+def _agent_enter(name):
+    if not _container_exists(name):
+        _log_error(f"Container '{name}' does not exist")
+        sys.exit(1)
+    if not _container_running(name):
+        _log_error(f"Container '{name}' is not running")
+        sys.exit(1)
+    try:
+        _run_cmd(["docker", "exec", "-it", name, "bash"], check=False)
+    except KeyboardInterrupt:
+        pass
+
+
+def _agent_logs(name):
+    if not _container_exists(name):
+        _log_error(f"Container '{name}' does not exist")
+        sys.exit(1)
+    _log_info("Press Ctrl+C to exit")
+    try:
+        _run_cmd(["docker", "logs", "-f", name])
+    except KeyboardInterrupt:
+        pass
+
+
+def _agent_stop(name):
+    if not _container_exists(name):
+        _log_warning(f"Container '{name}' does not exist")
+        return
+    if _container_running(name):
+        _run_cmd(["docker", "stop", name], check=False)
+        _log_success("Container stopped")
+    _run_cmd(["docker", "rm", name], check=False)
+    _log_success("Container removed")
+
+
+def _require_compose_file():
+    compose_file = _find_file_up(_DEV_COMPOSE_FILE)
+    if not compose_file:
+        _log_error(f"{_DEV_COMPOSE_FILE} not found")
+        sys.exit(1)
+    return compose_file
+
+
+def _agent_compose_up():
+    compose_file = _require_compose_file()
+    _log_info(f"Compose up: {compose_file}")
+    _run_cmd(["docker", "compose", "-f", str(compose_file), "up", "--build", "-d"])
+    _log_success("Dev stack started")
+
+
+def _agent_compose_down():
+    compose_file = _require_compose_file()
+    _log_info(f"Compose down: {compose_file}")
+    _run_cmd(["docker", "compose", "-f", str(compose_file), "down"])
+    _log_success("Dev stack stopped")
+
+
+def _agent_compose_enter():
+    compose_file = _require_compose_file()
+    try:
+        _run_cmd(
+            ["docker", "compose", "-f", str(compose_file), "exec", "agenticore", "bash"],
+            check=False,
+        )
+    except KeyboardInterrupt:
+        pass
+
+
+def _agent_compose_logs():
+    compose_file = _require_compose_file()
+    _log_info("Press Ctrl+C to exit")
+    try:
+        _run_cmd(["docker", "compose", "-f", str(compose_file), "logs", "-f"], check=False)
+    except KeyboardInterrupt:
+        pass
+
+
+_AGENT_ACTIONS = {
+    "list": lambda _name: _agent_list(),
+    "build": lambda _name: _agent_build(),
+    "run": _agent_run,
+    "enter": _agent_enter,
+    "logs": _agent_logs,
+    "stop": _agent_stop,
+    "compose_up": lambda _name: _agent_compose_up(),
+    "compose_down": lambda _name: _agent_compose_down(),
+    "compose_enter": lambda _name: _agent_compose_enter(),
+    "compose_logs": lambda _name: _agent_compose_logs(),
+}
+
+
+def _cmd_agent(args):
+    """Build, run, and manage the agenticore container."""
     if not _check_docker():
         sys.exit(1)
 
-    if args.list:
-        print("\nLocal containers:")
-        r = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"],
-            capture_output=True,
-            text=True,
-        )
-        for line in r.stdout.strip().splitlines():
-            print(f"  {line}")
-        return
-
     name = _AGENT_CONTAINER
-    _log_info(f"Container: {name}")
 
-    if args.build:
-        dockerfile = _find_file_up("Dockerfile")
-        project_root = dockerfile.parent if dockerfile else Path.cwd()
-        _log_info(f"Building {_AGENT_IMAGE} ...")
-        _log_info(f"  Dockerfile : {dockerfile}")
-        _log_info(f"  Context    : {project_root}")
-        _run_cmd(["docker", "build", "-t", _AGENT_IMAGE, str(project_root)])
-        _log_success(f"Built: {_AGENT_IMAGE}")
-
-    if args.run:
-        if _container_exists(name):
-            if _container_running(name):
-                _log_warning(f"Container '{name}' is already running")
-                _log_info("Use --enter to access it or --stop to stop it first")
-            else:
-                _log_info("Removing existing stopped container...")
-                _run_cmd(["docker", "rm", name], check=False)
-
-        cmd = ["docker", "run", "-d", "--name", name, "-p", "8200:8200"]
-
-        env_path = _find_env_file()
-        if env_path:
-            cmd.extend(["--env-file", str(env_path)])
-            cmd.extend(["-v", f"{env_path}:/app/.env:ro"])
-            _log_info(f"Loading env: {env_path}")
-        else:
-            _log_warning("No .env found (checked repo root and $HOME)")
-
-        cmd.append(_AGENT_IMAGE)
-        _run_cmd(cmd)
-        time.sleep(2)
-
-        if _container_running(name):
-            _log_success(f"Container '{name}' started")
-            _log_info("API   : http://localhost:8200")
-            _log_info("Enter : agenticore agent --enter")
-            _log_info("Logs  : agenticore agent --logs")
-            _log_info("Stop  : agenticore agent --stop")
-        else:
-            _log_error("Container failed to start")
-            _log_info(f"Check: docker logs {name}")
-            sys.exit(1)
-
-    if args.enter:
-        if not _container_exists(name):
-            _log_error(f"Container '{name}' does not exist")
-            sys.exit(1)
-        if not _container_running(name):
-            _log_error(f"Container '{name}' is not running")
-            sys.exit(1)
-        try:
-            _run_cmd(["docker", "exec", "-it", name, "bash"], check=False)
-        except KeyboardInterrupt:
-            pass
-
-    if args.logs:
-        if not _container_exists(name):
-            _log_error(f"Container '{name}' does not exist")
-            sys.exit(1)
-        _log_info("Press Ctrl+C to exit")
-        try:
-            _run_cmd(["docker", "logs", "-f", name])
-        except KeyboardInterrupt:
-            pass
-
-    if args.stop:
-        if not _container_exists(name):
-            _log_warning(f"Container '{name}' does not exist")
+    for action, handler in _AGENT_ACTIONS.items():
+        if getattr(args, action, False):
+            if action != "list":
+                _log_info(f"Container: {name}")
+            handler(name)
             return
-        if _container_running(name):
-            _run_cmd(["docker", "stop", name], check=False)
-            _log_success("Container stopped")
-        _run_cmd(["docker", "rm", name], check=False)
-        _log_success("Container removed")
-
-    if args.compose_up:
-        compose_file = _find_file_up(_DEV_COMPOSE_FILE)
-        if not compose_file:
-            _log_error(f"{_DEV_COMPOSE_FILE} not found")
-            sys.exit(1)
-        _log_info(f"Compose up: {compose_file}")
-        _run_cmd(["docker", "compose", "-f", str(compose_file), "up", "--build", "-d"])
-        _log_success("Dev stack started")
-
-    if args.compose_down:
-        compose_file = _find_file_up(_DEV_COMPOSE_FILE)
-        if not compose_file:
-            _log_error(f"{_DEV_COMPOSE_FILE} not found")
-            sys.exit(1)
-        _log_info(f"Compose down: {compose_file}")
-        _run_cmd(["docker", "compose", "-f", str(compose_file), "down"])
-        _log_success("Dev stack stopped")
-
-    if args.compose_enter:
-        compose_file = _find_file_up(_DEV_COMPOSE_FILE)
-        if not compose_file:
-            _log_error(f"{_DEV_COMPOSE_FILE} not found")
-            sys.exit(1)
-        try:
-            _run_cmd(
-                ["docker", "compose", "-f", str(compose_file), "exec", "agenticore", "bash"],
-                check=False,
-            )
-        except KeyboardInterrupt:
-            pass
-
-    if args.compose_logs:
-        compose_file = _find_file_up(_DEV_COMPOSE_FILE)
-        if not compose_file:
-            _log_error(f"{_DEV_COMPOSE_FILE} not found")
-            sys.exit(1)
-        _log_info("Press Ctrl+C to exit")
-        try:
-            _run_cmd(["docker", "compose", "-f", str(compose_file), "logs", "-f"], check=False)
-        except KeyboardInterrupt:
-            pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -867,7 +889,9 @@ def main():
     p_agent.add_argument("--stop", "-s", action="store_true", help="Stop and remove the container")
     p_agent.add_argument("--logs", "-l", action="store_true", help="Follow container logs")
     p_agent.add_argument("--list", action="store_true", help="List local containers")
-    p_agent.add_argument("--compose-up", action="store_true", help="docker compose -f docker-compose.dev.yml up --build -d")
+    p_agent.add_argument(
+        "--compose-up", action="store_true", help="docker compose -f docker-compose.dev.yml up --build -d"
+    )
     p_agent.add_argument("--compose-down", action="store_true", help="docker compose -f docker-compose.dev.yml down")
     p_agent.add_argument("--compose-enter", action="store_true", help="Shell into running compose service")
     p_agent.add_argument("--compose-logs", action="store_true", help="Follow compose service logs")

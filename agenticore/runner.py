@@ -15,11 +15,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import logging
+
 from agenticore.config import get_config
 from agenticore.jobs import Job, create_job, get_job, update_job
 from agenticore.profiles import build_cli_args, get_profile, materialize_profile
 from agenticore.repos import ensure_clone, get_default_branch, resolve_github_token
 from agenticore.telemetry import end_job_trace, ship_transcript, start_job_trace
+
+logger = logging.getLogger(__name__)
 
 # Set to prevent GC of fire-and-forget background tasks
 _background_tasks: set = set()
@@ -149,6 +153,7 @@ def _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir: Optional[Pa
     }
     if not job.repo_url and profile.claude.worktree:
         import copy
+
         profile = copy.deepcopy(profile)
         profile.claude.worktree = False
     cli_args = build_cli_args(profile, job.task, variables)
@@ -240,6 +245,24 @@ def _inject_file_mcp(file_path: str, cwd: Path) -> None:
         json.dump(target_data, f, indent=2)
 
 
+def _inject_mcp_configs(job: Job, cfg, mcp_cwd: Optional[Path]):
+    """Inject MCP configs into working directory. Returns a failed Job on error, else None."""
+    if not mcp_cwd:
+        return None
+    default_mcp = cfg.claude.default_mcp_file
+    if default_mcp and Path(default_mcp).exists():
+        try:
+            _inject_file_mcp(default_mcp, mcp_cwd)
+        except Exception as e:
+            logger.warning("Default MCP injection failed: %s", e)
+    if job.file_path:
+        try:
+            _inject_file_mcp(job.file_path, mcp_cwd)
+        except Exception as e:
+            return update_job(job.id, status="failed", error=f"MCP injection failed: {e}", ended_at=_now_iso())
+    return None
+
+
 async def run_job(job: Job) -> Job:
     """Execute a job: clone repo, run Claude, handle result.
 
@@ -289,26 +312,10 @@ async def run_job(job: Job) -> Job:
     if not job.repo_url and job_config_dir:
         cwd = job_config_dir
 
-    # Inject MCP configs into CWD/.mcp.json — Claude reads .mcp.json from the working directory
     mcp_cwd = cwd or job_config_dir
-    if mcp_cwd:
-        default_mcp = cfg.claude.default_mcp_file
-        if default_mcp and Path(default_mcp).exists():
-            try:
-                _inject_file_mcp(default_mcp, mcp_cwd)
-            except Exception as e:
-                logger.warning("Default MCP injection failed: %s", e)
-
-        if job.file_path:
-            try:
-                _inject_file_mcp(job.file_path, mcp_cwd)
-            except Exception as e:
-                return update_job(
-                    job.id,
-                    status="failed",
-                    error=f"MCP injection failed: {e}",
-                    ended_at=_now_iso(),
-                )
+    failed = _inject_mcp_configs(job, cfg, mcp_cwd)
+    if failed:
+        return failed
 
     cmd, env = _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir=job_config_dir)
 
@@ -398,6 +405,18 @@ def _build_plan_cmd(cfg, job):
     return cmd, env
 
 
+def _prepare_plan_env(job: Job):
+    """Prepare cwd and config dir for a plan job. Returns (cwd, config_dir) or raises."""
+    cwd = None
+    if job.repo_url:
+        cwd, _ = _prepare_job_repo(job)
+    config_dir = None
+    if job.file_path:
+        config_dir = _ensure_writable_config_dir(job.id, None)
+        _inject_file_mcp(job.file_path, config_dir)
+    return cwd, config_dir
+
+
 async def _run_plan_job(job: Job, plan) -> Job:
     """Execute a planning job and populate plan.content from output."""
     from agenticore.plans import update_plan
@@ -406,22 +425,11 @@ async def _run_plan_job(job: Job, plan) -> Job:
     pod_name = cfg.repos.pod_name or socket.gethostname()
     update_job(job.id, status="running", started_at=_now_iso(), pod_name=pod_name)
 
-    cwd = None
-    if job.repo_url:
-        try:
-            cwd, _ = _prepare_job_repo(job)
-        except Exception as e:
-            update_plan(plan.id, status="failed")
-            return update_job(job.id, status="failed", error=f"Clone failed: {e}", ended_at=_now_iso())
-
-    plan_config_dir = None
-    if job.file_path:
-        try:
-            plan_config_dir = _ensure_writable_config_dir(job.id, None)
-            _inject_file_mcp(job.file_path, plan_config_dir)
-        except Exception as e:
-            update_plan(plan.id, status="failed")
-            return update_job(job.id, status="failed", error=f"MCP injection failed: {e}", ended_at=_now_iso())
+    try:
+        cwd, plan_config_dir = _prepare_plan_env(job)
+    except Exception as e:
+        update_plan(plan.id, status="failed")
+        return update_job(job.id, status="failed", error=f"Plan setup failed: {e}", ended_at=_now_iso())
 
     cmd, env = _build_plan_cmd(cfg, job)
     if plan_config_dir:

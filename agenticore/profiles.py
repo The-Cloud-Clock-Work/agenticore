@@ -32,6 +32,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+_MCP_JSON = ".mcp.json"
 
 # ── Dataclasses ───────────────────────────────────────────────────────────
 
@@ -108,7 +109,7 @@ def _merge_mcp_lib_into(lib_dir: Path, target_dir: Path) -> None:
     files = _find_mcp_json_files(lib_dir)
     if not files:
         return
-    dst_mcp = target_dir / ".mcp.json"
+    dst_mcp = target_dir / _MCP_JSON
     existing = json.loads(dst_mcp.read_text(encoding="utf-8")) if dst_mcp.exists() else {}
     existing.setdefault("mcpServers", {})
     for f in files:
@@ -306,11 +307,11 @@ def _copy_claude_dir(src_path: Path, working_dir: Path, created: List[Path]) -> 
 
 def _copy_mcp_json(src_path: Path, working_dir: Path, created: List[Path]) -> None:
     """Copy and merge .mcp.json from profile to working directory."""
-    src_mcp = src_path / ".mcp.json"
+    src_mcp = src_path / _MCP_JSON
     if not src_mcp.exists():
         return
 
-    dst_mcp = working_dir / ".mcp.json"
+    dst_mcp = working_dir / _MCP_JSON
     if dst_mcp.exists():
         with open(dst_mcp) as f:
             existing = json.load(f)

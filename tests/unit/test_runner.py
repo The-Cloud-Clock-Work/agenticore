@@ -81,9 +81,7 @@ class TestBuildEnvAuthBroker:
         with (
             patch(
                 "agenticore.runner._fetch_from_auth_broker",
-                side_effect=lambda svc, **kw: (
-                    "sk-ant-123" if svc == "anthropic" else None
-                ),
+                side_effect=lambda svc, **kw: "sk-ant-123" if svc == "anthropic" else None,
             ),
             patch("agenticore.runner.resolve_github_token", return_value="gh-tok"),
         ):
@@ -100,9 +98,7 @@ class TestBuildEnvAuthBroker:
         clear=False,
     )
     def test_resolve_github_token_static(self):
-        with patch(
-            "agenticore.runner.resolve_github_token", return_value="static-token"
-        ):
+        with patch("agenticore.runner.resolve_github_token", return_value="static-token"):
             env = _build_env()
         assert env["GITHUB_TOKEN"] == "static-token"
 
@@ -164,9 +160,7 @@ class TestBuildEnvAuthBroker:
         ):
             with patch(
                 "agenticore.runner._fetch_from_auth_broker",
-                side_effect=lambda svc, **kw: (
-                    "sk-ant-123" if svc == "anthropic" else None
-                ),
+                side_effect=lambda svc, **kw: "sk-ant-123" if svc == "anthropic" else None,
             ):
                 env = _build_env()
         assert env.get("ANTHROPIC_AUTH_TOKEN") == "sk-ant-123"

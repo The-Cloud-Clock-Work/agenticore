@@ -592,33 +592,42 @@ def run_sse_server() -> None:
     uvicorn.run(app, host=cfg.server.host, port=cfg.server.port, log_level="info")
 
 
+def _auto_sync_agentihooks(cfg):
+    """Auto-sync agentihooks if URL is configured and path not already set."""
+    if not cfg.agentihooks_url or os.getenv("AGENTICORE_AGENTIHOOKS_PATH"):
+        return
+    try:
+        from agenticore.hooks import sync_agentihooks, start_sync_watcher
+
+        install_path = sync_agentihooks()
+        if install_path and cfg.agentihooks_sync_interval > 0:
+            start_sync_watcher(cfg.agentihooks_url, install_path, cfg.agentihooks_sync_interval)
+    except Exception as e:
+        logger.warning("agentihooks sync failed: %s — profiles may be unavailable", e)
+
+
+def _auto_sync_mcp_lib(cfg):
+    """Auto-sync MCP lib if URL is configured and path not already set."""
+    if not cfg.mcp_lib_url or os.getenv("AGENTICORE_MCP_LIB_PATH"):
+        return
+    try:
+        from agenticore.hooks import sync_mcp_lib, start_mcp_lib_watcher
+
+        mcp_lib_path = sync_mcp_lib()
+        if mcp_lib_path and cfg.agentihooks_sync_interval > 0:
+            start_mcp_lib_watcher(cfg.mcp_lib_url, mcp_lib_path, cfg.agentihooks_sync_interval)
+    except Exception as e:
+        logger.warning("mcp-lib sync failed: %s — extra MCPs unavailable", e)
+
+
 def main():
     """Entrypoint for ``python -m agenticore``."""
     cfg = get_config()
 
     print("Starting Agenticore...", file=sys.stderr)
 
-    # Auto-sync agentihooks if URL is configured and path not already set
-    if cfg.agentihooks_url and not os.getenv("AGENTICORE_AGENTIHOOKS_PATH"):
-        try:
-            from agenticore.hooks import sync_agentihooks, start_sync_watcher
-
-            install_path = sync_agentihooks()
-            if install_path and cfg.agentihooks_sync_interval > 0:
-                start_sync_watcher(cfg.agentihooks_url, install_path, cfg.agentihooks_sync_interval)
-        except Exception as e:
-            logger.warning("agentihooks sync failed: %s — profiles may be unavailable", e)
-
-    # Auto-sync MCP lib if URL is configured and path not already set
-    if cfg.mcp_lib_url and not os.getenv("AGENTICORE_MCP_LIB_PATH"):
-        try:
-            from agenticore.hooks import sync_mcp_lib, start_mcp_lib_watcher
-
-            mcp_lib_path = sync_mcp_lib()
-            if mcp_lib_path and cfg.agentihooks_sync_interval > 0:
-                start_mcp_lib_watcher(cfg.mcp_lib_url, mcp_lib_path, cfg.agentihooks_sync_interval)
-        except Exception as e:
-            logger.warning("mcp-lib sync failed: %s — extra MCPs unavailable", e)
+    _auto_sync_agentihooks(cfg)
+    _auto_sync_mcp_lib(cfg)
 
     tools = mcp._tool_manager.list_tools()
     print(f"Tools: {len(tools)}", file=sys.stderr)
