@@ -132,6 +132,9 @@ class Config:
     agentihooks_sync_interval: int = 300  # seconds between background re-syncs; 0 to disable
     mcp_lib_url: str = ""
     mcp_lib_path: str = ""
+    agentihub_url: str = ""
+    agentihub_path: str = ""
+    agentihub_sync_interval: int = 0  # 0 = inherit from agentihooks_sync_interval
 
 
 def _default_repos_root() -> str:
@@ -307,6 +310,11 @@ def load_config(config_path: Optional[str] = None) -> Config:
     )
     mcp_lib_url = _env("AGENTICORE_MCP_LIB_URL", raw.get("mcp_lib_url", ""))
     mcp_lib_path = _env("AGENTICORE_MCP_LIB_PATH", raw.get("mcp_lib_path", ""))
+    agentihub_url = _env("AGENTIHUB_URL", raw.get("agentihub_url", ""))
+    agentihub_path = _env("AGENTIHUB_PATH", raw.get("agentihub_path", ""))
+    agentihub_sync_interval = _env_int(
+        "AGENTIHUB_SYNC_INTERVAL", str(raw.get("agentihub_sync_interval", 0))
+    )
 
     # Auth Broker — env overrides
     auth_broker_raw = raw.get("auth_broker", {})
@@ -330,6 +338,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
         agentihooks_sync_interval=agentihooks_sync_interval,
         mcp_lib_url=mcp_lib_url,
         mcp_lib_path=mcp_lib_path,
+        agentihub_url=agentihub_url,
+        agentihub_path=agentihub_path,
+        agentihub_sync_interval=agentihub_sync_interval,
     )
 
 

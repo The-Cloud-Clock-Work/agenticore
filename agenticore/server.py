@@ -903,6 +903,28 @@ def _auto_sync_agentihooks(cfg):
         logger.warning("agentihooks sync failed: %s — profiles may be unavailable", e)
 
 
+def _auto_sync_agentihub(cfg):
+    """Auto-sync agentihub if URL is configured."""
+    if not cfg.agentihub_url:
+        return
+    try:
+        from agenticore.hooks import (
+            _install_dir,
+            sync_agentihub,
+            start_agentihub_watcher,
+        )
+
+        install_path = sync_agentihub()
+        interval = cfg.agentihub_sync_interval or cfg.agentihooks_sync_interval
+        if install_path and interval > 0:
+            agentihooks_dir = _install_dir()
+            start_agentihub_watcher(
+                cfg.agentihub_url, install_path, agentihooks_dir, interval
+            )
+    except Exception as e:
+        logger.warning("agentihub sync failed: %s — external agents unavailable", e)
+
+
 def _auto_sync_mcp_lib(cfg):
     """Auto-sync MCP lib if URL is configured and path not already set."""
     if not cfg.mcp_lib_url or os.getenv("AGENTICORE_MCP_LIB_PATH"):
@@ -924,6 +946,7 @@ def main():
     print("Starting Agenticore...", file=sys.stderr)
 
     _auto_sync_agentihooks(cfg)
+    _auto_sync_agentihub(cfg)
     _auto_sync_mcp_lib(cfg)
 
     # Agent mode initialization
