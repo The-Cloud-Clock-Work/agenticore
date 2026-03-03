@@ -26,17 +26,4 @@ fi
 [ -f "$HOME/.bashrc" ] && [ ! -w "$HOME/.bashrc" ] && chmod u+w "$HOME/.bashrc" 2>/dev/null || true
 [ -f "/opt/agenticore/bashrc" ] && cat /opt/agenticore/bashrc >> "$HOME/.bashrc" 2>/dev/null || true
 
-# Install colt-tools (personal shell toolbelt)
-COLT_TOOLS_DIR="$HOME/colt-tools"
-if [ ! -d "$COLT_TOOLS_DIR" ]; then
-  echo "Installing colt-tools..."
-  gh repo clone nestorcolt/colt-tools "$COLT_TOOLS_DIR" 2>/dev/null || \
-    echo "Warning: Could not clone colt-tools (check GH_TOKEN)"
-fi
-if [ -d "$COLT_TOOLS_DIR" ]; then
-  cd "$COLT_TOOLS_DIR" && git pull --ff-only 2>/dev/null || true
-  cd /app
-  bash "$COLT_TOOLS_DIR/install.sh"
-fi
-
 exec "$@"

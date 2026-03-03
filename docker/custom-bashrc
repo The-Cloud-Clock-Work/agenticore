@@ -1,15 +1,4 @@
-# Agenticore container shell config
-# Appended to ~/.bashrc by entrypoint.sh
-
-# Core aliases
 anton() { ANTHROPIC_AUTH_TOKEN="${LITELLM_MCP_GATEWAY_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}" claude --dangerously-skip-permissions "$@"; }
-alias cc='claude --dangerously-skip-permissions'
-alias gs='git status'
-alias gp='git push'
-gc() { git add -A && git commit -m "$(claude -p 'Write a short conventional commit message for this diff. Output ONLY the message, nothing else.' <<< "$(git diff --cached --stat)")"; }
-
-# wkt-get — search Claude projects, pick one, cd into it
-# (overridden by colt-tools version if installed)
 wkt-get() {
   local query="${1:-}" projects_dir="$HOME/.claude/projects"
   local -a base_paths=()
@@ -29,33 +18,3 @@ wkt-get() {
   [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#base_paths[@]}" ] || { echo "Invalid"; return 1; }
   echo "-> ${base_paths[$((sel-1))]}"; cd "${base_paths[$((sel-1))]}" || return 1
 }
-
-# Help / welcome message
-helpme() {
-  echo "========================================"
-  echo "  Anton Terminal - Web CLI Access"
-  echo "========================================"
-  echo ""
-  echo "  Terminal Commands:"
-  echo "    anton [args]     Start Claude on workspace"
-  echo "    cc [args]        Claude (skip permissions)"
-  echo "    gc               Auto-commit with AI message"
-  echo "    gs / gp          Git status / push"
-  echo "    helpme           Show this help"
-  echo ""
-  if [ -d "$HOME/colt-tools" ]; then
-  echo "  Colt-Tools:"
-  echo "    wkt-get [q]      Find Claude project/worktree"
-  echo "    gw <branch>      Create/switch git worktree"
-  echo "    claude-login     Switch Claude auth profile"
-  echo "    cskip            Claude --dangerously-skip-permissions"
-  echo "    gsec / gget      GitHub org secret management"
-  echo "    getsec / setsec  AWS Secrets Manager CLI"
-  echo "    loadenv [file]   Source .env file"
-  echo "    geven            Show AWS caller identity"
-  echo ""
-  fi
-}
-
-# Show welcome on login
-helpme
