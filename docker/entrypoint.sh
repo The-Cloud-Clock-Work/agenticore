@@ -13,13 +13,8 @@ fi
 
 # Wire hooks, skills, agents, CLAUDE.md into ~/.claude
 # HOME determines where: /home/agenticore (local) or /shared (K8s)
-# Profile selection: agentihooks reads AGENTIHOOKS_PROFILE env var directly
+# agentihooks reads AGENTIHOOKS_PROFILE and AGENTIHOOKS_MCP_FILE env vars directly
 agentihooks global
-
-# Install gateway MCP servers if file path is configured and exists on the volume
-if [ -n "${AGENTIHOOKS_MCP_FILE:-}" ] && [ -f "$AGENTIHOOKS_MCP_FILE" ]; then
-  agentihooks --mcp "$AGENTIHOOKS_MCP_FILE"
-fi
 
 # Append pod-specific shell functions to ~/.bashrc (for exec sessions)
 # /shared may have root-owned files from init job — fix ownership first
