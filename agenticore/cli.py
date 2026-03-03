@@ -535,12 +535,27 @@ def _find_file_up(filename: str, max_levels: int = 5):
     return None
 
 
+def _find_env_file():
+    """Find .env file: repo root first, then $HOME fallback."""
+    import os
+    from pathlib import Path
+
+    env = _find_file_up(".env")
+    if env:
+        return env
+    home_env = Path(os.path.expanduser("~")) / ".env"
+    if home_env.exists():
+        return home_env
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # agent command
 # ─────────────────────────────────────────────────────────────────────────────
 
 _AGENT_CONTAINER = "agenticore"
 _AGENT_IMAGE = "agenticore:latest"
+_DEV_COMPOSE_FILE = "docker-compose.dev.yml"
 
 
 def _cmd_agent(args):
@@ -586,10 +601,13 @@ def _cmd_agent(args):
 
         cmd = ["docker", "run", "-d", "--name", name, "-p", "8200:8200"]
 
-        env_path = _find_file_up(".env")
+        env_path = _find_env_file()
         if env_path:
             cmd.extend(["--env-file", str(env_path)])
+            cmd.extend(["-v", f"{env_path}:/app/.env:ro"])
             _log_info(f"Loading env: {env_path}")
+        else:
+            _log_warning("No .env found (checked repo root and $HOME)")
 
         cmd.append(_AGENT_IMAGE)
         _run_cmd(cmd)
@@ -614,7 +632,7 @@ def _cmd_agent(args):
             _log_error(f"Container '{name}' is not running")
             sys.exit(1)
         try:
-            _run_cmd(["docker", "exec", "-it", name, "bash"])
+            _run_cmd(["docker", "exec", "-it", name, "bash"], check=False)
         except KeyboardInterrupt:
             pass
 
@@ -637,6 +655,48 @@ def _cmd_agent(args):
             _log_success("Container stopped")
         _run_cmd(["docker", "rm", name], check=False)
         _log_success("Container removed")
+
+    if args.compose_up:
+        compose_file = _find_file_up(_DEV_COMPOSE_FILE)
+        if not compose_file:
+            _log_error(f"{_DEV_COMPOSE_FILE} not found")
+            sys.exit(1)
+        _log_info(f"Compose up: {compose_file}")
+        _run_cmd(["docker", "compose", "-f", str(compose_file), "up", "--build", "-d"])
+        _log_success("Dev stack started")
+
+    if args.compose_down:
+        compose_file = _find_file_up(_DEV_COMPOSE_FILE)
+        if not compose_file:
+            _log_error(f"{_DEV_COMPOSE_FILE} not found")
+            sys.exit(1)
+        _log_info(f"Compose down: {compose_file}")
+        _run_cmd(["docker", "compose", "-f", str(compose_file), "down"])
+        _log_success("Dev stack stopped")
+
+    if args.compose_enter:
+        compose_file = _find_file_up(_DEV_COMPOSE_FILE)
+        if not compose_file:
+            _log_error(f"{_DEV_COMPOSE_FILE} not found")
+            sys.exit(1)
+        try:
+            _run_cmd(
+                ["docker", "compose", "-f", str(compose_file), "exec", "agenticore", "bash"],
+                check=False,
+            )
+        except KeyboardInterrupt:
+            pass
+
+    if args.compose_logs:
+        compose_file = _find_file_up(_DEV_COMPOSE_FILE)
+        if not compose_file:
+            _log_error(f"{_DEV_COMPOSE_FILE} not found")
+            sys.exit(1)
+        _log_info("Press Ctrl+C to exit")
+        try:
+            _run_cmd(["docker", "compose", "-f", str(compose_file), "logs", "-f"], check=False)
+        except KeyboardInterrupt:
+            pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -807,6 +867,10 @@ def main():
     p_agent.add_argument("--stop", "-s", action="store_true", help="Stop and remove the container")
     p_agent.add_argument("--logs", "-l", action="store_true", help="Follow container logs")
     p_agent.add_argument("--list", action="store_true", help="List local containers")
+    p_agent.add_argument("--compose-up", action="store_true", help="docker compose -f docker-compose.dev.yml up --build -d")
+    p_agent.add_argument("--compose-down", action="store_true", help="docker compose -f docker-compose.dev.yml down")
+    p_agent.add_argument("--compose-enter", action="store_true", help="Shell into running compose service")
+    p_agent.add_argument("--compose-logs", action="store_true", help="Follow compose service logs")
     p_agent.set_defaults(func=_cmd_agent)
 
     # push

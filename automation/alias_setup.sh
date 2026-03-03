@@ -18,14 +18,20 @@ ALIASES_BLOCK='
 # =============================================================================
 
 # Agent container management
-alias build_agent='"'"'agenticore agent --build'"'"'
-alias run_agent='"'"'agenticore agent --run'"'"'
-alias enter_agent='"'"'agenticore agent --enter'"'"'
-alias stop_agent='"'"'agenticore agent --stop'"'"'
-alias logs_agent='"'"'agenticore agent --logs'"'"'
+alias ac_build_agent='"'"'agenticore agent --build'"'"'
+alias ac_run_agent='"'"'agenticore agent --run'"'"'
+alias ac_enter_agent='"'"'agenticore agent --enter'"'"'
+alias ac_stop_agent='"'"'agenticore agent --stop'"'"'
+alias ac_logs_agent='"'"'agenticore agent --logs'"'"'
+
+# Dev compose stack
+alias ac_compose_up='"'"'agenticore agent --compose-up'"'"'
+alias ac_compose_down='"'"'agenticore agent --compose-down'"'"'
+alias ac_compose_enter='"'"'agenticore agent --compose-enter'"'"'
+alias ac_compose_logs='"'"'agenticore agent --compose-logs'"'"'
 
 # Registry image push
-alias push_main='"'"'agenticore push --main'"'"'
+alias ac_push_main='"'"'agenticore push --main'"'"'
 
 # Help - show all available aliases
 agenticore_help() {
@@ -35,14 +41,18 @@ agenticore_help() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     echo "  CONTAINER MANAGEMENT:"
-    echo "    build_agent          Build agent Docker image"
-    echo "    run_agent            Run container in detached mode"
-    echo "    enter_agent          Shell into running container"
-    echo "    stop_agent           Stop running container"
-    echo "    logs_agent           View container logs"
+    echo "    ac_build_agent       Build agent Docker image"
+    echo "    ac_run_agent         Run container in detached mode"
+    echo "    ac_enter_agent       Shell into running container"
+    echo "    ac_stop_agent        Stop running container"
+    echo "    ac_logs_agent        View container logs"
+    echo ""
+    echo "  DEV COMPOSE STACK:"
+    echo "    ac_compose_up        Compose up dev stack (docker-compose.dev.yml)"
+    echo "    ac_compose_down      Compose down dev stack"
     echo ""
     echo "  REGISTRY PUSH:"
-    echo "    push_main            Build and push main image to registry"
+    echo "    ac_push_main         Build and push main image to registry"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
@@ -76,13 +86,15 @@ echo ""
 echo "Run 'source ~/.bashrc' or open a new terminal to use them."
 echo ""
 echo "Quick start:"
-echo "  build_agent            # Build agent image"
-echo "  run_agent              # Run container"
-echo "  enter_agent            # Enter container"
-echo "  logs_agent             # View container logs"
-echo "  stop_agent             # Stop container"
+echo "  ac_build_agent         # Build agent image"
+echo "  ac_run_agent           # Run container"
+echo "  ac_enter_agent         # Enter container"
+echo "  ac_logs_agent          # View container logs"
+echo "  ac_stop_agent          # Stop container"
+echo "  ac_compose_up          # Start dev stack"
+echo "  ac_compose_down        # Stop dev stack"
 echo ""
 echo "Registry push:"
-echo "  push_main              # Build and push main image"
+echo "  ac_push_main           # Build and push main image"
 echo ""
 echo "Run 'agenticore_help' for full list of available commands"

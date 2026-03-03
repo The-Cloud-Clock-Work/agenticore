@@ -4,10 +4,10 @@ set -e
 # Resolve agentihooks source (priority: local mount > git URL > installed venv)
 if [ -d "/opt/agentihooks-src" ]; then
   # Local dev: ~/dev/agentihooks mounted at /opt/agentihooks-src
-  pip install --quiet -e /opt/agentihooks-src
+  uv pip install --quiet -e /opt/agentihooks-src
 elif [ -n "${AGENTICORE_AGENTIHOOKS_URL:-}" ]; then
   # K8s / CI: install from git URL at runtime
-  pip install --quiet "agentihooks @ git+${AGENTICORE_AGENTIHOOKS_URL}"
+  uv pip install --quiet "agentihooks @ git+${AGENTICORE_AGENTIHOOKS_URL}"
 fi
 # else: use package already installed in /opt/venv at build time
 
