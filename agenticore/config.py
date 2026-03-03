@@ -312,9 +312,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
     mcp_lib_path = _env("AGENTICORE_MCP_LIB_PATH", raw.get("mcp_lib_path", ""))
     agentihub_url = _env("AGENTIHUB_URL", raw.get("agentihub_url", ""))
     agentihub_path = _env("AGENTIHUB_PATH", raw.get("agentihub_path", ""))
-    agentihub_sync_interval = _env_int(
-        "AGENTIHUB_SYNC_INTERVAL", str(raw.get("agentihub_sync_interval", 0))
-    )
+    agentihub_sync_interval = _env_int("AGENTIHUB_SYNC_INTERVAL", str(raw.get("agentihub_sync_interval", 0)))
 
     # Auth Broker — env overrides
     auth_broker_raw = raw.get("auth_broker", {})

@@ -918,9 +918,7 @@ def _auto_sync_agentihub(cfg):
         interval = cfg.agentihub_sync_interval or cfg.agentihooks_sync_interval
         if install_path and interval > 0:
             agentihooks_dir = _install_dir()
-            start_agentihub_watcher(
-                cfg.agentihub_url, install_path, agentihooks_dir, interval
-            )
+            start_agentihub_watcher(cfg.agentihub_url, install_path, agentihooks_dir, interval)
     except Exception as e:
         logger.warning("agentihub sync failed: %s — external agents unavailable", e)
 

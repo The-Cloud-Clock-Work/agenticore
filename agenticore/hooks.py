@@ -274,9 +274,7 @@ def sync_agentihub(url: str = "") -> Optional[Path]:
     return dest
 
 
-def start_agentihub_watcher(
-    url: str, dest: Path, agentihooks_dir: Path, interval: int
-) -> threading.Thread:
+def start_agentihub_watcher(url: str, dest: Path, agentihooks_dir: Path, interval: int) -> threading.Thread:
     """Background daemon thread that periodically re-fetches agentihub.
 
     After each fetch: runs agent_hub.py → rebuilds agentihooks profiles.
