@@ -24,6 +24,8 @@ fi
 # Append pod-specific shell functions to ~/.bashrc (for exec sessions)
 # /shared may have root-owned files from init job — fix ownership first
 [ -f "$HOME/.bashrc" ] && [ ! -w "$HOME/.bashrc" ] && chmod u+w "$HOME/.bashrc" 2>/dev/null || true
-[ -f "/opt/agenticore/bashrc" ] && cat /opt/agenticore/bashrc >> "$HOME/.bashrc" 2>/dev/null || true
+if [ -f "/opt/agenticore/bashrc" ] && ! grep -q "# agenticore-shell" "$HOME/.bashrc" 2>/dev/null; then
+  { echo "# agenticore-shell"; cat /opt/agenticore/bashrc; } >> "$HOME/.bashrc" 2>/dev/null || true
+fi
 
 exec "$@"
