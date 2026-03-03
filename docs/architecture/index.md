@@ -7,4 +7,4 @@ parent: Documentation
 
 # Architecture
 
-How Agenticore works internally — dual interface, profile system, job execution, and module layout.
+How Agenticore works internally — dual interface, profile system, job execution, agent mode, and module layout.
