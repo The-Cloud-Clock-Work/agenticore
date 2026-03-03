@@ -240,6 +240,22 @@ class TestBuildClaudeCmd:
         assert "Grep" in tools
         assert " Read " not in tools
 
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_empty_message(self):
+        """Empty message string should not crash — becomes last element."""
+        cmd = build_claude_cmd("")
+        assert cmd[-1] == ""
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_allowed_tools_all_empty_after_split(self):
+        """When allowed_tools is only commas, --allowedTools appears but with no tool args."""
+        cmd = build_claude_cmd("task", allowed_tools=",")
+        # The `if allowed_tools:` guard passes for "," (truthy string),
+        # but split/filter produces no items, so only the flag is added.
+        idx = cmd.index("--allowedTools")
+        # Next element should be the message (no tool args inserted)
+        assert cmd[idx + 1] == "task"
+
 
 # ── digest_claude_output ──────────────────────────────────────────────────
 
@@ -346,6 +362,20 @@ class TestDigestClaudeOutput:
         output = 'not json\n{bad json{\n{"result": "found"}\nmore text\n'
         result = digest_claude_output(output)
         assert result["result"] == "found"
+
+    def test_no_json_in_any_line(self):
+        """When no line contains valid JSON, raw text is returned as result."""
+        output = "line one\nline two\nno json here"
+        result = digest_claude_output(output)
+        assert result["result"] == output.strip()
+        assert result["is_error"] is False
+
+    def test_all_json_lines_malformed(self):
+        """When all JSON-looking lines are malformed, raw text fallback is used."""
+        output = "{bad json\n{also bad\n{still bad"
+        result = digest_claude_output(output)
+        assert result["result"] == output.strip()
+        assert result["session_id"] == ""
 
     def test_empty_result_list(self):
         data = {"result": []}
@@ -677,3 +707,145 @@ class TestAgentExecutor:
             result = await executor.execute(message="test", external_uuid="strip-uuid", wait=True)
 
         assert "_stderr" not in result
+
+    @pytest.mark.asyncio
+    async def test_execute_package_dir_not_exists_falls_back_to_cwd(self, _agent_env):
+        """When package_dir doesn't exist, cwd fallback is used."""
+        output = json.dumps({"result": "ok"})
+        mock_proc = _mock_subprocess(output)
+
+        captured_cwd = []
+
+        async def capture_exec(*args, **kwargs):
+            captured_cwd.append(kwargs.get("cwd"))
+            return mock_proc
+
+        with (
+            patch.dict(os.environ, {"AGENT_MODE_PACKAGE_DIR": "/nonexistent/pkg/path"}),
+            patch("asyncio.create_subprocess_exec", side_effect=capture_exec),
+        ):
+            reset_config()
+            executor = AgentExecutor()
+            await executor.execute(message="test", external_uuid="fallback-cwd", wait=True)
+
+        from pathlib import Path
+
+        assert captured_cwd[0] == str(Path.cwd())
+
+    @pytest.mark.asyncio
+    async def test_execute_retryable_error_triggers_retry(self, _agent_env):
+        """Retryable error triggers retry with backoff."""
+        error_output = json.dumps({"result": "rate limit exceeded", "is_error": True})
+        success_output = json.dumps({"result": "Done!", "is_error": False})
+        error_proc = _mock_subprocess(error_output, returncode=1, stderr_data="429 too many requests")
+        success_proc = _mock_subprocess(success_output)
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return error_proc
+            return success_proc
+
+        with (
+            patch.dict(os.environ, {"AGENT_MODE_MAX_RETRIES": "3"}),
+            patch("asyncio.create_subprocess_exec", side_effect=mock_exec),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            reset_config()
+            executor = AgentExecutor()
+            result = await executor.execute(message="test", external_uuid="retry-ok", wait=True)
+
+        assert call_count == 2
+        assert result["result"] == "Done!"
+        assert result["is_error"] is False
+
+    @pytest.mark.asyncio
+    async def test_execute_non_retryable_error_no_retry(self, _agent_env):
+        """Non-retryable error returns immediately without retry."""
+        error_output = json.dumps({"result": "unknown internal error", "is_error": True})
+        error_proc = _mock_subprocess(error_output, returncode=1, stderr_data="segfault")
+
+        call_count = 0
+
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return error_proc
+
+        with (
+            patch.dict(os.environ, {"AGENT_MODE_MAX_RETRIES": "3"}),
+            patch("asyncio.create_subprocess_exec", side_effect=mock_exec),
+        ):
+            reset_config()
+            executor = AgentExecutor()
+            result = await executor.execute(message="test", external_uuid="no-retry", wait=True)
+
+        assert call_count == 1
+        assert result["is_error"] is True
+
+    @pytest.mark.asyncio
+    async def test_execute_nonzero_exit_with_valid_json_stdout(self, _agent_env):
+        """Non-zero exit with parseable JSON stdout preserves is_error and result."""
+        output = json.dumps({"result": "partial output before crash", "is_error": False})
+        mock_proc = _mock_subprocess(output, returncode=1)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            result = await executor.execute(message="test", external_uuid="exit-json", wait=True)
+
+        assert result["is_error"] is True
+        assert result["result"] == "partial output before crash"
+
+    @pytest.mark.asyncio
+    async def test_execute_nonzero_exit_empty_result_uses_stderr(self, _agent_env):
+        """Non-zero exit with empty result falls back to stderr."""
+        output = json.dumps({"result": ""})
+        mock_proc = _mock_subprocess(output, returncode=1, stderr_data="fatal crash")
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            result = await executor.execute(message="test", external_uuid="exit-stderr", wait=True)
+
+        assert result["is_error"] is True
+        assert result["result"] == "fatal crash"
+
+    @pytest.mark.asyncio
+    async def test_execute_nonzero_exit_no_stderr_uses_exit_code(self, _agent_env):
+        """Non-zero exit with no stderr uses exit code message."""
+        output = json.dumps({"result": ""})
+        mock_proc = _mock_subprocess(output, returncode=137, stderr_data="")
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            result = await executor.execute(message="test", external_uuid="exit-code", wait=True)
+
+        assert result["is_error"] is True
+        assert "137" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_execute_build_env_raises(self, _agent_env):
+        """When build_subprocess_env raises, exception propagates (not inside retry loop)."""
+        with patch("agenticore.runner.build_subprocess_env", side_effect=RuntimeError("env build failed")):
+            executor = AgentExecutor()
+            with pytest.raises(RuntimeError, match="env build failed"):
+                await executor.execute(message="test", external_uuid="env-fail", wait=True)
+
+    @pytest.mark.asyncio
+    async def test_execute_communicate_timeout(self, _agent_env):
+        """Timeout during proc.communicate produces error result."""
+        mock_proc = AsyncMock()
+        mock_proc.pid = 99999
+
+        async def timeout_communicate(input=None):
+            raise TimeoutError("deadline exceeded")
+
+        mock_proc.communicate = timeout_communicate
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            result = await executor.execute(message="test", external_uuid="comm-timeout", wait=True)
+
+        assert result["is_error"] is True

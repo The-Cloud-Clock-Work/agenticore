@@ -109,3 +109,37 @@ class TestGetSessionState:
 
         _clean_state.write_text("")
         assert get_session_state("any") is None
+
+
+@pytest.mark.unit
+class TestStateUnhappyPaths:
+    def test_save_raises_on_permission_error(self, _clean_state):
+        """PermissionError during file write propagates."""
+        from agenticore.agent_mode.state import save_state
+
+        with patch("agenticore.agent_mode.state._save_file_state", side_effect=PermissionError("denied")):
+            with pytest.raises(PermissionError):
+                save_state("uuid-perm", wait=True)
+
+    def test_non_serializable_meta_raises(self, _clean_state):
+        """Non-serializable meta value raises TypeError during save."""
+        from datetime import datetime
+        from agenticore.agent_mode.state import save_state
+
+        # datetime is not JSON-serializable — the meta dict is stored as-is
+        # so json.dump will fail when writing to file
+        with pytest.raises(TypeError):
+            save_state("uuid-bad-meta", wait=True, meta={"ts": datetime.now()})
+
+    def test_get_state_handles_oserror(self, _clean_state):
+        """OSError during file read returns None gracefully (caught by except clause)."""
+        from agenticore.agent_mode.state import get_session_state
+
+        # Write valid data so path.exists() returns True
+        _clean_state.write_text('{"uuid-os": {"uuid": "uuid-os"}}')
+
+        # Patch open to simulate disk read failure — caught by except OSError in _load_file_state
+        with patch("builtins.open", side_effect=OSError("disk failure")):
+            result = get_session_state("uuid-os")
+
+        assert result is None

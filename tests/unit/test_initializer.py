@@ -289,6 +289,64 @@ class TestInitializeAgentMode:
         {
             "AGENT_MODE": "true",
             "AGENT_MODE_PACKAGE_DIR": "",
+            "PACKAGE_REPO_URL": "",
+            "REDIS_URL": "",
+        },
+    )
+    def test_py_script_nonzero_exit_continues(self, tmp_path):
+        """A failing Python script should not prevent subsequent scripts from running."""
+        from agenticore.agent_mode.initializer import initialize_agent_mode
+
+        pkg = tmp_path / "package"
+        runners = pkg / "runners"
+        runners.mkdir(parents=True)
+
+        marker = tmp_path / "py_marker.txt"
+        (runners / "001_fail.py").write_text("import sys; sys.exit(1)\n")
+        (runners / "002_ok.py").write_text(f"with open('{marker}', 'w') as f: f.write('ok')\n")
+
+        with patch.dict(os.environ, {"AGENT_MODE_PACKAGE_DIR": str(pkg)}):
+            reset_config()
+            initialize_agent_mode()
+
+        assert marker.exists()
+        assert "ok" in marker.read_text()
+
+    def test_script_timeout_raises(self, tmp_path):
+        """Script exceeding timeout raises TimeoutExpired."""
+        import subprocess
+
+        pkg = tmp_path / "package"
+        runners = pkg / "runners"
+        runners.mkdir(parents=True)
+
+        script = runners / "001_slow.sh"
+        script.write_text("#!/bin/bash\nsleep 300\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("cmd", 60)):
+            with pytest.raises(subprocess.TimeoutExpired):
+                _run_startup_scripts(str(pkg))
+
+    def test_clone_timeout_raises(self, tmp_path):
+        """Git clone exceeding timeout raises TimeoutExpired."""
+        import subprocess
+
+        target = tmp_path / "app"
+
+        with (
+            patch("subprocess.run", side_effect=subprocess.TimeoutExpired("git clone", 120)),
+            patch("agenticore.repos.resolve_github_token", return_value=None),
+            patch("agenticore.git_credentials.git_askpass_env"),
+        ):
+            with pytest.raises(subprocess.TimeoutExpired):
+                _clone_package_repo("https://github.com/org/repo.git", "main", str(target))
+
+    @patch.dict(
+        os.environ,
+        {
+            "AGENT_MODE": "true",
+            "AGENT_MODE_PACKAGE_DIR": "",
             "PACKAGE_REPO_URL": "https://github.com/org/agent.git",
             "REDIS_URL": "",
         },

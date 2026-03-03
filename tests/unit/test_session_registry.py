@@ -200,6 +200,49 @@ class TestSessionMappingDataclass:
 
 
 @pytest.mark.unit
+class TestSessionRegistryUnhappyPaths:
+    def test_save_raises_on_permission_error(self, _clean_sessions):
+        """PermissionError on file write propagates (documents current behavior)."""
+        from agenticore.agent_mode.session_registry import SessionRegistry
+
+        reg = SessionRegistry()
+        with patch("agenticore.agent_mode.session_registry._save_file_sessions", side_effect=PermissionError("denied")):
+            with pytest.raises(PermissionError):
+                reg.register("ext-perm", stateless=False)
+
+    def test_from_dict_ignores_extra_keys(self):
+        """Extra keys in the dict are silently ignored."""
+        from agenticore.agent_mode.session_registry import SessionMapping
+
+        m = SessionMapping.from_dict(
+            {
+                "external_uuid": "ext",
+                "claude_session_id": "claude",
+                "session_type": "persistent",
+                "status": "active",
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z",
+                "unknown_field": "should be ignored",
+                "another_extra": 42,
+            }
+        )
+        assert m.external_uuid == "ext"
+        assert m.claude_session_id == "claude"
+
+    def test_register_after_unknown_status_creates_new(self, _clean_sessions):
+        """Session with a non-active status is not reused by persistent register."""
+        from agenticore.agent_mode.session_registry import SessionRegistry
+
+        reg = SessionRegistry()
+        reg.register("ext-unknown", stateless=False)
+        # Manually set status to something unusual
+        reg._update_status("ext-unknown", "unknown")
+
+        mapping = reg.register("ext-unknown", stateless=False)
+        assert mapping.status == "active"
+
+
+@pytest.mark.unit
 class TestModuleLevelConvenience:
     """Test the module-level convenience functions that delegate to _registry."""
 
