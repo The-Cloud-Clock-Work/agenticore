@@ -266,6 +266,10 @@ Profiles are **not bundled with Agenticore**. They live in two places:
 
 Later sources override earlier ones when names collide.
 
+#### Agent Hop — third-party agent hubs
+
+Agentihooks includes an **Agent Hop** connector (`scripts/agent_hop.py`) that builds agent definitions from a separate **agentihub** repo into `profiles/`. This enables private agent identities (CLAUDE.md, workflows, evaluation) to live outside the open-source agentihooks repo while still using its build pipeline. Agenticore discovers these built profiles normally — no code changes required in Agenticore.
+
 ### Profile inheritance
 
 ```yaml
