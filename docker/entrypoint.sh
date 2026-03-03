@@ -16,10 +16,12 @@ fi
 # agentihooks reads AGENTIHOOKS_PROFILE and AGENTIHOOKS_MCP_FILE env vars directly
 agentihooks global
 
-# Append pod-specific shell functions to ~/.bashrc (for exec sessions)
-# /shared may have root-owned files from init job — fix ownership first
+# Install pod-specific shell functions into ~/.bashrc (for exec sessions)
+# Always replace the block so new builds update the PVC copy
 [ -f "$HOME/.bashrc" ] && [ ! -w "$HOME/.bashrc" ] && chmod u+w "$HOME/.bashrc" 2>/dev/null || true
-if [ -f "/opt/agenticore/bashrc" ] && ! grep -q "# agenticore-shell" "$HOME/.bashrc" 2>/dev/null; then
+if [ -f "/opt/agenticore/bashrc" ]; then
+  # Strip old block if present, then append fresh copy
+  sed -i '/# agenticore-shell/,$d' "$HOME/.bashrc" 2>/dev/null || true
   { echo "# agenticore-shell"; cat /opt/agenticore/bashrc; } >> "$HOME/.bashrc" 2>/dev/null || true
 fi
 
