@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **docs(profile-system)**: Document Agent Hop integration — agentihooks' new connector that builds profiles from external agentihub repos. No code changes in agenticore; profiles built by Agent Hop are discovered normally via `AGENTICORE_AGENTIHOOKS_PATH`.
+- **docs(profile-system)**: Document Agent Hub integration — agentihooks' new connector that builds profiles from external agentihub repos. No code changes in agenticore; profiles built by Agent Hub are discovered normally via `AGENTICORE_AGENTIHOOKS_PATH`.
 
 ## [0.1.1] - 2025-06-15
 
