@@ -13,8 +13,8 @@ fi
 
 # Wire hooks, skills, agents, CLAUDE.md into ~/.claude
 # HOME determines where: /home/agenticore (local) or /shared (K8s)
-PROFILE="${AGENTIHOOKS_PROFILE:-${AGENTICORE_DEFAULT_PROFILE:-default}}"
-agentihooks global --profile "$PROFILE"
+# Profile selection: agentihooks reads AGENTIHOOKS_PROFILE env var directly
+agentihooks global
 
 # Install gateway MCP servers if file path is configured and exists on the volume
 if [ -n "${AGENTIHOOKS_MCP_FILE:-}" ] && [ -f "$AGENTIHOOKS_MCP_FILE" ]; then
