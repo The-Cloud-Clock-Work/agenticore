@@ -5,7 +5,6 @@
 # Usage: ./alias_setup.sh
 #
 # Installs shell aliases for the agenticore CLI.
-# Requires AGENTICORE_AGENT env var for agent-specific commands.
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,14 +16,10 @@ ALIASES_BLOCK='
 # =============================================================================
 # agenticore AI Services Aliases
 # =============================================================================
-# Agent context: Set AGENTICORE_AGENT env var
-# Example: export AGENTICORE_AGENT=my_agent
-# =============================================================================
 
-# Agent container management (uses AGENTICORE_AGENT env var)
+# Agent container management
 alias build_agent='"'"'agenticore agent --build'"'"'
-alias run_agent='"'"'agenticore agent --run --dev --full'"'"'
-alias launch_agent='"'"'agenticore agent --run --full'"'"'
+alias run_agent='"'"'agenticore agent --run'"'"'
 alias enter_agent='"'"'agenticore agent --enter'"'"'
 alias stop_agent='"'"'agenticore agent --stop'"'"'
 alias logs_agent='"'"'agenticore agent --logs'"'"'
@@ -45,8 +40,7 @@ agenticore_help() {
     echo ""
     echo "  CONTAINER MANAGEMENT:"
     echo "    build_agent          Build agent Docker image"
-    echo "    run_agent            Run container in dev mode (volume mounts)"
-    echo "    launch_agent         Run container in production mode"
+    echo "    run_agent            Run container in detached mode"
     echo "    enter_agent          Shell into running container"
     echo "    stop_agent           Stop running container"
     echo "    logs_agent           View container logs"
@@ -59,8 +53,6 @@ agenticore_help() {
     echo "    sourcebash           Reload ~/.bashrc"
     echo "    agenticore_help      Show this help message"
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  Current AGENTICORE_AGENT: ${AGENTICORE_AGENT:-<not set>}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 }
@@ -94,14 +86,12 @@ echo "Run 'source ~/.bashrc' or open a new terminal to use them."
 echo ""
 echo "Quick start:"
 echo "  build_agent            # Build agent image"
-echo "  run_agent              # Run in dev mode"
+echo "  run_agent              # Run container"
 echo "  enter_agent            # Enter container"
 echo "  logs_agent             # View container logs"
 echo "  stop_agent             # Stop container"
 echo ""
 echo "Registry push:"
 echo "  push_main              # Build and push main image"
-echo ""
-echo "Or set AGENTICORE_AGENT in .env file"
 echo ""
 echo "Run 'agenticore_help' for full list of available commands"

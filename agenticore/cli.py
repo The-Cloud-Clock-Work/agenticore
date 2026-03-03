@@ -535,25 +535,12 @@ def _find_file_up(filename: str, max_levels: int = 5):
     return None
 
 
-def _resolve_container_name(args) -> str:
-    import os
-    from pathlib import Path
-
-    if getattr(args, "agent_name", None):
-        return args.agent_name
-    if "AGENTICORE_AGENT" in os.environ:
-        return os.environ["AGENTICORE_AGENT"]
-    env_path = Path(getattr(args, "env", ".env"))
-    if env_path.exists():
-        env_vars = _load_env_file(env_path)
-        if "AGENTICORE_AGENT" in env_vars:
-            return env_vars["AGENTICORE_AGENT"]
-    return "agenticore"
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # agent command
 # ─────────────────────────────────────────────────────────────────────────────
+
+_AGENT_CONTAINER = "agenticore"
+_AGENT_IMAGE = "agenticore:latest"
 
 
 def _cmd_agent(args):
@@ -576,18 +563,17 @@ def _cmd_agent(args):
             print(f"  {line}")
         return
 
-    name = _resolve_container_name(args)
-    image_name = f"{name}:latest"
+    name = _AGENT_CONTAINER
     _log_info(f"Container: {name}")
 
     if args.build:
         dockerfile = _find_file_up("Dockerfile")
         project_root = dockerfile.parent if dockerfile else Path.cwd()
-        _log_info(f"Building {image_name} ...")
+        _log_info(f"Building {_AGENT_IMAGE} ...")
         _log_info(f"  Dockerfile : {dockerfile}")
         _log_info(f"  Context    : {project_root}")
-        _run_cmd(["docker", "build", "-t", image_name, str(project_root)])
-        _log_success(f"Built: {image_name}")
+        _run_cmd(["docker", "build", "-t", _AGENT_IMAGE, str(project_root)])
+        _log_success(f"Built: {_AGENT_IMAGE}")
 
     if args.run:
         if _container_exists(name):
@@ -598,44 +584,23 @@ def _cmd_agent(args):
                 _log_info("Removing existing stopped container...")
                 _run_cmd(["docker", "rm", name], check=False)
 
-        env_path = Path(getattr(args, "env", ".env"))
-        dockerfile = _find_file_up("Dockerfile")
-        project_root = dockerfile.parent if dockerfile else Path.cwd()
+        cmd = ["docker", "run", "-d", "--name", name, "-p", "8200:8200"]
 
-        cmd = [
-            "docker", "run", "-d", "--name", name,
-            "-p", "8200:8200",
-            "-e", f"AGENTICORE_AGENT={name}",
-        ]
-        if env_path.exists():
+        env_path = _find_file_up(".env")
+        if env_path:
             cmd.extend(["--env-file", str(env_path)])
             _log_info(f"Loading env: {env_path}")
 
-        if args.dev:
-            cmd.extend(["-e", "STORAGE_SYNC=false"])
-            if not args.full and not getattr(args, "entrypoint", None):
-                cmd.extend(["--entrypoint", "/bin/bash", "-it"])
-                _log_info("Dev mode: bash entrypoint")
-            else:
-                _log_info("Full mode: image entrypoint")
-            cmd.extend(["-v", f"{project_root}:/app:rw"])
-            _log_info(f"Mounted: {project_root} -> /app")
-
-        if getattr(args, "entrypoint", None):
-            cmd.extend(["--entrypoint", args.entrypoint])
-
-        final_image = getattr(args, "image", None) or image_name
-        cmd.append(final_image)
-
+        cmd.append(_AGENT_IMAGE)
         _run_cmd(cmd)
         time.sleep(2)
 
         if _container_running(name):
             _log_success(f"Container '{name}' started")
-            _log_info(f"API   : http://localhost:8200")
-            _log_info(f"Enter : agenticore agent --enter")
-            _log_info(f"Logs  : agenticore agent --logs")
-            _log_info(f"Stop  : agenticore agent --stop")
+            _log_info("API   : http://localhost:8200")
+            _log_info("Enter : agenticore agent --enter")
+            _log_info("Logs  : agenticore agent --logs")
+            _log_info("Stop  : agenticore agent --stop")
         else:
             _log_error("Container failed to start")
             _log_info(f"Check: docker logs {name}")
@@ -836,18 +801,12 @@ def main():
 
     # agent
     p_agent = sub.add_parser("agent", help="Build, run, and manage the agenticore container")
-    p_agent.add_argument("agent_name", nargs="?", help="Container name (or set AGENTICORE_AGENT)")
     p_agent.add_argument("--build", "-b", action="store_true", help="Build the Docker image")
     p_agent.add_argument("--run", "-r", action="store_true", help="Run container in detached mode")
     p_agent.add_argument("--enter", "-e", action="store_true", help="Shell into running container")
     p_agent.add_argument("--stop", "-s", action="store_true", help="Stop and remove the container")
     p_agent.add_argument("--logs", "-l", action="store_true", help="Follow container logs")
-    p_agent.add_argument("--dev", "-d", action="store_true", help="Dev mode: mount source, disable sync")
-    p_agent.add_argument("--full", "-f", action="store_true", help="Keep image entrypoint when using --dev")
     p_agent.add_argument("--list", action="store_true", help="List local containers")
-    p_agent.add_argument("--env", default=".env", help="Path to .env file (default: .env)")
-    p_agent.add_argument("--entrypoint", help="Custom container entrypoint")
-    p_agent.add_argument("--image", help="Custom image to run (NAME:TAG)")
     p_agent.set_defaults(func=_cmd_agent)
 
     # push
