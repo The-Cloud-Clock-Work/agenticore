@@ -22,7 +22,9 @@ if [ -n "${AGENTIHOOKS_MCP_FILE:-}" ] && [ -f "$AGENTIHOOKS_MCP_FILE" ]; then
 fi
 
 # Append pod-specific shell functions to ~/.bashrc (for exec sessions)
-[ -f "/opt/agenticore/bashrc" ] && cat /opt/agenticore/bashrc >> "$HOME/.bashrc"
+# /shared may have root-owned files from init job — fix ownership first
+[ -f "$HOME/.bashrc" ] && [ ! -w "$HOME/.bashrc" ] && chmod u+w "$HOME/.bashrc" 2>/dev/null || true
+[ -f "/opt/agenticore/bashrc" ] && cat /opt/agenticore/bashrc >> "$HOME/.bashrc" 2>/dev/null || true
 
 # Install colt-tools (personal shell toolbelt)
 COLT_TOOLS_DIR="$HOME/colt-tools"
