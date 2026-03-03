@@ -904,23 +904,19 @@ def _auto_sync_agentihooks(cfg):
 
 
 def _auto_sync_agentihub(cfg):
-    """Auto-sync agentihub if URL is configured."""
+    """Auto-sync agentihub if URL is configured (clone only, no profile build).
+
+    Agent mode handles its own provisioning via initializer.py.
+    This just ensures the repo is available on shared FS.
+    """
     if not cfg.agentihub_url:
         return
     try:
-        from agenticore.hooks import (
-            _install_dir,
-            sync_agentihub,
-            start_agentihub_watcher,
-        )
+        from agenticore.hooks import sync_agentihub
 
-        install_path = sync_agentihub()
-        interval = cfg.agentihub_sync_interval or cfg.agentihooks_sync_interval
-        if install_path and interval > 0:
-            agentihooks_dir = _install_dir()
-            start_agentihub_watcher(cfg.agentihub_url, install_path, agentihooks_dir, interval)
+        sync_agentihub()
     except Exception as e:
-        logger.warning("agentihub sync failed: %s — external agents unavailable", e)
+        logger.warning("agentihub sync failed: %s — non-fatal", e)
 
 
 def _auto_sync_mcp_lib(cfg):

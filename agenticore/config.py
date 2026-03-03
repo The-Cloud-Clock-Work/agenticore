@@ -94,6 +94,7 @@ class AgentModeConfig:
     evaluation_dir: str = "/app/evaluation"
     repo_url: str = ""
     repo_branch: str = "main"
+    agent: str = ""  # AGENTIHUB_AGENT — which agent to load from agentihub
     model: str = "sonnet"
     max_turns: int = 80
     permission_mode: str = "bypassPermissions"
@@ -288,6 +289,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         evaluation_dir=_env("AGENT_MODE_EVALUATION_DIR", "/app/evaluation"),
         repo_url=_env("PACKAGE_REPO_URL", ""),
         repo_branch=_env("PACKAGE_REPO_BRANCH", "main"),
+        agent=_env("AGENTIHUB_AGENT", ""),
         model=_env("AGENT_MODE_MODEL", "sonnet"),
         max_turns=_env_int("AGENT_MODE_MAX_TURNS", "80"),
         permission_mode=_env("AGENT_MODE_PERMISSION_MODE", "bypassPermissions"),

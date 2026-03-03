@@ -16,6 +16,70 @@ from agenticore.config import get_config
 _log = logging.getLogger(__name__)
 
 
+def _provision_from_agentihub(cfg) -> None:
+    """Clone agentihub and copy agent's package/ and evaluation/ to /app/.
+
+    Requires AGENTIHUB_URL and AGENTIHUB_AGENT to be set. Clones the repo,
+    finds agents/{agent_name}/, then copies package/ → /app/package/ and
+    evaluation/ → /app/evaluation/.
+    """
+    import shutil
+
+    from agenticore.repos import resolve_github_token
+    from agenticore.git_credentials import git_askpass_env
+
+    hub_url = os.getenv("AGENTIHUB_URL", "")
+    agent_name = cfg.agent_mode.agent
+    if not hub_url or not agent_name:
+        _log.debug("No AGENTIHUB_URL or AGENTIHUB_AGENT — skipping agentihub provision")
+        return
+
+    _log.info("Provisioning from agentihub: agent=%s url=%s", agent_name, hub_url)
+
+    clone_dir = Path("/tmp/agentihub-clone")
+    if clone_dir.exists():
+        shutil.rmtree(clone_dir)
+
+    token = resolve_github_token()
+    with git_askpass_env(token) as extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", hub_url, str(clone_dir)],
+            capture_output=True, text=True, timeout=120, env=env,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Agentihub clone failed: {result.stderr.strip()}")
+
+    agent_dir = clone_dir / "agents" / agent_name
+    if not agent_dir.exists():
+        raise RuntimeError(f"Agent '{agent_name}' not found in agentihub at {agent_dir}")
+
+    # Copy package/ → /app/package/
+    src_package = agent_dir / "package"
+    if src_package.exists():
+        dest_package = Path(cfg.agent_mode.package_dir)
+        if dest_package.exists():
+            shutil.rmtree(dest_package)
+        shutil.copytree(src_package, dest_package)
+        _log.info("Copied package/ → %s", dest_package)
+    else:
+        _log.warning("No package/ dir in agent '%s'", agent_name)
+
+    # Copy evaluation/ → /app/evaluation/
+    src_eval = agent_dir / "evaluation"
+    if src_eval.exists():
+        dest_eval = Path(cfg.agent_mode.evaluation_dir)
+        if dest_eval.exists():
+            shutil.rmtree(dest_eval)
+        shutil.copytree(src_eval, dest_eval)
+        _log.info("Copied evaluation/ → %s", dest_eval)
+
+    # Clean up clone
+    shutil.rmtree(clone_dir, ignore_errors=True)
+    _log.info("Agentihub provision complete for agent '%s'", agent_name)
+
+
 def _clone_package_repo(repo_url: str, branch: str, target_dir: str) -> None:
     """Clone the package repo to /app using git subprocess."""
     from agenticore.repos import resolve_github_token
@@ -201,7 +265,16 @@ def initialize_agent_mode() -> None:
 
     _log.info("=== Agent Mode Initialization ===")
 
-    # Step 1: Clone package repo if URL is configured
+    # Step 0: Provision from agentihub if AGENTIHUB_AGENT is set
+    if am.agent:
+        try:
+            _provision_from_agentihub(cfg)
+        except Exception as e:
+            _log.error("Agentihub provision failed: %s", e)
+            print(f"FATAL: Agentihub provision failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # Step 1: Clone package repo if URL is configured (skipped if agentihub already populated)
     if am.repo_url:
         try:
             _clone_package_repo(am.repo_url, am.repo_branch, str(Path(am.package_dir).parent))
