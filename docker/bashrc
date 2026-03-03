@@ -44,7 +44,7 @@ helpme() {
   echo "    helpme           Show this help"
   echo ""
   if [ -d "$HOME/colt-tools" ]; then
-  echo "  Colt-Tools:  (run 'colt-tools-help' for full list)"
+  echo "  Colt-Tools:"
   echo "    wkt-get [q]      Find Claude project/worktree"
   echo "    gw <branch>      Create/switch git worktree"
   echo "    claude-login     Switch Claude auth profile"
@@ -53,7 +53,6 @@ helpme() {
   echo "    getsec / setsec  AWS Secrets Manager CLI"
   echo "    loadenv [file]   Source .env file"
   echo "    geven            Show AWS caller identity"
-  echo "    colt-tools-help  Show all tools in the toolbelt"
   echo ""
   fi
 }
