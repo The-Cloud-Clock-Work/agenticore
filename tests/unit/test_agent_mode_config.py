@@ -81,3 +81,49 @@ class TestAgentModeConfig:
     def test_disabled_explicitly(self, tmp_path):
         cfg = load_config(str(tmp_path / "x.yml"))
         assert cfg.agent_mode.enabled is False
+
+    @patch.dict(os.environ, {**_AGENT_CLEAN_ENV, "AGENT_MODE": "1"})
+    def test_enabled_with_1(self, tmp_path):
+        """AGENT_MODE=1 also enables agent mode."""
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.agent_mode.enabled is True
+
+    @patch.dict(os.environ, {**_AGENT_CLEAN_ENV, "AGENT_MODE": "yes"})
+    def test_enabled_with_yes(self, tmp_path):
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.agent_mode.enabled is True
+
+    @patch.dict(os.environ, {**_AGENT_CLEAN_ENV, "AGENT_MODE_EVALUATION_DIR": "/eval"})
+    def test_evaluation_dir_override(self, tmp_path):
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.agent_mode.evaluation_dir == "/eval"
+
+    @patch.dict(os.environ, {**_AGENT_CLEAN_ENV, "PACKAGE_REPO_BRANCH": "develop"})
+    def test_repo_branch_override(self, tmp_path):
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.agent_mode.repo_branch == "develop"
+
+    @patch.dict(os.environ, {**_AGENT_CLEAN_ENV, "AGENT_MODE_EFFORT": "high"})
+    def test_effort_override(self, tmp_path):
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.agent_mode.effort == "high"
+
+    @patch.dict(os.environ, {**_AGENT_CLEAN_ENV, "AGENT_MODE_SESSION_TTL": "7200"})
+    def test_session_ttl_override(self, tmp_path):
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.agent_mode.session_ttl == 7200
+
+    @patch.dict(os.environ, {**_AGENT_CLEAN_ENV, "AGENT_MODE_MAX_RETRIES": "5"})
+    def test_max_retries_override(self, tmp_path):
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.agent_mode.max_retry_attempts == 5
+
+    @patch.dict(os.environ, {**_AGENT_CLEAN_ENV, "AGENT_MODE_PERMISSION_MODE": "dontAsk"})
+    def test_permission_mode_override(self, tmp_path):
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.agent_mode.permission_mode == "dontAsk"
+
+    @patch.dict(os.environ, {**_AGENT_CLEAN_ENV, "AGENT_MODE_OUTPUT_FORMAT": "text"})
+    def test_output_format_override(self, tmp_path):
+        cfg = load_config(str(tmp_path / "x.yml"))
+        assert cfg.agent_mode.output_format == "text"

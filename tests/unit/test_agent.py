@@ -1,12 +1,15 @@
 """Unit tests for agent_mode/agent.py."""
 
+import asyncio
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from agenticore.agent_mode.agent import (
+    AgentExecutor,
+    _load_system_prompt,
     build_claude_cmd,
     digest_claude_output,
     reset_system_prompt_cache,
@@ -37,6 +40,9 @@ _BASE_ENV = {
     "AGENT_MODE_APPEND_SYSTEM_PROMPT": "true",
     "REDIS_URL": "",
 }
+
+
+# ── build_claude_cmd ─────────────────────────────────────────────────────
 
 
 @pytest.mark.unit
@@ -100,6 +106,27 @@ class TestBuildClaudeCmd:
             assert "--system-prompt-file" in cmd
 
     @patch.dict(os.environ, _BASE_ENV)
+    def test_inline_prompt_overrides_system_md(self, tmp_path):
+        """Inline system_prompt takes priority over system.md file."""
+        pkg_dir = tmp_path / "pkg"
+        pkg_dir.mkdir()
+        (pkg_dir / "system.md").write_text("From file.")
+        with patch.dict(os.environ, {"AGENT_MODE_PACKAGE_DIR": str(pkg_dir)}):
+            reset_config()
+            cmd = build_claude_cmd("task", system_prompt="Inline override.")
+            assert "--system-prompt" in cmd
+            assert "--append-system-prompt-file" not in cmd
+            assert "--system-prompt-file" not in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_no_system_prompt_when_no_file(self):
+        """No system prompt flags when system.md doesn't exist and none provided."""
+        cmd = build_claude_cmd("task")
+        assert "--system-prompt" not in cmd
+        assert "--system-prompt-file" not in cmd
+        assert "--append-system-prompt-file" not in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
     def test_effort_flag(self):
         cmd = build_claude_cmd("task", effort="high")
         assert "--effort" in cmd
@@ -120,9 +147,101 @@ class TestBuildClaudeCmd:
         assert "Glob" in cmd
 
     @patch.dict(os.environ, _BASE_ENV)
+    def test_disallowed_tools(self):
+        cmd = build_claude_cmd("task", disallowed_tools="Bash,Write")
+        assert "--disallowedTools" in cmd
+        assert "Bash" in cmd
+        assert "Write" in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_fallback_model(self):
+        cmd = build_claude_cmd("task", fallback_model="haiku")
+        assert "--fallback-model" in cmd
+        assert "haiku" in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
     def test_no_effort_when_empty(self):
         cmd = build_claude_cmd("task")
         assert "--effort" not in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_no_budget_when_zero(self):
+        cmd = build_claude_cmd("task", max_budget_usd=0)
+        assert "--max-budget-usd" not in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_no_fallback_when_empty(self):
+        cmd = build_claude_cmd("task")
+        assert "--fallback-model" not in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_no_session_flags_without_id(self):
+        """When no session ID and not stateless, no session flags added."""
+        cmd = build_claude_cmd("task", claude_session_id="", stateless=False)
+        assert "--resume" not in cmd
+        assert "--session-id" not in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_max_turns_override(self):
+        cmd = build_claude_cmd("task", max_turns=25)
+        assert "25" in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_permission_mode_override(self):
+        cmd = build_claude_cmd("task", permission_mode="plan")
+        assert "plan" in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_output_format_override(self):
+        cmd = build_claude_cmd("task", output_format="text")
+        idx = cmd.index("--output-format")
+        assert cmd[idx + 1] == "text"
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENT_MODE_EFFORT": "medium"})
+    def test_config_effort_default(self):
+        """Config-level effort used when no per-request override."""
+        reset_config()
+        cmd = build_claude_cmd("task")
+        assert "--effort" in cmd
+        assert "medium" in cmd
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENT_MODE_EFFORT": "medium"})
+    def test_request_effort_overrides_config(self):
+        """Per-request effort overrides config default."""
+        reset_config()
+        cmd = build_claude_cmd("task", effort="high")
+        assert "high" in cmd
+        assert "medium" not in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_message_always_last(self):
+        """The message is always the last element of the command."""
+        cmd = build_claude_cmd(
+            "my task",
+            claude_session_id="s",
+            stateless=True,
+            model="opus",
+            effort="high",
+            max_budget_usd=10.0,
+        )
+        assert cmd[-1] == "my task"
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_allowed_tools_strips_whitespace(self):
+        cmd = build_claude_cmd("task", allowed_tools=" Read , Grep , ")
+        tools_start = cmd.index("--allowedTools") + 1
+        # Extract tools until next flag or message
+        tools = []
+        for i in range(tools_start, len(cmd)):
+            if cmd[i].startswith("--") or cmd[i] == "task":
+                break
+            tools.append(cmd[i])
+        assert "Read" in tools
+        assert "Grep" in tools
+        assert " Read " not in tools
+
+
+# ── digest_claude_output ──────────────────────────────────────────────────
 
 
 @pytest.mark.unit
@@ -160,6 +279,15 @@ class TestDigestClaudeOutput:
     def test_empty_output(self):
         result = digest_claude_output("")
         assert result["is_error"] is True
+        assert "Empty output" in result["result"]
+
+    def test_whitespace_only_output(self):
+        result = digest_claude_output("   \n\n  ")
+        assert result["is_error"] is True
+
+    def test_none_like_output(self):
+        result = digest_claude_output(None)
+        assert result["is_error"] is True
 
     def test_plain_text_fallback(self):
         result = digest_claude_output("Just plain text output")
@@ -170,3 +298,382 @@ class TestDigestClaudeOutput:
         result = digest_claude_output(output)
         assert result["result"] == "ok"
         assert result["session_id"] == "s1"
+
+    def test_session_id_camel_case(self):
+        """sessionId (camelCase) is also recognized."""
+        data = {"result": "ok", "sessionId": "camel-id"}
+        result = digest_claude_output(json.dumps(data))
+        assert result["session_id"] == "camel-id"
+
+    def test_non_dict_blocks_skipped(self):
+        """Non-dict items in result list are skipped gracefully."""
+        data = {
+            "result": [
+                "just a string",
+                42,
+                {"type": "text", "text": "real text"},
+                None,
+            ],
+        }
+        result = digest_claude_output(json.dumps(data))
+        assert result["result"] == "real text"
+
+    def test_numeric_result_converted_to_str(self):
+        data = {"result": 42}
+        result = digest_claude_output(json.dumps(data))
+        assert result["result"] == "42"
+
+    def test_is_error_true_from_data(self):
+        data = {"result": "failed", "is_error": True}
+        result = digest_claude_output(json.dumps(data))
+        assert result["is_error"] is True
+
+    def test_usage_field_extracted(self):
+        data = {"result": "ok", "usage": {"input_tokens": 100, "output_tokens": 50}}
+        result = digest_claude_output(json.dumps(data))
+        assert result["usage"]["input_tokens"] == 100
+        assert result["usage"]["output_tokens"] == 50
+
+    def test_multiple_json_lines_uses_last_valid(self):
+        """When full parse fails and we scan lines, last valid JSON line wins."""
+        output = 'log line\n{"result": "first"}\n{"result": "second", "session_id": "s2"}\n'
+        result = digest_claude_output(output)
+        # Reverse scan finds "second" first
+        assert result["result"] == "second"
+        assert result["session_id"] == "s2"
+
+    def test_malformed_json_lines_skipped(self):
+        output = 'not json\n{bad json{\n{"result": "found"}\nmore text\n'
+        result = digest_claude_output(output)
+        assert result["result"] == "found"
+
+    def test_empty_result_list(self):
+        data = {"result": []}
+        result = digest_claude_output(json.dumps(data))
+        assert result["result"] == ""
+        assert result["tool_uses"] == []
+
+    def test_tool_use_input_preserved(self):
+        data = {
+            "result": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "ls -la", "timeout": 30}},
+            ],
+        }
+        result = digest_claude_output(json.dumps(data))
+        assert result["tool_uses"][0]["input"]["command"] == "ls -la"
+
+
+# ── _load_system_prompt ──────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestLoadSystemPrompt:
+    def test_loads_existing_file(self, tmp_path):
+        (tmp_path / "system.md").write_text("  You are helpful.  ")
+        result = _load_system_prompt(str(tmp_path))
+        assert result == "You are helpful."
+
+    def test_returns_none_when_missing(self, tmp_path):
+        result = _load_system_prompt(str(tmp_path))
+        assert result is None
+
+    def test_caches_after_first_read(self, tmp_path):
+        (tmp_path / "system.md").write_text("cached")
+        result1 = _load_system_prompt(str(tmp_path))
+        # Modify the file — should NOT be re-read
+        (tmp_path / "system.md").write_text("modified")
+        result2 = _load_system_prompt(str(tmp_path))
+        assert result1 == result2 == "cached"
+
+    def test_reset_clears_cache(self, tmp_path):
+        (tmp_path / "system.md").write_text("v1")
+        _load_system_prompt(str(tmp_path))
+        reset_system_prompt_cache()
+        (tmp_path / "system.md").write_text("v2")
+        result = _load_system_prompt(str(tmp_path))
+        assert result == "v2"
+
+
+# ── AgentExecutor ─────────────────────────────────────────────────────────
+
+
+def _mock_subprocess(stdout_data: str, returncode: int = 0, stderr_data: str = ""):
+    """Create a mock for asyncio.create_subprocess_exec."""
+    mock_proc = AsyncMock()
+    mock_proc.communicate = AsyncMock(return_value=(stdout_data.encode(), stderr_data.encode()))
+    mock_proc.returncode = returncode
+    mock_proc.pid = 12345
+    return mock_proc
+
+
+@pytest.fixture()
+def _no_redis():
+    from agenticore.jobs import _reset_redis
+
+    _reset_redis()
+    with patch.dict(os.environ, {"REDIS_URL": ""}, clear=False):
+        _reset_redis()
+        yield
+    _reset_redis()
+
+
+@pytest.fixture()
+def _agent_env(tmp_path, _no_redis):
+    """Set up agent mode env pointing to a real temp package dir."""
+    pkg_dir = tmp_path / "package"
+    pkg_dir.mkdir()
+    (pkg_dir / "CLAUDE.md").write_text("# Test")
+
+    sessions_file = tmp_path / "sessions.json"
+    state_file = tmp_path / "state.json"
+
+    env = {
+        **_BASE_ENV,
+        "AGENT_MODE_PACKAGE_DIR": str(pkg_dir),
+        "AGENT_MODE_MAX_RETRIES": "1",
+        "AGENT_MODE_TIMEOUT": "10",
+    }
+    with (
+        patch.dict(os.environ, env),
+        patch("agenticore.agent_mode.session_registry._sessions_file", return_value=sessions_file),
+        patch("agenticore.agent_mode.state._state_file", return_value=state_file),
+    ):
+        reset_config()
+        reset_system_prompt_cache()
+        yield pkg_dir
+
+
+@pytest.mark.unit
+class TestAgentExecutor:
+    @pytest.mark.asyncio
+    async def test_execute_success(self, _agent_env):
+        """Successful execution returns parsed result."""
+        output = json.dumps({"result": "Done!", "session_id": "s1", "cost_usd": 0.02, "num_turns": 3})
+        mock_proc = _mock_subprocess(output)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            result = await executor.execute(message="hello", external_uuid="test-uuid-1", wait=True)
+
+        assert result["result"] == "Done!"
+        assert result["session_id"] == "s1"
+        assert result["is_error"] is False
+        assert result["cost_usd"] == 0.02
+        assert result["duration_ms"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_execute_failure_nonzero_exit(self, _agent_env):
+        """Non-zero exit code sets is_error=True."""
+        mock_proc = _mock_subprocess('{"result": ""}', returncode=1, stderr_data="Claude crashed")
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            result = await executor.execute(message="fail", external_uuid="test-uuid-2", wait=True)
+
+        assert result["is_error"] is True
+
+    @pytest.mark.asyncio
+    async def test_execute_sets_env_vars(self, _agent_env):
+        """Correlation ID and Claude session ID are set in subprocess env."""
+        output = json.dumps({"result": "ok"})
+        mock_proc = _mock_subprocess(output)
+
+        captured_env = {}
+
+        async def capture_exec(*args, **kwargs):
+            captured_env.update(kwargs.get("env", {}))
+            return mock_proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            executor = AgentExecutor()
+            await executor.execute(message="test", external_uuid="corr-id-123", wait=True)
+
+        assert captured_env["AGENTICORE_CORRELATION_ID"] == "corr-id-123"
+        assert "AGENTICORE_CLAUDE_SESSION_ID" in captured_env
+
+    @pytest.mark.asyncio
+    async def test_execute_marks_session_complete(self, _agent_env):
+        """Successful execution marks session as completed."""
+        from agenticore.agent_mode.session_registry import resolve_external_uuid
+
+        output = json.dumps({"result": "ok"})
+        mock_proc = _mock_subprocess(output)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            await executor.execute(message="test", external_uuid="complete-uuid", wait=True)
+
+        mapping = resolve_external_uuid("complete-uuid")
+        assert mapping is not None
+        assert mapping.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_execute_marks_session_failed(self, _agent_env):
+        """Failed execution marks session as failed."""
+        from agenticore.agent_mode.session_registry import resolve_external_uuid
+
+        mock_proc = _mock_subprocess("", returncode=1, stderr_data="error")
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            await executor.execute(message="fail", external_uuid="fail-uuid", wait=True)
+
+        mapping = resolve_external_uuid("fail-uuid")
+        assert mapping is not None
+        assert mapping.status == "failed"
+
+    @pytest.mark.asyncio
+    async def test_execute_stateless_uses_fresh_session(self, _agent_env):
+        """Stateless calls get fresh session IDs (not the external UUID)."""
+        output = json.dumps({"result": "ok"})
+        mock_proc = _mock_subprocess(output)
+
+        captured_cmds = []
+
+        async def capture_exec(*args, **kwargs):
+            captured_cmds.append(list(args))
+            return mock_proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            executor = AgentExecutor()
+            await executor.execute(message="test", external_uuid="ext-uuid", stateless=True, wait=True)
+
+        cmd = captured_cmds[0]
+        assert "--session-id" in cmd
+        assert "--no-session-persistence" in cmd
+        # The session ID should NOT be the external UUID for stateless
+        sid_idx = cmd.index("--session-id") + 1
+        assert cmd[sid_idx] != "ext-uuid"
+
+    @pytest.mark.asyncio
+    async def test_execute_persistent_uses_resume(self, _agent_env):
+        """Persistent calls use --resume with external UUID."""
+        output = json.dumps({"result": "ok"})
+        mock_proc = _mock_subprocess(output)
+
+        captured_cmds = []
+
+        async def capture_exec(*args, **kwargs):
+            captured_cmds.append(list(args))
+            return mock_proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            executor = AgentExecutor()
+            await executor.execute(message="test", external_uuid="persist-uuid", stateless=False, wait=True)
+
+        cmd = captured_cmds[0]
+        assert "--resume" in cmd
+        assert "persist-uuid" in cmd
+
+    @pytest.mark.asyncio
+    async def test_execute_with_context_via_stdin(self, _agent_env):
+        """Context dict is passed via stdin as JSON."""
+        output = json.dumps({"result": "ok"})
+        mock_proc = _mock_subprocess(output)
+
+        captured_stdin = []
+
+        async def capture_exec(*args, **kwargs):
+            if kwargs.get("stdin") is not None:
+                captured_stdin.append("pipe")
+            return mock_proc
+
+        original_communicate = mock_proc.communicate
+
+        async def capture_communicate(input=None):
+            if input:
+                captured_stdin.append(input)
+            return await original_communicate(input=input)
+
+        mock_proc.communicate = capture_communicate
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            executor = AgentExecutor()
+            await executor.execute(
+                message="test",
+                external_uuid="ctx-uuid",
+                wait=True,
+                context={"key": "value"},
+            )
+
+        assert len(captured_stdin) > 0
+
+    @pytest.mark.asyncio
+    async def test_execute_cwd_is_package_dir(self, _agent_env):
+        """Subprocess runs in the package directory."""
+        output = json.dumps({"result": "ok"})
+        mock_proc = _mock_subprocess(output)
+
+        captured_cwd = []
+
+        async def capture_exec(*args, **kwargs):
+            captured_cwd.append(kwargs.get("cwd"))
+            return mock_proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            executor = AgentExecutor()
+            await executor.execute(message="test", external_uuid="cwd-uuid", wait=True)
+
+        assert captured_cwd[0] == str(_agent_env)
+
+    @pytest.mark.asyncio
+    async def test_execute_all_retries_exhausted(self, _agent_env):
+        """When all retries are exhausted, returns error."""
+        with (
+            patch.dict(os.environ, {"AGENT_MODE_MAX_RETRIES": "2"}),
+            patch("asyncio.create_subprocess_exec", side_effect=RuntimeError("boom")),
+        ):
+            reset_config()
+            executor = AgentExecutor()
+            result = await executor.execute(message="test", external_uuid="retry-exhaust", wait=True)
+
+        assert result["is_error"] is True
+        assert "boom" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_execute_timeout(self, _agent_env):
+        """Subprocess timeout produces error result."""
+        with (
+            patch.dict(os.environ, {"AGENT_MODE_TIMEOUT": "1", "AGENT_MODE_MAX_RETRIES": "1"}),
+            patch("asyncio.create_subprocess_exec", side_effect=asyncio.TimeoutError()),
+        ):
+            reset_config()
+            executor = AgentExecutor()
+            result = await executor.execute(message="test", external_uuid="timeout-uuid", wait=True)
+
+        assert result["is_error"] is True
+        assert "Timeout" in result.get("error", "")
+
+    @pytest.mark.asyncio
+    async def test_execute_saves_state(self, _agent_env, tmp_path):
+        """State is saved for hooks integration."""
+        from agenticore.agent_mode.state import get_session_state
+
+        output = json.dumps({"result": "ok"})
+        mock_proc = _mock_subprocess(output)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            await executor.execute(
+                message="test",
+                external_uuid="state-uuid",
+                wait=True,
+                meta={"platform": "test"},
+            )
+
+        state = get_session_state("state-uuid")
+        assert state is not None
+        assert state["uuid"] == "state-uuid"
+        assert state["meta"]["platform"] == "test"
+
+    @pytest.mark.asyncio
+    async def test_execute_strips_internal_stderr(self, _agent_env):
+        """_stderr is removed from the final result dict."""
+        output = json.dumps({"result": "ok"})
+        mock_proc = _mock_subprocess(output, stderr_data="some internal warning")
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            result = await executor.execute(message="test", external_uuid="strip-uuid", wait=True)
+
+        assert "_stderr" not in result
