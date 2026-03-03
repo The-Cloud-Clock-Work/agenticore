@@ -63,7 +63,7 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
       1. Auth Broker (AUTH_BROKER_URL) — Claude Max subscription token, direct Anthropic.
          When broker returns a token, ANTHROPIC_BASE_URL is cleared so the CLI hits
          Anthropic directly (not the LiteLLM proxy).
-      2. Static env fallback — ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL as configured
+      2. Static env fallback — ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL as configured
          in the container (typically pointing at the LiteLLM proxy).
     """
     import logging
@@ -81,17 +81,17 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
         # Attempt Auth Broker — returns Claude Max subscription token
         key = _fetch_from_auth_broker("anthropic")
         if key:
-            env["ANTHROPIC_API_KEY"] = key
+            env["ANTHROPIC_AUTH_TOKEN"] = key
             # Broker token is a real Anthropic credential — route directly,
             # not through the LiteLLM proxy
             env.pop("ANTHROPIC_BASE_URL", None)
             _log.debug("auth: using Auth Broker token (direct Anthropic)")
         else:
             # Broker configured but unavailable or no token — fall back to
-            # static ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from env (LiteLLM)
+            # static ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL from env (LiteLLM)
             _log.warning(
                 "Auth Broker unreachable or returned no Anthropic token — "
-                "falling back to static ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL"
+                "falling back to static ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL"
             )
 
     # GitHub token — delegate to the centralized resolver

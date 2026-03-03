@@ -83,28 +83,8 @@ RUN useradd -m -s /bin/bash agenticore && \
     chown -R agenticore:agenticore /app /home/agenticore
 
 # Interactive shell functions for exec'd sessions
-RUN cat >> /etc/bash.bashrc << 'EOF'
-anton() { ANTHROPIC_API_KEY="${LITELLM_MCP_GATEWAY_KEY:-${ANTHROPIC_API_KEY:-}}" claude --dangerously-skip-permissions "$@"; }
-wkt-get() {
-  local query="${1:-}" projects_dir="$HOME/.claude/projects"
-  local -a base_paths=()
-  for proj_dir in "$projects_dir"/*/; do
-    local dir_name="${proj_dir%/}"; dir_name="${dir_name##*/}"
-    [[ "$dir_name" == *"--worktree"* ]] && continue
-    local idx="$proj_dir/sessions-index.json"
-    [ -f "$idx" ] || continue
-    local orig_path
-    orig_path=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('originalPath',''))" "$idx" 2>/dev/null)
-    [ -n "$orig_path" ] && [ -d "$orig_path" ] || continue
-    if [ -z "$query" ] || [[ "${orig_path,,}" == *"${query,,}"* ]]; then base_paths+=("$orig_path"); fi
-  done
-  [ ${#base_paths[@]} -gt 0 ] || { echo "No projects found${query:+ matching '$query'}"; return 1; }
-  local i=1; for p in "${base_paths[@]}"; do printf "%d) %s\n" "$i" "$p"; ((i++)); done
-  local sel; read -rp "Project [1-${#base_paths[@]}]: " sel
-  [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#base_paths[@]}" ] || { echo "Invalid"; return 1; }
-  echo "-> ${base_paths[$((sel-1))]}"; cd "${base_paths[$((sel-1))]}" || return 1
-}
-EOF
+COPY docker/custom-bashrc /etc/bash.bashrc.d/custom-bashrc
+RUN cat /etc/bash.bashrc.d/custom-bashrc >> /etc/bash.bashrc
 
 ENV AGENTICORE_TRANSPORT=sse \
     AGENTICORE_HOST=0.0.0.0 \
