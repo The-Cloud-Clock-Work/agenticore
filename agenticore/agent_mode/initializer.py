@@ -232,17 +232,26 @@ def _install_notification_hook(package_dir: str) -> None:
     notifier_cmd = f"python3 {dst}"
 
     hook_entries = {
-        "PostToolUse": [{"matcher": ".*", "command": notifier_cmd}],
-        "SubprocessOutputLine": [{"command": notifier_cmd}],
-        "Notification": [{"command": notifier_cmd}],
+        "PostToolUse": [
+            {"matcher": {"tools": [".*"]}, "hooks": [{"type": "command", "command": notifier_cmd}]}
+        ],
+        "SubprocessOutputLine": [
+            {"hooks": [{"type": "command", "command": notifier_cmd}]}
+        ],
+        "Notification": [
+            {"hooks": [{"type": "command", "command": notifier_cmd}]}
+        ],
     }
 
     for hook_name, entries in hook_entries.items():
         existing = hooks.get(hook_name, [])
-        # Don't duplicate if already wired
-        existing_cmds = {e.get("command", "") for e in existing}
+        existing_cmds = set()
+        for e in existing:
+            for h in e.get("hooks", []):
+                existing_cmds.add(h.get("command", ""))
         for entry in entries:
-            if entry["command"] not in existing_cmds:
+            cmd = entry["hooks"][0]["command"]
+            if cmd not in existing_cmds:
                 existing.append(entry)
         hooks[hook_name] = existing
 
