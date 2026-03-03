@@ -165,6 +165,105 @@ Ensure Docker buildx version is >= 0.17.0:
 docker buildx version
 ```
 
+---
+
+## Dev Compose (`docker-compose.dev.yml`)
+
+A lightweight single-service compose file that emulates a Kubernetes deployment
+locally — same Dockerfile, same entrypoint, same profile materialisation via
+agentihooks.
+
+### What it runs
+
+```yaml
+services:
+  agenticore:
+    build: .
+    ports: ["8200:8200"]
+    volumes:
+      - agenticore-shared:/shared              # mirrors K8s RWX PVC
+      - ~/dev/agentihooks:/opt/agentihooks-src # hot-reload agentihooks source
+      - ./docker/gateway-mcp.json:/shared/gateway-mcp.json:ro
+    env_file: [.env]
+    environment:
+      HOME: /shared
+      AGENTIHOOKS_MCP_FILE: /shared/gateway-mcp.json
+```
+
+| Concept | Production (K8s) | Dev Compose |
+|---------|-----------------|-------------|
+| Shared storage | RWX PVC at `/shared` | Named volume `agenticore-shared` |
+| Agentihooks | Installed from git URL at runtime | Bind-mounted from `~/dev/agentihooks` |
+| MCP gateway | ConfigMap mount | Bind-mounted `gateway-mcp.json` |
+| `HOME` | `/shared` | `/shared` |
+
+### How `HOME=/shared` works
+
+The entrypoint sets `HOME=/shared` so all writes land in the shared volume:
+
+1. `agentihooks global --profile <profile>` writes `.claude/` config, hooks, skills, agents, and `CLAUDE.md` into `$HOME/.claude/`
+2. Gateway MCP servers are installed via `agentihooks --mcp`
+3. Shell functions are appended to `$HOME/.bashrc` for `exec` sessions
+
+This mirrors exactly what happens in Kubernetes where the shared PVC is mounted
+at `/shared`.
+
+### `.env` file
+
+A `.env` file is **required** in the project root. It supplies all runtime
+configuration. The variables below are grouped by category (names only — no
+secret values should appear in docs):
+
+| Section | Variables |
+|---------|-----------|
+| Agent Configuration | `IS_EVALUATION`, `PR_EVALUATION`, `EMAIL_EVALUATION`, `READ_ONLY` |
+| API Server | `API_HOST`, `API_PORT`, `REMOTE_RUNNER_URL` |
+| Authentication | `AGENT_API_KEY`, `AGENT_KEYS`, `REST_KEYS` |
+| Claude CLI | `CLAUDE_TIMEOUT`, `CLAUDE_OUTPUT_FORMAT`, `CLAUDE_MAX_TURNS`, `MCP_TIMEOUT`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `BASH_MAX_TIMEOUT_MS`, `MAX_THINKING_TOKENS` |
+| Anthropic / LLM | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
+| GitHub | `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_SECRET_ID`, `GITHUB_TOKEN`, `GIT_USER_NAME`, `GIT_USER_EMAIL` |
+| Database | `DATABASE_URL`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_NAME`, `POSTGRES_USERNAME`, `POSTGRES_PASSWORD` |
+| Logging | `LOG_LEVEL`, `CLAUDE_LOGS`, `FASTMCP_LOG_LEVEL`, `LOG_USE_COLORS` |
+| Agentihooks | `AGENTICORE_DEFAULT_PROFILE`, `AGENTIHOOKS_MCP_FILE`, `LITELLM_MCP_GATEWAY_KEY`, `LITELLM_MCP_GATEWAY_URL` |
+| MCP Gateway | `LITELLM_URL`, `LITELLM_MASTER_KEY`, `LANGFUSE_*`, `GRAFANA_*`, `MATRIX_*` |
+
+### CLI aliases
+
+Run `bash automation/alias_setup.sh` to install shell shortcuts:
+
+| Alias | Equivalent |
+|-------|------------|
+| `ac_compose_up` | `agenticore agent --compose-up` |
+| `ac_compose_down` | `agenticore agent --compose-down` |
+| `ac_compose_enter` | `agenticore agent --compose-enter` |
+| `ac_compose_logs` | `agenticore agent --compose-logs` |
+| `ac_build_agent` | `agenticore agent --build` |
+| `ac_run_agent` | `agenticore agent --run` |
+| `ac_enter_agent` | `agenticore agent --enter` |
+| `ac_stop_agent` | `agenticore agent --stop` |
+| `ac_logs_agent` | `agenticore agent --logs` |
+| `ac_push_main` | `agenticore push --main` |
+
+### Workflow
+
+```bash
+# 1. Start the dev stack
+ac_compose_up
+
+# 2. Iterate on code (changes to agentihooks are live via bind mount)
+
+# 3. Inspect the running container
+ac_compose_enter
+
+# 4. Debug with logs
+ac_compose_logs
+
+# 5. Tear down when done
+ac_compose_down
+```
+
+---
+
 **OTEL collector not receiving data:**
 Verify the collector is running and the endpoint is reachable from the
 agenticore container:

@@ -92,6 +92,8 @@ agenticore run "fix the null pointer in auth.py" \
 | `agenticore init-shared-fs` | Initialise shared filesystem (Kubernetes) |
 | `agenticore drain` | Drain pod before shutdown (Kubernetes) |
 | `agenticore hooks sync [--url URL]` | Clone/fetch agentihooks and rebuild profiles |
+| `agenticore agent <flags>` | Build, run, and manage the local container / dev compose stack |
+| `agenticore push --main` | Build and push Docker image to a registry |
 
 ```bash
 # Submit a task
@@ -388,6 +390,56 @@ docker run -d \
   -e GITHUB_TOKEN=ghp_... \
   tccw/agenticore
 ```
+
+---
+
+## Local Development
+
+`docker-compose.dev.yml` emulates a Kubernetes deployment on your machine — same
+Dockerfile, same entrypoint, same profile materialisation via agentihooks. A shared
+named volume at `/shared` mirrors the K8s RWX PVC, and `HOME=/shared` makes the
+entrypoint write `.claude/` config, profiles, and bashrc into it.
+
+**Requirements:**
+
+- A `.env` file in the project root (or `$HOME`). See
+  [Docker Compose docs](docs/deployment/docker-compose.md#dev-compose-docker-composeyml)
+  for the full variable reference.
+- Docker with Compose v2.
+
+**Quick start:**
+
+```bash
+# Start the dev stack
+agenticore agent --compose-up
+
+# Shell into the running container
+agenticore agent --compose-enter
+
+# Follow logs
+agenticore agent --compose-logs
+
+# Tear down
+agenticore agent --compose-down
+```
+
+**Shell aliases** — run `bash automation/alias_setup.sh` to install `ac_*` shortcuts:
+
+| Alias | Command |
+|-------|---------|
+| `ac_build_agent` | `agenticore agent --build` |
+| `ac_run_agent` | `agenticore agent --run` |
+| `ac_enter_agent` | `agenticore agent --enter` |
+| `ac_stop_agent` | `agenticore agent --stop` |
+| `ac_logs_agent` | `agenticore agent --logs` |
+| `ac_compose_up` | `agenticore agent --compose-up` |
+| `ac_compose_down` | `agenticore agent --compose-down` |
+| `ac_compose_enter` | `agenticore agent --compose-enter` |
+| `ac_compose_logs` | `agenticore agent --compose-logs` |
+| `ac_push_main` | `agenticore push --main` |
+
+Full CLI reference: [CLI Commands](docs/reference/cli-commands.md).
+Full compose details: [Docker Compose](docs/deployment/docker-compose.md).
 
 ---
 

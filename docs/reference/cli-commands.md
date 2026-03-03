@@ -27,6 +27,8 @@ agenticore <command> [options]
 | `drain` | | `--timeout` | No |
 | `update` | | `--source` | No |
 | `version` | | | No |
+| `agent` | | `--build`, `--run`, `--enter`, `--stop`, `--logs`, `--list`, `--compose-*` | No |
+| `push` | | `--main`, `--all`, `--tag`, `--build-only`, `--push-only`, `--no-cache` | No |
 
 ## serve
 
@@ -223,6 +225,94 @@ Show the installed version.
 ```bash
 agenticore version
 # agenticore 0.1.5
+```
+
+## agent
+
+Build, run, and manage the agenticore Docker container and the dev compose stack.
+
+```bash
+agenticore agent [flags]
+```
+
+### Container Management
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--build` | `-b` | Build the Docker image from the repo-root `Dockerfile` |
+| `--run` | `-r` | Run the container in detached mode (port 8200) |
+| `--enter` | `-e` | Shell into the running container |
+| `--stop` | `-s` | Stop and remove the container |
+| `--logs` | `-l` | Follow container logs |
+| `--list` | | List all local Docker containers |
+
+### Dev Compose Stack
+
+| Flag | Description |
+|------|-------------|
+| `--compose-up` | `docker compose -f docker-compose.dev.yml up --build -d` |
+| `--compose-down` | `docker compose -f docker-compose.dev.yml down` |
+| `--compose-enter` | Shell into the running `agenticore` compose service |
+| `--compose-logs` | Follow compose service logs |
+
+The compose commands look for `docker-compose.dev.yml` starting from the current
+directory and walking up (max 5 levels).
+
+### `.env` lookup
+
+Both `--run` and `--compose-*` flags load a `.env` file automatically:
+
+1. Walk up from CWD looking for `.env`
+2. Fall back to `$HOME/.env`
+
+### Shell aliases
+
+Run `bash automation/alias_setup.sh` to install `ac_*` shortcuts (e.g.
+`ac_compose_up`, `ac_enter_agent`). See the
+[Local Development](../../README.md#local-development) section in the README.
+
+```bash
+# Standalone container workflow
+agenticore agent --build
+agenticore agent --run
+agenticore agent --enter
+agenticore agent --logs
+agenticore agent --stop
+
+# Dev compose workflow
+agenticore agent --compose-up
+agenticore agent --compose-enter
+agenticore agent --compose-logs
+agenticore agent --compose-down
+```
+
+## push
+
+Build and push the Docker image to a container registry. Requires the
+`DOCKER_REGISTRY` environment variable.
+
+```bash
+agenticore push --main [--tag TAG] [--build-only] [--push-only] [--no-cache]
+```
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--main` | `-m` | flag | | Build and push the main image |
+| `--all` | `-a` | flag | | Build and push all images (same as `--main`) |
+| `--tag` | `-t` | str | `latest` | Image tag |
+| `--build-only` | | flag | | Only build, skip the push step |
+| `--push-only` | | flag | | Only push (assumes image was already built) |
+| `--no-cache` | | flag | | Build without Docker cache |
+
+```bash
+# Build and push with default tag
+DOCKER_REGISTRY=ghcr.io/org agenticore push --main
+
+# Build only, custom tag
+agenticore push --main --tag v1.2.3 --build-only
+
+# Push a previously built image
+agenticore push --main --push-only
 ```
 
 ## Client Configuration
