@@ -67,7 +67,7 @@ spec:
               name: agenticore-secrets
               key: github-app-private-key
               optional: true
-        - name: ANTHROPIC_API_KEY
+        - name: ANTHROPIC_AUTH_TOKEN
           valueFrom:
             secretKeyRef:
               name: agenticore-secrets
