@@ -233,10 +233,7 @@ def _install_notification_hook(package_dir: str) -> None:
 
     hook_entries = {
         "PostToolUse": [
-            {"matcher": {"tools": [".*"]}, "hooks": [{"type": "command", "command": notifier_cmd}]}
-        ],
-        "SubprocessOutputLine": [
-            {"hooks": [{"type": "command", "command": notifier_cmd}]}
+            {"matcher": ".*", "hooks": [{"type": "command", "command": notifier_cmd}]}
         ],
         "Notification": [
             {"hooks": [{"type": "command", "command": notifier_cmd}]}
