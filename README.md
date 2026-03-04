@@ -266,10 +266,6 @@ Profiles are **not bundled with Agenticore**. They live in two places:
 
 Later sources override earlier ones when names collide.
 
-#### Agent Hub — third-party agent hubs
-
-Agentihooks includes an **Agent Hub** connector (`scripts/agent_hub.py`) that builds agent definitions from a separate **agentihub** repo into `profiles/`. This enables private agent identities (CLAUDE.md, workflows, evaluation) to live outside the open-source agentihooks repo while still using its build pipeline. Agenticore discovers these built profiles normally — no code changes required in Agenticore.
-
 ### Profile inheritance
 
 ```yaml
@@ -304,7 +300,7 @@ agent container**. Where standard mode clones repos and creates PRs, Agent Mode
 runs a pre-configured **package** — a directory with a system prompt, MCP
 servers, hooks, and skills — and exposes it as a completions API.
 
-Packages follow the same `.claude/` directory convention as agentihooks profiles.
+Packages follow the same `.claude/` directory convention as agentihub packages.
 The difference is lifecycle: profiles are materialized per-job and discarded;
 packages are mounted at container startup and define the agent's permanent
 identity.

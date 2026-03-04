@@ -151,7 +151,7 @@ agentihooks_sync_interval: 300
 | `~/agenticore-repos/` | Default cloned repos root |
 | `~/agenticore-repos/{hash}/.lock` | Per-repo flock file |
 | `~/agenticore-repos/{hash}/repo/` | Cloned repository |
-| `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/*/` | agentihooks profiles |
+| `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/*/` | Agentihooks profiles (standard mode) |
 
 ### Kubernetes / shared FS mode (`AGENTICORE_SHARED_FS_ROOT=/shared`)
 

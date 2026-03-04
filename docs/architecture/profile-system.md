@@ -76,27 +76,22 @@ when `AGENTICORE_AGENTIHOOKS_URL` is set. All pods share a single clone on the R
 the correct install directory. A background watcher refreshes the clone every
 `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` seconds (default 300) — no restart needed.
 
-### Agent Hub — agentihub integration
+### Agentihub — direct provisioning
 
-Agentihooks includes an **Agent Hub** connector (`scripts/agent_hub.py`) that builds
-agent definitions from a separate **agentihub** repo into standard agentihooks profiles.
-This enables a three-layer architecture:
+In Agent Mode, agent packages come directly from **agentihub** — not from
+agentihooks profiles. Agenticore's `agent_mode/initializer.py` clones agentihub
+and copies `agents/{name}/package/` → `/app/package/`.
 
 ```
 agenticore   = execution engine (this project)
-agentihooks  = build system (profiles, hooks, guardrails)
-agentihub    = private agent identities (CLAUDE.md, workflows, evaluation)
+agentihooks  = hook system + MCP tools (guardrails, integrations)
+agentihub    = agent identities (CLAUDE.md, prompts, evaluation)
 ```
-
-When `AGENTIHUB_URL` and `AGENTIHUB_PATH` are configured, the agentihooks refresh
-cycle can also clone agentihub and run Agent Hub to build external agents into
-`profiles/`. Agenticore discovers these profiles normally — no code changes required
-in agenticore itself.
 
 | Variable | Description |
 |----------|-------------|
 | `AGENTIHUB_URL` | Git URL for the agentihub repo |
-| `AGENTIHUB_PATH` | Local path to clone agentihub to (e.g. `/shared/agentihub`) |
+| `AGENTIHUB_AGENT` | Agent name to load (matches `agents/{name}/` directory) |
 
 ## Writing a Profile
 

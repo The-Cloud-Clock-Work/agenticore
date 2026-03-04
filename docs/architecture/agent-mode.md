@@ -37,25 +37,19 @@ Both use the same `.claude/` directory convention. Both use the same
 become an Agent Mode package — the structure is identical. The difference is
 lifecycle and purpose.
 
-### The Agentihooks Connection
+### The Agentihub Connection
 
-[Agentihooks](https://github.com/The-Cloud-Clock-Work/agentihooks) is the
-authoritative source for Claude Code configuration packages. It owns:
+Agent packages come from [agentihub](https://github.com/The-Cloud-Clock-Work/agentihub)
+— a separate repo holding agent identities (CLAUDE.md, prompts, evaluation).
 
-- **Profile authoring** — `profiles/_base/settings.base.json`, per-profile
-  overrides, and `build_profiles.py` that merges them into deployable packages
-- **Hook wiring** — permission rules, tool allowlists, custom hooks
-- **MCP server categories** — which MCP servers each profile/package gets
-- **System prompts** — `CLAUDE.md` and `system.md` templates
+On startup, `agent_mode/initializer.py` clones agentihub (via `AGENTIHUB_URL`)
+and copies `agents/{name}/package/` → `/app/package/`. The container then
+validates the package, runs startup scripts, caches the system prompt, and
+waits for requests.
 
-In standard mode, Agenticore discovers agentihooks profiles at
-`{AGENTICORE_AGENTIHOOKS_PATH}/profiles/` and materializes them per-job.
-
-In Agent Mode, the agentihooks output is the **package directory** — pre-built,
-pre-wired, mounted at `/app/package`. The container starts, validates the
-package, runs startup scripts, caches the system prompt, and waits for requests.
-
-The build pipeline is the same. The deployment model differs.
+[Agentihooks](https://github.com/The-Cloud-Clock-Work/agentihooks) provides the
+Claude Code runner (hooks, MCP tools, guardrails) but is **not** involved in
+agent provisioning.
 
 ## Architecture Overview
 
@@ -201,7 +195,7 @@ Three event types, each independently toggleable:
 |------------|--------|---------|
 | `status` | Worker process | `{status: "started\|completed\|failed"}` |
 | `tool_call` | Claude Code `PostToolUse` hook | `{tool_name, file_path, description}` |
-| `thinking` | Claude Code `SubprocessOutputLine` hook | `{content: "..."}` |
+| `thinking` | Claude Code `Notification` hook | `{content: "..."}` |
 | `result` | Worker process (final) | `{result, cost_usd, duration_ms, ...}` |
 
 **Notification envelope:**
@@ -235,7 +229,7 @@ via Claude Code hooks. The `hook_notifier.py` script:
 
 1. Is installed into the package's `.claude/hooks/` at startup by `initializer.py`
 2. Is wired into `.claude/settings.json` for three hook events:
-   `PostToolUse`, `SubprocessOutputLine`, `Notification`
+   `PostToolUse`, `Notification`
 3. Runs inside Claude's sandbox — **zero agenticore imports**, stdlib-only HTTP
 4. Reads notification config from Redis (or file fallback)
 5. Maps hook event to notification type, checks if enabled, POSTs to callback
@@ -247,7 +241,7 @@ direct code path from Claude back to the server — the hook is self-contained.
 ## Package Directory
 
 The package directory is the agent's identity. It follows the same `.claude/`
-convention as agentihooks profiles:
+convention as agentihub packages:
 
 ```
 /app/package/
@@ -423,7 +417,7 @@ Agent Mode and Standard Mode are **complementary**, not competing:
 | Concern | Standard Mode | Agent Mode |
 |---------|---------------|------------|
 | **Identity** | The repo | The package |
-| **Config source** | agentihooks profiles | agentihooks packages |
+| **Config source** | agentihooks profiles | agentihub packages (provisioned by initializer.py) |
 | **Lifecycle** | Per-job (materialize → execute → discard) | Per-container (mount → startup → serve) |
 | **Output** | PR on a repo | Completion result (text, cost, metadata) |
 | **Execution** | `claude --worktree -p "task"` | `claude -p "task"` (no worktree) |
