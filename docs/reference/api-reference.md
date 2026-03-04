@@ -5,9 +5,10 @@ nav_order: 3
 
 # API Reference
 
-Agenticore exposes the same functionality through two interfaces: 5 MCP tools for
-AI clients and 6 REST endpoints for programmatic access. Both return identical
-JSON response structures.
+Agenticore exposes the same functionality through two interfaces: MCP tools for
+AI clients and REST endpoints for programmatic access. Both return identical
+JSON response structures. When Agent Mode is enabled, additional completions
+endpoints and the `agent_completions` MCP tool become available.
 
 ## MCP Tools
 
@@ -263,3 +264,160 @@ Unauthenticated requests return:
 ```
 
 with HTTP status `401`.
+
+## Agent Mode Endpoints
+
+These endpoints are available when `AGENT_MODE=true`. See
+[Agent Mode](../architecture/agent-mode.md) for the full architecture.
+
+### MCP Tool: agent_completions
+
+Call the agent with a message. Supports both synchronous (`wait=true`) and
+asynchronous (`wait=false`) execution with optional webhook notifications.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `message` | string | yes | | Task/prompt for the agent |
+| `uuid` | string | yes | | External correlation ID |
+| `wait` | boolean | no | `true` | Block until completion |
+| `callback_url` | string | no | `""` | Webhook URL for notifications |
+| `notifications` | string | no | `"status"` | Comma-separated: `status,tool_call,thinking` |
+| `stateless` | boolean | no | `false` | Fresh session (no resume) |
+| `model` | string | no | config default | Claude model |
+| `max_turns` | int | no | config default | Agentic turn limit |
+| `system_prompt` | string | no | `""` | Inline system prompt override |
+| `effort` | string | no | `""` | `low`, `medium`, `high` |
+| `timeout` | int | no | config default | Max execution time (seconds) |
+| `meta` | string | no | `"{}"` | Platform metadata JSON |
+
+### POST /completions
+
+Submit a completion request. Maps to `agent_completions`.
+
+```bash
+# Synchronous (block until done)
+curl -X POST http://localhost:8200/completions \
+  -H "Content-Type: application/json" \
+  -d '{"message": "fix the bug", "uuid": "req-1", "wait": true}'
+
+# Asynchronous (returns 202, delivers result to callback)
+curl -X POST http://localhost:8200/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "fix the bug",
+    "uuid": "req-1",
+    "wait": false,
+    "callback_url": "https://app.example.com/webhook",
+    "notifications": {"status": true, "tool_call": true}
+  }'
+```
+
+**Response (`wait=false`):**
+
+```json
+{
+    "success": true,
+    "status": "queued",
+    "uuid": "req-1",
+    "poll_url": "/completions/req-1"
+}
+```
+
+| Status | Condition |
+|--------|-----------|
+| `200` | Sync completion succeeded |
+| `202` | Async completion queued |
+| `400` | Missing `message` or `uuid` |
+| `500` | Sync completion failed |
+
+### GET /completions/{uuid}
+
+Poll for completion status and result.
+
+```bash
+curl http://localhost:8200/completions/req-1
+```
+
+```json
+{
+    "success": true,
+    "completion": {
+        "uuid": "req-1",
+        "status": "completed",
+        "result": "Fixed the bug by...",
+        "session_id": "claude-session-456",
+        "cost_usd": 0.12,
+        "duration_ms": 45000,
+        "num_turns": 5,
+        "is_error": false,
+        "created_at": "2026-03-03T12:00:00Z",
+        "ended_at": "2026-03-03T12:00:45Z"
+    }
+}
+```
+
+| Status | Condition |
+|--------|-----------|
+| `200` | Completion found |
+| `404` | Completion not found |
+
+### GET /completions
+
+List completions.
+
+| Query Param | Type | Default | Description |
+|-------------|------|---------|-------------|
+| `limit` | int | `20` | Max results |
+| `status` | string | (all) | Filter by status |
+
+```bash
+curl "http://localhost:8200/completions?status=completed&limit=5"
+```
+
+### PATCH /completions/{uuid}/notifications
+
+Toggle notification types mid-execution.
+
+```bash
+curl -X PATCH http://localhost:8200/completions/req-1/notifications \
+  -H "Content-Type: application/json" \
+  -d '{"thinking": true, "tool_call": false}'
+```
+
+```json
+{
+    "success": true,
+    "notifications": {
+        "callback_url": "https://app.example.com/webhook",
+        "status": true,
+        "tool_call": false,
+        "thinking": true,
+        "enabled": true
+    }
+}
+```
+
+| Status | Condition |
+|--------|-----------|
+| `200` | Config updated |
+| `404` | Notification config not found |
+
+## Notification Envelope
+
+All notifications delivered to the `callback_url` follow this format:
+
+```json
+{
+    "correlation_id": "req-1",
+    "event_type": "tool_call",
+    "timestamp": "2026-03-03T12:00:05Z",
+    "data": {"tool_name": "Write", "file_path": "/src/app.py"}
+}
+```
+
+| Event Type | Description |
+|------------|-------------|
+| `status` | Lifecycle events: `started`, `completed`, `failed` |
+| `tool_call` | Claude used a tool (name, file path, description) |
+| `thinking` | Claude reasoning content |
+| `result` | Final result with full metadata |

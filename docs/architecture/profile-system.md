@@ -76,6 +76,23 @@ when `AGENTICORE_AGENTIHOOKS_URL` is set. All pods share a single clone on the R
 the correct install directory. A background watcher refreshes the clone every
 `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` seconds (default 300) — no restart needed.
 
+### Agentihub — direct provisioning
+
+In Agent Mode, agent packages come directly from **agentihub** — not from
+agentihooks profiles. Agenticore's `agent_mode/initializer.py` clones agentihub
+and copies `agents/{name}/package/` → `/app/package/`.
+
+```
+agenticore   = execution engine (this project)
+agentihooks  = hook system + MCP tools (guardrails, integrations)
+agentihub    = agent identities (CLAUDE.md, prompts, evaluation)
+```
+
+| Variable | Description |
+|----------|-------------|
+| `AGENTIHUB_URL` | Git URL for the agentihub repo |
+| `AGENTIHUB_AGENT` | Agent name to load (matches `agents/{name}/` directory) |
+
 ## Writing a Profile
 
 Minimal `profile.yml`:

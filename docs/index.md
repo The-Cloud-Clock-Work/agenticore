@@ -51,6 +51,7 @@ Deploy anywhere:
 - [Dual Interface](architecture/dual-interface.md) — MCP + REST ASGI routing and auth middleware
 - [Profile System](architecture/profile-system.md) — Directory-based profiles, agentihooks integration, materialization
 - [Job Execution](architecture/job-execution.md) — Runner pipeline, lifecycle state machine, auto-PR, OTEL
+- [Agent Mode](architecture/agent-mode.md) — Package-based agents, completion queue, notification streaming
 
 ## Deployment
 

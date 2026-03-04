@@ -293,6 +293,65 @@ Full profile reference: [Profile System docs](docs/architecture/profile-system.m
 
 ---
 
+## Agent Mode
+
+Agent Mode transforms Agenticore from a job orchestrator into a **purpose-built
+agent container**. Where standard mode clones repos and creates PRs, Agent Mode
+runs a pre-configured **package** — a directory with a system prompt, MCP
+servers, hooks, and skills — and exposes it as a completions API.
+
+Packages follow the same `.claude/` directory convention as agentihub packages.
+The difference is lifecycle: profiles are materialized per-job and discarded;
+packages are mounted at container startup and define the agent's permanent
+identity.
+
+```
+Standard Mode:  Request → clone repo → materialize profile → claude --worktree → PR
+Agent Mode:     Request → load package → claude -p "task" → result (+ notifications)
+```
+
+### Key features
+
+- **Async completion queue** — `wait=false` pushes to a Redis queue; a worker
+  process picks it up. Poll `GET /completions/{uuid}` or receive results via
+  webhook callback.
+- **Notification streaming** — Real-time `status`, `tool_call`, and `thinking`
+  events delivered to a `callback_url` during execution via Claude Code hooks.
+- **Session continuity** — Conversations can be resumed across requests using
+  the external correlation UUID.
+- **Redis+file fallback** — Same pattern as the job store. Everything works
+  without Redis (inline execution, file-based state).
+
+### Quick start
+
+```bash
+# Start the server in agent mode
+AGENT_MODE=true AGENT_MODE_PACKAGE_DIR=./my-package \
+  AGENTICORE_TRANSPORT=sse agenticore serve
+
+# Start the queue worker (separate terminal)
+AGENT_MODE=true AGENT_MODE_PACKAGE_DIR=./my-package \
+  python -m agenticore.agent_mode
+
+# Submit an async completion with webhook notifications
+curl -X POST http://localhost:8200/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Analyze the auth module",
+    "uuid": "req-1",
+    "wait": false,
+    "callback_url": "https://your-app.com/webhook",
+    "notifications": {"status": true, "tool_call": true}
+  }'
+
+# Poll for result
+curl http://localhost:8200/completions/req-1
+```
+
+Full reference: [Agent Mode docs](docs/architecture/agent-mode.md)
+
+---
+
 ## Helm (Kubernetes)
 
 Agenticore ships a production-ready Helm chart published to GHCR. The chart
@@ -513,6 +572,7 @@ Full setup: [OTEL Pipeline docs](docs/deployment/otel-pipeline.md)
 - [Quickstart](docs/getting-started/quickstart.md)
 - [Connecting Clients](docs/getting-started/connecting-clients.md)
 - [Profile System](docs/architecture/profile-system.md)
+- [Agent Mode](docs/architecture/agent-mode.md)
 - [Architecture Internals](docs/architecture/internals.md)
 - [Job Execution](docs/architecture/job-execution.md)
 - [Kubernetes Deployment](docs/deployment/kubernetes.md)

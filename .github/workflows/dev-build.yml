@@ -1,12 +1,14 @@
 name: Dev Build
 
 on:
+  push:
+    branches: [dev]
   workflow_dispatch:
     inputs:
       ref:
         description: "Branch or ref to build from"
         required: false
-        default: "main"
+        default: "dev"
         type: string
       tag:
         description: "Image tag"
@@ -31,9 +33,22 @@ jobs:
           echo "REPO_LC=${REPO_LC,,}" >> "$GITHUB_ENV"
           echo "OWNER_LC=${OWNER_LC,,}" >> "$GITHUB_ENV"
 
+      - name: Compute tags
+        id: tags
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            SHORT_SHA="${GITHUB_SHA::7}"
+            echo "agenticore=ghcr.io/${REPO_LC,,}:dev,ghcr.io/${REPO_LC,,}:dev-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "auth_broker=ghcr.io/${OWNER_LC,,}/auth-broker:dev,ghcr.io/${OWNER_LC,,}/auth-broker:dev-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          else
+            TAG="${{ inputs.tag }}"
+            echo "agenticore=ghcr.io/${REPO_LC,,}:${TAG}" >> "$GITHUB_OUTPUT"
+            echo "auth_broker=ghcr.io/${OWNER_LC,,}/auth-broker:${TAG}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ github.event_name == 'push' && github.ref || inputs.ref }}
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -51,7 +66,7 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          tags: ghcr.io/${{ env.REPO_LC }}:${{ inputs.tag }}
+          tags: ${{ steps.tags.outputs.agenticore }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -61,6 +76,6 @@ jobs:
           context: .
           file: auth_broker/Dockerfile
           push: true
-          tags: ghcr.io/${{ env.OWNER_LC }}/auth-broker:${{ inputs.tag }}
+          tags: ${{ steps.tags.outputs.auth_broker }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

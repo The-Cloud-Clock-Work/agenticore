@@ -327,6 +327,178 @@ async def execute_plan(
         return json.dumps({"success": False, "error": str(e)})
 
 
+def _register_agent_mode_tools():
+    """Register agent_completions MCP tool. Called only when AGENT_MODE=true."""
+
+    @mcp.tool()
+    async def agent_completions(
+        message: str,
+        uuid: str,
+        wait: bool = True,
+        stateless: bool = False,
+        model: str = "",
+        max_turns: int = 0,
+        system_prompt: str = "",
+        append_system_prompt: bool = True,
+        permission_mode: str = "",
+        output_format: str = "",
+        effort: str = "",
+        max_budget_usd: float = 0,
+        fallback_model: str = "",
+        allowed_tools: str = "",
+        disallowed_tools: str = "",
+        timeout: int = 0,
+        context: str = "",
+        meta: str = "{}",
+        callback_url: str = "",
+        notifications: str = "status",
+    ) -> str:
+        """Call the agent with a message. Returns JSON with result.
+
+        Args:
+            message: The task/prompt for the agent
+            uuid: External correlation ID for session tracking
+            wait: True=sync (block until done), False=async (queued, poll or callback)
+            stateless: True=fresh session each call, False=resume conversation
+            model: Model alias or full ID (default from config)
+            max_turns: Agentic turn limit (default from config)
+            system_prompt: Inline system prompt override (replaces system.md)
+            append_system_prompt: True=append to defaults, False=replace defaults
+            permission_mode: bypassPermissions, dontAsk, plan, etc.
+            output_format: json, text, stream-json
+            effort: low, medium, high
+            max_budget_usd: Spending cap
+            fallback_model: Auto-fallback on overload
+            allowed_tools: Comma-separated tools that skip permission prompts
+            disallowed_tools: Comma-separated tools removed entirely
+            timeout: Max execution time in seconds
+            context: JSON dict passed via stdin to Claude
+            meta: Platform metadata JSON for hooks
+            callback_url: Webhook URL for async notifications
+            notifications: Comma-separated notification types (status,tool_call,thinking)
+
+        Returns:
+            JSON with agent response or acceptance message
+        """
+        try:
+            ctx = None
+            if context:
+                try:
+                    ctx = json.loads(context)
+                except json.JSONDecodeError:
+                    return json.dumps({"success": False, "error": "Invalid context JSON"})
+
+            try:
+                meta_dict = json.loads(meta) if meta else {}
+            except json.JSONDecodeError:
+                meta_dict = {}
+
+            if wait:
+                from agenticore.agent_mode.agent import AgentExecutor
+
+                executor = AgentExecutor()
+                result = await executor.execute(
+                    message=message,
+                    external_uuid=uuid,
+                    wait=wait,
+                    stateless=stateless,
+                    model=model,
+                    max_turns=max_turns,
+                    system_prompt=system_prompt,
+                    append_system_prompt=append_system_prompt,
+                    permission_mode=permission_mode,
+                    output_format=output_format,
+                    effort=effort,
+                    max_budget_usd=max_budget_usd,
+                    fallback_model=fallback_model,
+                    allowed_tools=allowed_tools,
+                    disallowed_tools=disallowed_tools,
+                    timeout=timeout,
+                    context=ctx,
+                    meta=meta_dict,
+                )
+                return json.dumps({"success": not result.get("is_error", False), **result})
+            else:
+                return json.dumps(
+                    _enqueue_async_completion(
+                        message=message,
+                        uuid=uuid,
+                        callback_url=callback_url,
+                        notifications_param=notifications,
+                        request_params=dict(
+                            stateless=stateless,
+                            model=model,
+                            max_turns=max_turns,
+                            system_prompt=system_prompt,
+                            append_system_prompt=append_system_prompt,
+                            permission_mode=permission_mode,
+                            output_format=output_format,
+                            effort=effort,
+                            max_budget_usd=max_budget_usd,
+                            fallback_model=fallback_model,
+                            allowed_tools=allowed_tools,
+                            disallowed_tools=disallowed_tools,
+                            timeout=timeout,
+                            context=ctx,
+                            meta=meta_dict,
+                        ),
+                    )
+                )
+
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
+
+def _enqueue_async_completion(
+    message: str,
+    uuid: str,
+    callback_url: str = "",
+    notifications_param=None,
+    request_params: dict = None,
+) -> dict:
+    """Create and enqueue an async completion. Returns response dict."""
+    from agenticore.agent_mode.completions import create_completion, enqueue_completion
+    from agenticore.agent_mode.notifications import (
+        NotificationConfig,
+        parse_notifications_param,
+        save_notification_config,
+    )
+
+    completion = create_completion(
+        uuid=uuid,
+        message=message,
+        callback_url=callback_url,
+        request_params=request_params or {},
+    )
+
+    # Save notification config
+    notif_types = parse_notifications_param(notifications_param)
+    config = NotificationConfig(
+        callback_url=callback_url,
+        status=notif_types.get("status", True),
+        tool_call=notif_types.get("tool_call", False),
+        thinking=notif_types.get("thinking", False),
+    )
+    save_notification_config(uuid, config)
+
+    # Enqueue — returns None if Redis available, dict if fallback needed
+    fallback = enqueue_completion(completion)
+    if fallback is not None:
+        # No Redis — run inline as background task
+        import asyncio
+
+        from agenticore.agent_mode.worker import run_inline_completion
+
+        asyncio.create_task(run_inline_completion(fallback))
+
+    return {
+        "success": True,
+        "status": "queued",
+        "uuid": uuid,
+        "poll_url": f"/completions/{uuid}",
+    }
+
+
 @mcp.tool()
 async def list_profiles() -> str:
     """List available execution profiles.
@@ -362,7 +534,13 @@ def _build_rest_app():
     from starlette.routing import Route
 
     def health(request: Request):  # noqa: ARG001 — Starlette requires request param
-        return JSONResponse({"status": "ok", "service": "agenticore"})
+        cfg = get_config()
+        info = {"status": "ok", "service": "agenticore"}
+        if cfg.agent_mode.enabled:
+            info["agent_mode"] = True
+            info["package_dir"] = cfg.agent_mode.package_dir
+            info["default_model"] = cfg.agent_mode.model
+        return JSONResponse(info)
 
     async def post_jobs(request: Request):
         body = await request.json()
@@ -441,6 +619,115 @@ def _build_rest_app():
         status_code = 200 if data.get("success") else 400
         return JSONResponse(data, status_code=status_code)
 
+    # Agent mode routes (conditional)
+    cfg = get_config()
+    if cfg.agent_mode.enabled:
+
+        async def post_completions(request: Request):
+            body = await request.json()
+            if "message" not in body or "uuid" not in body:
+                return JSONResponse({"success": False, "error": "message and uuid are required"}, status_code=400)
+
+            ctx = body.get("context")
+            meta_dict = body.get("meta", {})
+            wait = body.get("wait", True)
+
+            if wait:
+                from agenticore.agent_mode.agent import AgentExecutor
+
+                executor = AgentExecutor()
+                result = await executor.execute(
+                    message=body["message"],
+                    external_uuid=body["uuid"],
+                    wait=wait,
+                    stateless=body.get("stateless", False),
+                    model=body.get("model", ""),
+                    max_turns=body.get("max_turns", 0),
+                    system_prompt=body.get("system_prompt", ""),
+                    append_system_prompt=body.get("append_system_prompt", True),
+                    permission_mode=body.get("permission_mode", ""),
+                    output_format=body.get("output_format", ""),
+                    effort=body.get("effort", ""),
+                    max_budget_usd=body.get("max_budget_usd", 0),
+                    fallback_model=body.get("fallback_model", ""),
+                    allowed_tools=body.get("allowed_tools", ""),
+                    disallowed_tools=body.get("disallowed_tools", ""),
+                    timeout=body.get("timeout", 0),
+                    context=ctx,
+                    meta=meta_dict,
+                )
+                is_error = result.get("is_error", False)
+                return JSONResponse(
+                    {"success": not is_error, **result},
+                    status_code=200 if not is_error else 500,
+                )
+            else:
+                result = _enqueue_async_completion(
+                    message=body["message"],
+                    uuid=body["uuid"],
+                    callback_url=body.get("callback_url", ""),
+                    notifications_param=body.get("notifications", "status"),
+                    request_params=dict(
+                        stateless=body.get("stateless", False),
+                        model=body.get("model", ""),
+                        max_turns=body.get("max_turns", 0),
+                        system_prompt=body.get("system_prompt", ""),
+                        append_system_prompt=body.get("append_system_prompt", True),
+                        permission_mode=body.get("permission_mode", ""),
+                        output_format=body.get("output_format", ""),
+                        effort=body.get("effort", ""),
+                        max_budget_usd=body.get("max_budget_usd", 0),
+                        fallback_model=body.get("fallback_model", ""),
+                        allowed_tools=body.get("allowed_tools", ""),
+                        disallowed_tools=body.get("disallowed_tools", ""),
+                        timeout=body.get("timeout", 0),
+                        context=ctx,
+                        meta=meta_dict,
+                    ),
+                )
+                return JSONResponse(result, status_code=202)
+
+        async def get_completions_list(request: Request):
+            from agenticore.agent_mode.completions import list_completions
+
+            limit = int(request.query_params.get("limit", "20"))
+            status_filter = request.query_params.get("status", "")
+            completions = list_completions(limit=limit, status=status_filter or None)
+            return JSONResponse(
+                {
+                    "success": True,
+                    "count": len(completions),
+                    "completions": [c.to_dict() for c in completions],
+                }
+            )
+
+        async def get_completion_route(request: Request):
+            from agenticore.agent_mode.completions import get_completion
+
+            uuid = request.path_params["uuid"]
+            completion = get_completion(uuid)
+            if completion is None:
+                return JSONResponse(
+                    {"success": False, "error": f"Completion not found: {uuid}"},
+                    status_code=404,
+                )
+            return JSONResponse({"success": True, "completion": completion.to_dict()})
+
+        async def patch_notifications_route(request: Request):
+            from agenticore.agent_mode.notifications import update_notification_config
+
+            uuid = request.path_params["uuid"]
+            body = await request.json()
+            config = update_notification_config(uuid, **body)
+            if config is None:
+                return JSONResponse(
+                    {"success": False, "error": f"Notification config not found: {uuid}"},
+                    status_code=404,
+                )
+            from dataclasses import asdict
+
+            return JSONResponse({"success": True, "notifications": asdict(config)})
+
     routes = [
         Route("/health", health, methods=["GET"]),
         Route("/jobs", post_jobs, methods=["POST"]),
@@ -453,6 +740,16 @@ def _build_rest_app():
         Route("/plans/{plan_id}", get_plan_route, methods=["GET"]),
         Route("/plans/{plan_id}/execute", post_execute_plan, methods=["POST"]),
     ]
+
+    if cfg.agent_mode.enabled:
+        routes.extend(
+            [
+                Route("/completions", post_completions, methods=["POST"]),
+                Route("/completions", get_completions_list, methods=["GET"]),
+                Route("/completions/{uuid:path}", get_completion_route, methods=["GET"]),
+                Route("/completions/{uuid:path}/notifications", patch_notifications_route, methods=["PATCH"]),
+            ]
+        )
 
     return Starlette(routes=routes)
 
@@ -606,6 +903,22 @@ def _auto_sync_agentihooks(cfg):
         logger.warning("agentihooks sync failed: %s — profiles may be unavailable", e)
 
 
+def _auto_sync_agentihub(cfg):
+    """Auto-sync agentihub if URL is configured (clone only, no profile build).
+
+    Agent mode handles its own provisioning via initializer.py.
+    This just ensures the repo is available on shared FS.
+    """
+    if not cfg.agentihub_url:
+        return
+    try:
+        from agenticore.hooks import sync_agentihub
+
+        sync_agentihub()
+    except Exception as e:
+        logger.warning("agentihub sync failed: %s — non-fatal", e)
+
+
 def _auto_sync_mcp_lib(cfg):
     """Auto-sync MCP lib if URL is configured and path not already set."""
     if not cfg.mcp_lib_url or os.getenv("AGENTICORE_MCP_LIB_PATH"):
@@ -627,7 +940,16 @@ def main():
     print("Starting Agenticore...", file=sys.stderr)
 
     _auto_sync_agentihooks(cfg)
+    _auto_sync_agentihub(cfg)
     _auto_sync_mcp_lib(cfg)
+
+    # Agent mode initialization
+    if cfg.agent_mode.enabled:
+        print("Agent mode enabled — initializing...", file=sys.stderr)
+        _register_agent_mode_tools()
+        from agenticore.agent_mode.initializer import initialize_agent_mode
+
+        initialize_agent_mode()
 
     tools = mcp._tool_manager.list_tools()
     print(f"Tools: {len(tools)}", file=sys.stderr)
