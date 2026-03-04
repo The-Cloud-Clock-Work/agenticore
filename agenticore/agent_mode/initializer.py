@@ -46,7 +46,10 @@ def _provision_from_agentihub(cfg) -> None:
         env.update(extra_env)
         result = subprocess.run(
             ["git", "clone", "--depth", "1", hub_url, str(clone_dir)],
-            capture_output=True, text=True, timeout=120, env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
         )
         if result.returncode != 0:
             raise RuntimeError(f"Agentihub clone failed: {result.stderr.strip()}")
@@ -232,12 +235,8 @@ def _install_notification_hook(package_dir: str) -> None:
     notifier_cmd = f"python3 {dst}"
 
     hook_entries = {
-        "PostToolUse": [
-            {"matcher": ".*", "hooks": [{"type": "command", "command": notifier_cmd}]}
-        ],
-        "Notification": [
-            {"hooks": [{"type": "command", "command": notifier_cmd}]}
-        ],
+        "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": notifier_cmd}]}],
+        "Notification": [{"hooks": [{"type": "command", "command": notifier_cmd}]}],
     }
 
     for hook_name, entries in hook_entries.items():
