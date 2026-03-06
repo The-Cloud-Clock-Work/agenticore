@@ -25,6 +25,20 @@ from agenticore.telemetry import end_job_trace, ship_transcript, start_job_trace
 
 logger = logging.getLogger(__name__)
 
+_WATCHER_LOG = "/tmp/watcher.log"
+
+def _wlog(msg: str) -> None:
+    """Debug log for worktree watcher — writes to file + stderr."""
+    line = f"[watcher] {msg}\n"
+    try:
+        with open(_WATCHER_LOG, "a") as f:
+            f.write(line)
+    except Exception:
+        pass
+    sys.stderr.write(line)
+    sys.stderr.flush()
+
+
 # Set to prevent GC of fire-and-forget background tasks
 _background_tasks: set = set()
 
@@ -352,8 +366,7 @@ class _WorktreeWatcher:
         main_path = str(rdir)
         claude_wt_dir = rdir / ".claude" / "worktrees"
 
-        sys.stderr.write(f"[watcher] started — watching {claude_wt_dir}\n")
-        sys.stderr.flush()
+        _wlog(f"started — watching {claude_wt_dir}")
 
         while not stop_event.is_set():
             try:
@@ -365,8 +378,7 @@ class _WorktreeWatcher:
                         wt_path = str(entry)
                         if wt_path in self._locked:
                             continue
-                        sys.stderr.write(f"[watcher] detected worktree dir: {wt_path}\n")
-                        sys.stderr.flush()
+                        _wlog(f"detected worktree dir: {wt_path}")
                         # Lock via git worktree lock
                         proc = await asyncio.create_subprocess_exec(
                             "git", "worktree", "lock", wt_path,
@@ -377,11 +389,9 @@ class _WorktreeWatcher:
                         )
                         stdout_lock, stderr_lock = await proc.communicate()
                         if proc.returncode == 0:
-                            sys.stderr.write(f"[watcher] LOCKED {wt_path}\n")
-                            sys.stderr.flush()
+                            _wlog(f"LOCKED {wt_path}")
                         else:
-                            sys.stderr.write(f"[watcher] lock failed rc={proc.returncode}: {stderr_lock.decode()}\n")
-                            sys.stderr.flush()
+                            _wlog(f"lock failed rc={proc.returncode}: {stderr_lock.decode()}")
                         self._locked.add(wt_path)
                         logger.info("Locked worktree %s", wt_path)
                         if wt_path not in self._pre_existing:
@@ -464,18 +474,14 @@ async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
     stop_watcher = asyncio.Event()
     watcher_task = None
     watcher = _WorktreeWatcher()
-    sys.stderr.write(f"[watcher] rdir={rdir} type={type(rdir)}\n")
-    sys.stderr.flush()
+    _wlog(f"rdir={rdir} type={type(rdir)}")
     if rdir:
-        sys.stderr.write(f"[watcher] starting watcher for {rdir}\n")
-        sys.stderr.flush()
+        _wlog(f"starting watcher for {rdir}")
         await watcher.snapshot_existing(rdir)
         watcher_task = asyncio.create_task(watcher.watch(rdir, stop_watcher))
-        sys.stderr.write("[watcher] watcher task created\n")
-        sys.stderr.flush()
+        _wlog("watcher task created")
     else:
-        sys.stderr.write("[watcher] rdir is falsy — NOT started\n")
-        sys.stderr.flush()
+        _wlog("rdir is falsy — NOT started")
 
     try:
         try:
