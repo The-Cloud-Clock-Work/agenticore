@@ -330,6 +330,10 @@ def ensure_repo_exists(repo_url: str, private: bool = True) -> None:
             logger.info("Created repo %s/%s (private=%s)", owner, name, private)
             return
 
+        if resp.status_code == 422 and "already exists" in resp.text:
+            logger.info("Repo %s/%s already exists", owner, name)
+            return
+
         if resp.status_code == 403:
             last_error = resp.text
             logger.debug("Token lacks repo creation permission, trying next")
