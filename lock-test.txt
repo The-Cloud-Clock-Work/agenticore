@@ -1,0 +1,1 @@
+This worktree should be locked and preserved.
