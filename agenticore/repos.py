@@ -285,40 +285,59 @@ def ensure_repo_exists(repo_url: str, private: bool = True) -> None:
         return
 
     owner, name = _parse_github_repo(repo_url)
-    token = resolve_github_token()
-    if not token:
-        raise RuntimeError("No GitHub token available — cannot create repo")
 
     import httpx
 
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
-    }
+    # Try tokens in order: resolve_github_token() first, then static GITHUB_TOKEN fallback.
+    # GitHub App tokens may lack administration:write needed for repo creation.
+    tokens_to_try = []
+    primary = resolve_github_token()
+    if primary:
+        tokens_to_try.append(primary)
+    static = os.getenv("GITHUB_TOKEN", "")
+    if static and static != primary:
+        tokens_to_try.append(static)
 
-    # Try org endpoint first, fall back to user endpoint
+    if not tokens_to_try:
+        raise RuntimeError("No GitHub token available — cannot create repo")
+
     payload = {"name": name, "private": private, "auto_init": True}
+    last_error = ""
 
-    resp = httpx.post(
-        f"https://api.github.com/orgs/{owner}/repos",
-        json=payload,
-        headers=headers,
-        timeout=30,
-    )
+    for token in tokens_to_try:
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github+json",
+        }
 
-    if resp.status_code == 404:
-        # Not an org — try user endpoint
         resp = httpx.post(
-            "https://api.github.com/user/repos",
+            f"https://api.github.com/orgs/{owner}/repos",
             json=payload,
             headers=headers,
             timeout=30,
         )
 
-    if resp.status_code not in (201, 200):
+        if resp.status_code == 404:
+            # Not an org — try user endpoint
+            resp = httpx.post(
+                "https://api.github.com/user/repos",
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
+
+        if resp.status_code in (201, 200):
+            logger.info("Created repo %s/%s (private=%s)", owner, name, private)
+            return
+
+        if resp.status_code == 403:
+            last_error = resp.text
+            logger.debug("Token lacks repo creation permission, trying next")
+            continue
+
         raise RuntimeError(f"Failed to create repo {owner}/{name}: {resp.status_code} {resp.text}")
 
-    logger.info("Created repo %s/%s (private=%s)", owner, name, private)
+    raise RuntimeError(f"Failed to create repo {owner}/{name}: all tokens lack permission. Last: {last_error}")
 
 
 # ── Worktree Management ───────────────────────────────────────────────────
