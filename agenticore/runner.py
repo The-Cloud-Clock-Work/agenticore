@@ -329,38 +329,49 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
         end_job_trace(trace, final_job)
 
 
-async def _worktree_lock_watcher(rdir: Path, stop_event: asyncio.Event) -> None:
-    """Poll for new worktrees during Claude execution and lock them immediately.
+class _WorktreeWatcher:
+    """Tracks worktrees created during a job and locks them."""
 
-    Runs every 3s. Any worktree that isn't the main checkout gets locked via
-    `git worktree lock`, which prevents Claude from deleting it on exit.
-    """
-    locked: set[str] = set()
-    main_path = str(rdir)
+    def __init__(self):
+        self.new_worktrees: list[dict] = []  # worktrees created during this job
+        self._pre_existing: set[str] = set()
+        self._locked: set[str] = set()
 
-    while not stop_event.is_set():
-        try:
-            for wt in await _list_worktrees_async(rdir):
-                wt_path = wt.get("path", "")
-                if wt_path == main_path or wt_path in locked:
-                    continue
-                # Lock it — Claude can't delete a locked worktree
-                proc = await asyncio.create_subprocess_exec(
-                    "git", "worktree", "lock", wt_path,
-                    "--reason", "agenticore: preserved for auto-PR",
-                    cwd=rdir,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await proc.communicate()
-                locked.add(wt_path)
-                logger.info("Locked worktree %s", wt_path)
-        except Exception:
-            pass
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=3.0)
-        except asyncio.TimeoutError:
-            pass
+    async def snapshot_existing(self, rdir: Path) -> None:
+        """Record worktrees that exist before the job starts."""
+        for wt in await _list_worktrees_async(rdir):
+            self._pre_existing.add(wt.get("path", ""))
+
+    async def watch(self, rdir: Path, stop_event: asyncio.Event) -> None:
+        """Poll for new worktrees and lock them immediately."""
+        main_path = str(rdir)
+
+        while not stop_event.is_set():
+            try:
+                for wt in await _list_worktrees_async(rdir):
+                    wt_path = wt.get("path", "")
+                    if wt_path == main_path or wt_path in self._locked:
+                        continue
+                    # Lock it
+                    proc = await asyncio.create_subprocess_exec(
+                        "git", "worktree", "lock", wt_path,
+                        "--reason", "agenticore: preserved for auto-PR",
+                        cwd=rdir,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await proc.communicate()
+                    self._locked.add(wt_path)
+                    logger.info("Locked worktree %s", wt_path)
+                    # Track if this is new (created during this job)
+                    if wt_path not in self._pre_existing:
+                        self.new_worktrees.append(wt)
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                pass
 
 
 async def _list_worktrees_async(rdir: Path) -> list[dict]:
@@ -390,25 +401,16 @@ async def _list_worktrees_async(rdir: Path) -> list[dict]:
         return []
 
 
-async def _record_worktree_on_job(job: Job, rdir: Path) -> None:
-    """After Claude exits, find the worktree it created and record it on the job."""
-    if not rdir or not job.repo_url:
+def _record_worktree_on_job(job: Job, watcher: _WorktreeWatcher) -> None:
+    """Record the worktree created during this job."""
+    if not watcher.new_worktrees:
+        logger.debug("No new worktree created for job %s", job.id)
         return
 
-    from agenticore.pr import _get_worktree_branch
-
-    branch = await _get_worktree_branch(rdir, job.id)
-    if not branch:
-        logger.debug("No worktree branch found for job %s", job.id)
-        return
-
-    for wt in await _list_worktrees_async(rdir):
-        if wt.get("branch") == branch:
-            update_job(job.id, worktree_path=wt["path"])
-            logger.info("Recorded worktree %s (branch %s) on job %s", wt["path"], branch, job.id)
-            return
-
-    logger.warning("Branch %s exists but no worktree found — this shouldn't happen with locking", branch)
+    # Use the last new worktree (in case multiple were created)
+    wt = watcher.new_worktrees[-1]
+    update_job(job.id, worktree_path=wt["path"])
+    logger.info("Recorded worktree %s (branch %s) on job %s", wt["path"], wt.get("branch", "?"), job.id)
 
 
 async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
@@ -417,8 +419,10 @@ async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
     # can't be deleted on session exit. Only cleanup_worktrees can remove them.
     stop_watcher = asyncio.Event()
     watcher_task = None
+    watcher = _WorktreeWatcher()
     if rdir:
-        watcher_task = asyncio.create_task(_worktree_lock_watcher(rdir, stop_watcher))
+        await watcher.snapshot_existing(rdir)
+        watcher_task = asyncio.create_task(watcher.watch(rdir, stop_watcher))
 
     try:
         try:
@@ -460,8 +464,7 @@ async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
         )
 
         # Record worktree path on job (worktree is locked, guaranteed to exist)
-        if rdir:
-            await _record_worktree_on_job(job, rdir)
+        _record_worktree_on_job(job, watcher)
 
         return await _maybe_auto_pr(job, profile, status)
     finally:

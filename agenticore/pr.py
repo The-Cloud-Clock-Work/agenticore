@@ -107,28 +107,28 @@ async def _commit_untracked(worktree_path: Path, job_id: str) -> None:
 
 
 async def _get_worktree_branch(rdir, _job_id: str) -> Optional[str]:
-    """Find the worktree branch for this job.
+    """Find the most recently created worktree branch for this job.
 
     Claude Code creates worktree branches with varying prefixes (cc-*, worktree-*).
-    We find them by looking for local branches that aren't main/master/dev.
+    We sort by committerdate descending and return the newest non-main branch.
     """
     try:
         result = await asyncio.create_subprocess_exec(
             "git",
             "branch",
-            "--list",
+            "--sort=-committerdate",
+            "--format=%(refname:short)",
             cwd=rdir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await result.communicate()
         skip = {"main", "master", "dev"}
-        branches = []
         for line in stdout.decode().strip().split("\n"):
-            b = line.strip().lstrip("*+ ").strip()
+            b = line.strip()
             if b and b not in skip:
-                branches.append(b)
-        return branches[-1] if branches else None
+                return b
+        return None
     except Exception:
         return None
 

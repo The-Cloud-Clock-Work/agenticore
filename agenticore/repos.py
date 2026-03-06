@@ -164,6 +164,12 @@ def ensure_clone(repo_url: str) -> Path:
         with git_askpass_env(token) as extra_env:
             if rdir.exists() and (rdir / ".git").exists():
                 _run_git(["git", "fetch", "--all", "--prune"], cwd=rdir, extra_env=extra_env)
+                # Update local default branch to match origin so new worktrees
+                # branch off the latest code (not a stale local checkout).
+                try:
+                    _run_git(["git", "reset", "--hard", "origin/HEAD"], cwd=rdir)
+                except Exception:
+                    pass  # non-fatal — worktrees may block checkout
             else:
                 _run_git(["git", "clone", repo_url, str(rdir)], extra_env=extra_env)
             sanitize_remote_url(str(rdir))
