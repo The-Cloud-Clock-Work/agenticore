@@ -352,6 +352,8 @@ class _WorktreeWatcher:
         main_path = str(rdir)
         claude_wt_dir = rdir / ".claude" / "worktrees"
 
+        print(f"[watcher] started — watching {claude_wt_dir}", file=sys.stderr, flush=True)
+
         while not stop_event.is_set():
             try:
                 # Fast filesystem scan — catches worktree dirs before git knows
@@ -362,6 +364,7 @@ class _WorktreeWatcher:
                         wt_path = str(entry)
                         if wt_path in self._locked:
                             continue
+                        print(f"[watcher] detected worktree dir: {wt_path}", file=sys.stderr, flush=True)
                         # Lock via git worktree lock
                         proc = await asyncio.create_subprocess_exec(
                             "git", "worktree", "lock", wt_path,
@@ -370,7 +373,11 @@ class _WorktreeWatcher:
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.PIPE,
                         )
-                        await proc.communicate()
+                        stdout_lock, stderr_lock = await proc.communicate()
+                        if proc.returncode == 0:
+                            print(f"[watcher] LOCKED {wt_path}", file=sys.stderr, flush=True)
+                        else:
+                            print(f"[watcher] lock failed rc={proc.returncode}: {stderr_lock.decode()}", file=sys.stderr, flush=True)
                         self._locked.add(wt_path)
                         logger.info("Locked worktree %s", wt_path)
                         if wt_path not in self._pre_existing:
