@@ -91,6 +91,8 @@ async def run_task(
     wait: bool = False,
     session_id: str = "",
     file_path: str = "",
+    create_repo: bool = False,
+    private: bool = True,
 ) -> str:
     """Submit a task for Claude Code execution.
 
@@ -105,6 +107,8 @@ async def run_task(
         wait: Block until completion (default: false)
         session_id: Claude session ID to resume (optional)
         file_path: Path to a .mcp.json on the shared FS to inject into the job config (optional)
+        create_repo: Auto-create GitHub repo if it doesn't exist (default: false)
+        private: Create repo as private (default: true)
 
     Returns:
         JSON with job_id, status, and (if wait=true) output
@@ -123,6 +127,8 @@ async def run_task(
             wait=wait,
             session_id=session_id or None,
             file_path=file_path,
+            create_repo=create_repo,
+            private=private,
         )
 
         return json.dumps({"success": True, "job": job.to_dict()})
@@ -523,6 +529,61 @@ async def list_profiles() -> str:
         return json.dumps({"success": False, "error": str(e)})
 
 
+@mcp.tool()
+async def list_worktrees() -> str:
+    """List all worktrees across cached repos with age, size, and push status.
+
+    Returns:
+        JSON with worktrees list (job_id, repo_key, branch, age_hours, size_bytes, pushed)
+    """
+    try:
+        from agenticore.repos import list_all_worktrees
+
+        worktrees = list_all_worktrees()
+        return json.dumps({"success": True, "count": len(worktrees), "worktrees": worktrees})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def cleanup_worktrees(
+    job_ids: str = "",
+    max_age_hours: int = 0,
+) -> str:
+    """Remove worktrees by job ID or age threshold. Never called automatically.
+
+    At least one of job_ids or max_age_hours must be provided.
+
+    Args:
+        job_ids: Comma-separated list of job IDs to remove
+        max_age_hours: Remove all worktrees older than N hours (0 = disabled)
+
+    Returns:
+        JSON with removal results per worktree
+    """
+    try:
+        from agenticore.repos import list_all_worktrees, remove_worktrees
+
+        ids_to_remove = []
+
+        if job_ids:
+            ids_to_remove.extend([j.strip() for j in job_ids.split(",") if j.strip()])
+
+        if max_age_hours > 0:
+            all_wt = list_all_worktrees()
+            for wt in all_wt:
+                if wt["age_hours"] >= max_age_hours and wt["job_id"] not in ids_to_remove:
+                    ids_to_remove.append(wt["job_id"])
+
+        if not ids_to_remove:
+            return json.dumps({"success": False, "error": "No worktrees to remove — provide job_ids or max_age_hours"})
+
+        results = remove_worktrees(ids_to_remove)
+        return json.dumps({"success": True, "removed": len([r for r in results if r["success"]]), "results": results})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
 # ── REST API (via Starlette) ──────────────────────────────────────────────
 
 
@@ -552,6 +613,8 @@ def _build_rest_app():
             wait=body.get("wait", False),
             session_id=body.get("session_id", ""),
             file_path=body.get("file_path", ""),
+            create_repo=body.get("create_repo", False),
+            private=body.get("private", True),
         )
         data = json.loads(result)
         status_code = 200 if data.get("success") else 400

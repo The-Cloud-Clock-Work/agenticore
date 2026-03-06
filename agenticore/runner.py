@@ -20,7 +20,7 @@ import logging
 from agenticore.config import get_config
 from agenticore.jobs import Job, create_job, get_job, update_job
 from agenticore.profiles import build_cli_args, get_profile, materialize_profile
-from agenticore.repos import ensure_clone, get_default_branch, resolve_github_token
+from agenticore.repos import ensure_clone, ensure_repo_exists, get_default_branch, resolve_github_token
 from agenticore.telemetry import end_job_trace, ship_transcript, start_job_trace
 
 logger = logging.getLogger(__name__)
@@ -139,8 +139,10 @@ def _extract_session_id(output_text: str) -> Optional[str]:
     return None
 
 
-def _prepare_job_repo(job: Job):
+def _prepare_job_repo(job: Job, create_repo: bool = False, private: bool = True):
     """Clone repo and return (cwd, base_ref). Raises on failure."""
+    if create_repo and job.repo_url:
+        ensure_repo_exists(job.repo_url, private=private)
     cwd = ensure_clone(job.repo_url)
     base_ref = job.base_ref or get_default_branch(cwd)
     return cwd, base_ref
@@ -267,7 +269,7 @@ def _inject_mcp_configs(job: Job, cfg, mcp_cwd: Optional[Path]):
     return None
 
 
-async def run_job(job: Job) -> Job:
+async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> Job:
     """Execute a job: clone repo, run Claude, handle result.
 
     Updates the job in-place and persists state changes.
@@ -289,7 +291,7 @@ async def run_job(job: Job) -> Job:
 
     if job.repo_url:
         try:
-            cwd, base_ref = _prepare_job_repo(job)
+            cwd, base_ref = _prepare_job_repo(job, create_repo=create_repo, private=private)
         except Exception as e:
             return update_job(job.id, status="failed", error=f"Clone failed: {e}", ended_at=_now_iso())
 
@@ -324,7 +326,7 @@ async def run_job(job: Job) -> Job:
     cmd, env = _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir=job_config_dir)
 
     try:
-        job = await _execute_claude(job, cmd, cwd, env, profile, cfg)
+        job = await _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=cwd)
         return job
     finally:
         final_job = get_job(job.id)
@@ -332,7 +334,77 @@ async def run_job(job: Job) -> Job:
         end_job_trace(trace, final_job)
 
 
-async def _execute_claude(job, cmd, cwd, env, profile, cfg):
+def _recover_worktree(job: Job, rdir: Path) -> None:
+    """Re-create worktree from surviving cc-* branch if Claude deleted it on exit.
+
+    Claude Code --worktree deletes the worktree directory on session exit,
+    but the branch ref survives in the main repo. This recovers it so
+    auto-PR can access the committed changes.
+    """
+    if not job.worktree_path:
+        return
+    wt_path = Path(job.worktree_path)
+    if wt_path.exists():
+        return  # worktree still intact, nothing to do
+
+    import asyncio
+    from agenticore.pr import _get_worktree_branch
+
+    # Run the async branch lookup synchronously (we're called after subprocess exit)
+    loop = asyncio.get_event_loop()
+    branch = loop.run_until_complete(_get_worktree_branch(rdir, job.id))
+    if not branch:
+        logger.warning("Worktree %s missing and no cc-* branch found — commits lost", job.worktree_path)
+        return
+
+    try:
+        import subprocess as sp
+
+        sp.run(
+            ["git", "worktree", "add", str(wt_path), branch],
+            cwd=rdir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        logger.info("Recovered worktree %s from branch %s", wt_path, branch)
+    except Exception as e:
+        logger.warning("Failed to recover worktree %s: %s", wt_path, e)
+
+
+async def _recover_worktree_async(job: Job, rdir: Path) -> None:
+    """Async version of worktree recovery."""
+    if not job.worktree_path:
+        return
+    wt_path = Path(job.worktree_path)
+    if wt_path.exists():
+        return
+
+    from agenticore.pr import _get_worktree_branch
+
+    branch = await _get_worktree_branch(rdir, job.id)
+    if not branch:
+        logger.warning("Worktree %s missing and no cc-* branch found — commits lost", job.worktree_path)
+        return
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "worktree", "add", str(wt_path), branch,
+            cwd=rdir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode == 0:
+            logger.info("Recovered worktree %s from branch %s", wt_path, branch)
+        else:
+            logger.warning("Failed to recover worktree %s: %s", wt_path, stderr.decode())
+    except Exception as e:
+        logger.warning("Failed to recover worktree %s: %s", wt_path, e)
+
+
+async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
     """Execute Claude subprocess and process results."""
     try:
         async with asyncio.timeout(profile.claude.timeout):
@@ -371,6 +443,10 @@ async def _execute_claude(job, cmd, cwd, env, profile, cfg):
         error=error_text[:10000] if error_text else None,
         ended_at=_now_iso(),
     )
+
+    # Recover worktree if Claude deleted it on exit (branch ref survives)
+    if rdir:
+        await _recover_worktree_async(job, rdir)
 
     return await _maybe_auto_pr(job, profile, status)
 
@@ -563,6 +639,8 @@ async def submit_job(
     wait: bool = False,
     session_id: Optional[str] = None,
     file_path: str = "",
+    create_repo: bool = False,
+    private: bool = True,
 ) -> Job:
     """Submit a new job for execution.
 
@@ -573,6 +651,9 @@ async def submit_job(
         base_ref: Base branch (default: main)
         wait: If True, wait for completion (sync mode)
         session_id: Claude session ID to resume
+        file_path: Path to .mcp.json to inject
+        create_repo: Auto-create GitHub repo if it doesn't exist
+        private: Create repo as private (default: True)
 
     Returns:
         The created Job (may still be running if wait=False)
@@ -593,10 +674,10 @@ async def submit_job(
 
     if wait:
         # Synchronous: run and return completed job
-        return await run_job(job)
+        return await run_job(job, create_repo=create_repo, private=private)
     else:
         # Fire-and-forget: launch in background
-        _background_task = asyncio.create_task(run_job(job))
+        _background_task = asyncio.create_task(run_job(job, create_repo=create_repo, private=private))
         # Store reference to prevent GC of fire-and-forget task
         _background_tasks.add(_background_task)
         _background_task.add_done_callback(_background_tasks.discard)
