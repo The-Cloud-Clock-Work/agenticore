@@ -352,7 +352,7 @@ class _WorktreeWatcher:
         main_path = str(rdir)
         claude_wt_dir = rdir / ".claude" / "worktrees"
 
-        print(f"[watcher] started — watching {claude_wt_dir}", file=sys.stderr, flush=True)
+        logger.warning("[watcher] started — watching %s", claude_wt_dir)
 
         while not stop_event.is_set():
             try:
@@ -364,7 +364,7 @@ class _WorktreeWatcher:
                         wt_path = str(entry)
                         if wt_path in self._locked:
                             continue
-                        print(f"[watcher] detected worktree dir: {wt_path}", file=sys.stderr, flush=True)
+                        logger.warning("[watcher] detected worktree dir: %s", wt_path)
                         # Lock via git worktree lock
                         proc = await asyncio.create_subprocess_exec(
                             "git", "worktree", "lock", wt_path,
@@ -375,9 +375,9 @@ class _WorktreeWatcher:
                         )
                         stdout_lock, stderr_lock = await proc.communicate()
                         if proc.returncode == 0:
-                            print(f"[watcher] LOCKED {wt_path}", file=sys.stderr, flush=True)
+                            logger.warning("[watcher] LOCKED %s", wt_path)
                         else:
-                            print(f"[watcher] lock failed rc={proc.returncode}: {stderr_lock.decode()}", file=sys.stderr, flush=True)
+                            logger.warning("[watcher] lock failed rc=%d: %s", proc.returncode, stderr_lock.decode())
                         self._locked.add(wt_path)
                         logger.info("Locked worktree %s", wt_path)
                         if wt_path not in self._pre_existing:
@@ -460,14 +460,14 @@ async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
     stop_watcher = asyncio.Event()
     watcher_task = None
     watcher = _WorktreeWatcher()
-    print(f"[watcher-debug] rdir={rdir} type={type(rdir)}", flush=True)
+    logger.warning("[watcher] rdir=%s type=%s", rdir, type(rdir))
     if rdir:
-        print(f"[watcher-debug] starting watcher for {rdir}", flush=True)
+        logger.warning("[watcher] starting watcher for %s", rdir)
         await watcher.snapshot_existing(rdir)
         watcher_task = asyncio.create_task(watcher.watch(rdir, stop_watcher))
-        print(f"[watcher-debug] watcher task created: {watcher_task}", flush=True)
+        logger.warning("[watcher] watcher task created")
     else:
-        print("[watcher-debug] rdir is falsy — watcher NOT started", flush=True)
+        logger.warning("[watcher] rdir is falsy — NOT started")
 
     try:
         try:
