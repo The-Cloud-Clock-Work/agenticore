@@ -16,7 +16,7 @@ already provides natively:
 
 | Concern | Owner |
 |---------|-------|
-| Worktree management | Claude Code (`--worktree`) |
+| Worktree creation + locking | Agenticore (`create_worktree()`) |
 | Coding work | Claude Code |
 | Telemetry emission | Claude Code (native OTEL) |
 | Job lifecycle | Agenticore |
@@ -24,7 +24,13 @@ already provides natively:
 | Profile to CLI flags | Agenticore |
 | Profile materialization | Agenticore |
 | Auto-PR creation | Agenticore |
+| Worktree cleanup | Agenticore (`cleanup_worktrees` MCP tool) |
 | OTEL pipeline to Langfuse + PostgreSQL | Agenticore (collector config + SDK) |
+
+!!! note "Bespoke Worktrees"
+    Agenticore creates and locks worktrees **before** launching Claude. Claude runs
+    with `cwd=worktree` but without `--worktree` — it never knows it's in a worktree,
+    never tries to delete it. Each job gets branch `agenticore-{job_id[:8]}`.
 
 ## Module Map
 
@@ -33,7 +39,7 @@ already provides natively:
 | `server.py` | FastMCP server + REST routes | `run_task()`, `_build_asgi_app()` |
 | `config.py` | YAML config + env var overrides | `load_config()`, `get_config()` |
 | `profiles.py` | Discover and load profiles from agentihooks + user dir, build CLI args, materialize `.claude/` | `load_profiles()`, `build_cli_args()`, `materialize_profile()` |
-| `repos.py` | Git clone/fetch with flock or Redis lock | `ensure_clone()`, `repo_dir()` |
+| `repos.py` | Git clone/fetch with flock or Redis lock, bespoke worktree creation | `ensure_clone()`, `create_worktree()`, `repo_dir()` |
 | `jobs.py` | Job store (Redis + file fallback) | `create_job()`, `get_job()`, `update_job()` |
 | `runner.py` | Spawn Claude subprocess | `submit_job()`, `run_job()` |
 | `telemetry.py` | Langfuse trace lifecycle + transcripts | `start_job_trace()`, `ship_transcript()` |
@@ -77,7 +83,8 @@ already provides natively:
                    +--------+--------+
                    |   runner.py     |
                    |  run_job()      |
-                   |  claude --worktree -p "task" --model X ...
+                   |  claude -p "task" --model X ...
+                   |  cwd = /shared/repos/.../worktrees/{id}
                    |  CLAUDE_CONFIG_DIR=/shared/jobs/{id}
                    +--------+--------+
                             |
@@ -154,9 +161,17 @@ on the lock falls through safely.
 ```
 /shared/repos/
 ├── a1b2c3d4e5f6/
-|   └── repo/             ← git clone (shared across pods)
+|   └── repo/                          ← git clone (shared across pods)
+|       └── .claude/worktrees/
+|           ├── {job_id_1}/            ← bespoke worktree (locked)
+|           └── {job_id_2}/            ← bespoke worktree (locked)
 ...
 ```
+
+Worktrees are created inside the repo's `.claude/worktrees/` directory with
+deterministic branch names (`agenticore-{job_id[:8]}`). Each worktree is locked
+immediately after creation and survives job completion. The `cleanup_worktrees`
+MCP tool handles removal.
 
 ## Execution Modes
 

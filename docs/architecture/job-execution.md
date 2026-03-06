@@ -87,25 +87,40 @@ The `run_job()` function in `runner.py` executes the following steps:
     - Local/Docker: ensure_clone() with fcntl flock per repo
     - Kubernetes:   ensure_clone() with Redis distributed lock (NFS-safe)
     - Detect default branch if base_ref not set
-    - Record worktree_path on job (computed path, Claude creates it later)
- 6. Materialize profile's .claude/ package
+ 6. Create bespoke worktree (if profile.claude.worktree: true)
+    - create_worktree(repo_dir, job_id, base_ref)
+    - Branch: agenticore-{job_id[:8]}
+    - Path: {repo}/.claude/worktrees/{job_id}
+    - Locked immediately with reason "agenticore: job {job_id}"
+    - Record worktree_path on job
+    - Set cwd = worktree_path (Claude runs here)
+ 7. Materialize profile's .claude/ package
     - Local/Docker: copy into repo cwd
     - Kubernetes:   copy into /shared/jobs/{job-id}/ (CLAUDE_CONFIG_DIR)
     - Record job_config_dir on job
- 7. Build template variables (TASK, REPO_URL, BASE_REF, JOB_ID, PROFILE)
- 8. Build CLI args from profile (build_cli_args)
- 9. Construct command: [claude_binary] + cli_args
-10. Append --resume session_id (if session_id provided)
-11. Build environment (inherit + OTEL vars + CLAUDE_CONFIG_DIR + GITHUB_TOKEN)
-12. Spawn subprocess (asyncio.create_subprocess_exec)
-13. Store PID in job record
-14. Wait for completion with timeout (profile.claude.timeout)
-15. Extract session_id from Claude's JSON stdout (scan for sessionId field)
-16. Parse result: stdout → output, stderr → error, returncode → status
-17. Auto-PR on success (if profile.auto_pr and repo_url set)
-18. (finally) Ship Claude session transcript to Langfuse as spans
-19. (finally) Finalize Langfuse trace with status, exit_code, pr_url
+ 8. Inject MCP configs (default + job.file_path) into cwd/.mcp.json
+ 9. Build template variables (TASK, REPO_URL, BASE_REF, JOB_ID, PROFILE)
+10. Build CLI args from profile (build_cli_args) — --worktree is NEVER passed
+11. Construct command: [claude_binary] + cli_args
+12. Append --resume session_id (if session_id provided)
+13. Build environment (inherit + OTEL vars + CLAUDE_CONFIG_DIR + GITHUB_TOKEN)
+14. Spawn subprocess (asyncio.create_subprocess_exec) with cwd = worktree
+15. Store PID in job record
+16. Wait for completion with timeout (profile.claude.timeout)
+17. Extract session_id from Claude's JSON stdout (scan for sessionId field)
+18. Parse result: stdout → output, stderr → error, returncode → status
+19. Auto-PR on success (if profile.auto_pr and repo_url set)
+    - Branch name is deterministic: agenticore-{job_id[:8]}
+    - Stage untracked files, push branch, gh pr create
+20. (finally) Ship Claude session transcript to Langfuse as spans
+21. (finally) Finalize Langfuse trace with status, exit_code, pr_url
 ```
+
+!!! important "One Job = One PR"
+    Each job creates an independent worktree, branch, and PR. There is no
+    iteration on existing PRs. Submitting "fix PR #2" creates a new PR #3
+    branched from main. The PR review gate (human or GitHub Copilot) is the
+    quality control point before merge.
 
 ## OTEL Environment Variables
 
@@ -131,24 +146,40 @@ When a job succeeds (`exit_code == 0`), `profile.auto_pr` is `true`, and a
 Job succeeded
      |
      v
-+----+-----+     +----------+     +----------+     +-----------+
-| Find     |---->| Check    |---->| Push     |---->| Create PR |
-| worktree |     | commits  |     | branch   |     | gh pr     |
-| branch   |     | ahead of |     | to       |     | create    |
-| (cc-*)   |     | origin   |     | origin   |     |           |
-+----------+     +----------+     +----------+     +----+------+
-                                                        |
-                                                        v
-                                                   PR URL stored
-                                                   in job record
++-------------+     +-----------+     +----------+     +-----------+
+| Deterministic|---->| Stage +   |---->| Push     |---->| Create PR |
+| branch name  |     | commit    |     | branch   |     | gh pr     |
+| agenticore-  |     | untracked |     | to       |     | create    |
+| {id[:8]}     |     | files     |     | origin   |     |           |
++--------------+     +-----------+     +----------+     +----+------+
+                                                             |
+                                                             v
+                                                        PR URL stored
+                                                        in job record
 ```
 
+The branch name is deterministic (`agenticore-{job_id[:8]}`) — no heuristic
+search needed. A fallback (`_get_worktree_branch()`) exists for legacy jobs
+that used Claude's internal branch naming.
+
 **Requirements:**
-- `GITHUB_TOKEN` must be set
+- `GITHUB_TOKEN` must be set (or GitHub App configured)
 - `gh` CLI must be installed
 - The worktree branch must have commits ahead of the default branch
 
 If any step fails, auto-PR is skipped silently (logged to stderr).
+
+### PR as Quality Gate
+
+The one-job-one-PR model is intentional. Each PR is a clean-room result:
+
+- Branched from `origin/{base_ref}` (usually `main`)
+- No contamination from previous jobs or parallel jobs
+- PR review is the integration point — configure GitHub branch protection:
+  - Require PR reviews (human approval)
+  - Require status checks (CI/CD)
+  - Enable GitHub Copilot review for automated first-pass
+  - Require conversation resolution before merge
 
 ## Cancellation
 

@@ -16,8 +16,8 @@ MCP Client / REST Client / CLI
     ┌── Agenticore ──────────────────────────────────────────────┐
     │   Auth · Router · Job Queue                                │
     │                                                            │
-    │   Clone repo ──► Materialize profile ──► claude --worktree │
-    │   (cached, distributed lock)   (.claude/ + .mcp.json)     │
+    │   Clone repo ──► Bespoke worktree ──► claude -p "task"  │
+    │   (cached)       (locked branch)    (cwd = worktree)     │
     │                                         │                  │
     │                                         ▼                  │
     │                                   Auto-PR (gh)             │
@@ -34,8 +34,9 @@ Agenticore is a **thin orchestration layer** on top of Claude Code:
 
 - Accepts tasks from **MCP clients, REST, or CLI** — same API surface, one port
 - **Clones and caches repos**, serializes concurrent access with distributed locks
+- Creates **bespoke worktrees** — locked before Claude starts, deterministic branch names
 - **Applies execution profiles** — `.claude/` config, `.mcp.json`, hooks, skills
-- Spawns `claude --worktree -p "<task>"` and **opens a PR when it succeeds**
+- Spawns `claude -p "<task>"` in the worktree and **opens a PR when it succeeds**
 - Ships **full OTEL traces** (prompts, tool calls, token counts) to Langfuse / PostgreSQL
 - Runs standalone, in Docker, or on **Kubernetes** (Helm chart, KEDA autoscaling, graceful drain)
 
@@ -114,15 +115,19 @@ agenticore job a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 ## MCP Tools
 
-Connect any MCP-compatible client and use these 5 tools:
+Connect any MCP-compatible client and use these tools:
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| `run_task` | `task`, `repo_url`, `profile`, `base_ref`, `wait`, `session_id` | Submit a task for Claude Code execution |
+| `run_task` | `task`, `repo_url`, `profile`, `base_ref`, `wait`, `session_id`, `create_repo` | Submit a task for Claude Code execution |
 | `get_job` | `job_id` | Get status, output, and PR URL for a job |
 | `list_jobs` | `limit`, `status` | List recent jobs |
 | `cancel_job` | `job_id` | Cancel a running or queued job |
 | `list_profiles` | — | List available execution profiles |
+| `plan_task` | `task`, `repo_url`, `wait` | Create a read-only implementation plan |
+| `execute_plan` | `plan_id`, `repo_url`, `profile`, `wait` | Execute a ready plan as a coding job |
+| `list_worktrees` | — | List all worktrees with age, size, branch, push status |
+| `cleanup_worktrees` | `paths` | Remove specific worktrees (unlock + delete) |
 
 All tools return the same JSON structure as the REST endpoints.
 
@@ -287,7 +292,7 @@ parent) during materialization.
 2. Copies `.claude/` into the working directory (or `/shared/jobs/{id}/` in Kubernetes)
 3. Merges `.mcp.json` with any existing `.mcp.json` in the repo
 4. Translates `profile.yml` `claude:` fields into CLI flags:
-   `--worktree --model sonnet --max-turns 80 --permission-mode bypassPermissions …`
+   `--model sonnet --max-turns 80 --permission-mode bypassPermissions …`
 
 Full profile reference: [Profile System docs](docs/architecture/profile-system.md)
 
@@ -306,7 +311,7 @@ packages are mounted at container startup and define the agent's permanent
 identity.
 
 ```
-Standard Mode:  Request → clone repo → materialize profile → claude --worktree → PR
+Standard Mode:  Request → clone repo → bespoke worktree → materialize profile → claude → PR
 Agent Mode:     Request → load package → claude -p "task" → result (+ notifications)
 ```
 
