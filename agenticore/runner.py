@@ -329,12 +329,69 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
         end_job_trace(trace, final_job)
 
 
-async def _discover_and_record_worktree(job: Job, rdir: Path) -> None:
-    """After Claude exits, discover the worktree it created and record it on the job.
+async def _worktree_lock_watcher(rdir: Path, stop_event: asyncio.Event) -> None:
+    """Poll for new worktrees during Claude execution and lock them immediately.
 
-    Claude creates worktrees at {repo}/.claude/worktrees/{name} with branches
-    like worktree-{name}. We find them via `git worktree list`.
+    Runs every 3s. Any worktree that isn't the main checkout gets locked via
+    `git worktree lock`, which prevents Claude from deleting it on exit.
     """
+    locked: set[str] = set()
+    main_path = str(rdir)
+
+    while not stop_event.is_set():
+        try:
+            for wt in await _list_worktrees_async(rdir):
+                wt_path = wt.get("path", "")
+                if wt_path == main_path or wt_path in locked:
+                    continue
+                # Lock it — Claude can't delete a locked worktree
+                proc = await asyncio.create_subprocess_exec(
+                    "git", "worktree", "lock", wt_path,
+                    "--reason", "agenticore: preserved for auto-PR",
+                    cwd=rdir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await proc.communicate()
+                locked.add(wt_path)
+                logger.info("Locked worktree %s", wt_path)
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=3.0)
+        except asyncio.TimeoutError:
+            pass
+
+
+async def _list_worktrees_async(rdir: Path) -> list[dict]:
+    """Async `git worktree list --porcelain` parser."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "worktree", "list", "--porcelain",
+            cwd=rdir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        entries = []
+        current: dict = {}
+        for line in stdout.decode().splitlines():
+            if line.startswith("worktree "):
+                current = {"path": line[len("worktree "):]}
+            elif line.startswith("branch refs/heads/"):
+                current["branch"] = line[len("branch refs/heads/"):]
+            elif line == "" and current:
+                entries.append(current)
+                current = {}
+        if current:
+            entries.append(current)
+        return entries
+    except Exception:
+        return []
+
+
+async def _record_worktree_on_job(job: Job, rdir: Path) -> None:
+    """After Claude exits, find the worktree it created and record it on the job."""
     if not rdir or not job.repo_url:
         return
 
@@ -345,101 +402,77 @@ async def _discover_and_record_worktree(job: Job, rdir: Path) -> None:
         logger.debug("No worktree branch found for job %s", job.id)
         return
 
-    # Find worktree path from git worktree list
-    wt_path = await _find_worktree_path(rdir, branch)
-    if wt_path:
-        update_job(job.id, worktree_path=wt_path)
-        logger.info("Discovered worktree at %s (branch %s)", wt_path, branch)
-        return
+    for wt in await _list_worktrees_async(rdir):
+        if wt.get("branch") == branch:
+            update_job(job.id, worktree_path=wt["path"])
+            logger.info("Recorded worktree %s (branch %s) on job %s", wt["path"], branch, job.id)
+            return
 
-    # Worktree deleted by Claude on exit but branch survives — recover it
-    recover_path = rdir / ".claude" / "worktrees" / branch.replace("worktree-", "", 1)
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "git", "worktree", "add", str(recover_path), branch,
-            cwd=rdir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode == 0:
-            update_job(job.id, worktree_path=str(recover_path))
-            logger.info("Recovered worktree at %s from branch %s", recover_path, branch)
-        else:
-            logger.warning("Failed to recover worktree from branch %s: %s", branch, stderr.decode())
-    except Exception as e:
-        logger.warning("Failed to recover worktree from branch %s: %s", branch, e)
-
-
-async def _find_worktree_path(rdir: Path, branch: str) -> Optional[str]:
-    """Find worktree path for a branch via `git worktree list`."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "git", "worktree", "list", "--porcelain",
-            cwd=rdir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        current_path = None
-        for line in stdout.decode().splitlines():
-            if line.startswith("worktree "):
-                current_path = line[len("worktree "):]
-            elif line.startswith("branch refs/heads/") and current_path:
-                if line[len("branch refs/heads/"):] == branch:
-                    return current_path
-            elif line == "":
-                current_path = None
-        return None
-    except Exception:
-        return None
+    logger.warning("Branch %s exists but no worktree found — this shouldn't happen with locking", branch)
 
 
 async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
     """Execute Claude subprocess and process results."""
-    try:
-        async with asyncio.timeout(profile.claude.timeout):
-            proc, stdout, stderr = await _run_subprocess(job.id, cmd, cwd, env)
-    except asyncio.TimeoutError:
-        return update_job(
-            job.id,
-            status="failed",
-            error=f"Timeout after {profile.claude.timeout}s",
-            exit_code=-1,
-            ended_at=_now_iso(),
-        )
-    except FileNotFoundError:
-        return update_job(
-            job.id,
-            status="failed",
-            error=f"Claude binary not found: {cfg.claude.binary}",
-            ended_at=_now_iso(),
-        )
-    except Exception as e:
-        return update_job(job.id, status="failed", error=str(e), ended_at=_now_iso())
-
-    output_text = stdout.decode("utf-8", errors="replace") if stdout else ""
-    error_text = stderr.decode("utf-8", errors="replace") if stderr else ""
-
-    sid = _extract_session_id(output_text)
-    if sid:
-        update_job(job.id, session_id=sid)
-
-    status = "succeeded" if proc.returncode == 0 else "failed"
-    job = update_job(
-        job.id,
-        status=status,
-        exit_code=proc.returncode,
-        output=output_text[:50000],
-        error=error_text[:10000] if error_text else None,
-        ended_at=_now_iso(),
-    )
-
-    # Discover/recover worktree after Claude exits
+    # Start worktree lock watcher — locks any worktree Claude creates so it
+    # can't be deleted on session exit. Only cleanup_worktrees can remove them.
+    stop_watcher = asyncio.Event()
+    watcher_task = None
     if rdir:
-        await _discover_and_record_worktree(job, rdir)
+        watcher_task = asyncio.create_task(_worktree_lock_watcher(rdir, stop_watcher))
 
-    return await _maybe_auto_pr(job, profile, status)
+    try:
+        try:
+            async with asyncio.timeout(profile.claude.timeout):
+                proc, stdout, stderr = await _run_subprocess(job.id, cmd, cwd, env)
+        except asyncio.TimeoutError:
+            return update_job(
+                job.id,
+                status="failed",
+                error=f"Timeout after {profile.claude.timeout}s",
+                exit_code=-1,
+                ended_at=_now_iso(),
+            )
+        except FileNotFoundError:
+            return update_job(
+                job.id,
+                status="failed",
+                error=f"Claude binary not found: {cfg.claude.binary}",
+                ended_at=_now_iso(),
+            )
+        except Exception as e:
+            return update_job(job.id, status="failed", error=str(e), ended_at=_now_iso())
+
+        output_text = stdout.decode("utf-8", errors="replace") if stdout else ""
+        error_text = stderr.decode("utf-8", errors="replace") if stderr else ""
+
+        sid = _extract_session_id(output_text)
+        if sid:
+            update_job(job.id, session_id=sid)
+
+        status = "succeeded" if proc.returncode == 0 else "failed"
+        job = update_job(
+            job.id,
+            status=status,
+            exit_code=proc.returncode,
+            output=output_text[:50000],
+            error=error_text[:10000] if error_text else None,
+            ended_at=_now_iso(),
+        )
+
+        # Record worktree path on job (worktree is locked, guaranteed to exist)
+        if rdir:
+            await _record_worktree_on_job(job, rdir)
+
+        return await _maybe_auto_pr(job, profile, status)
+    finally:
+        # Stop the worktree lock watcher
+        stop_watcher.set()
+        if watcher_task:
+            watcher_task.cancel()
+            try:
+                await watcher_task
+            except asyncio.CancelledError:
+                pass
 
 
 _PLAN_PROMPT_TEMPLATE = (

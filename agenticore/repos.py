@@ -444,7 +444,7 @@ def _worktree_info(wt_dir: Path, rdir: Path, repo_key: str, branch: str) -> Opti
 
 
 def remove_worktrees(worktree_paths: list[str]) -> list[dict]:
-    """Remove specific worktrees by path.
+    """Remove specific worktrees by path. Unlocks before removing.
 
     Returns a list of {path, success, error} dicts.
     """
@@ -462,6 +462,11 @@ def remove_worktrees(worktree_paths: list[str]) -> list[dict]:
             if not str(wt_dir).startswith(str(key_dir)):
                 continue
             try:
+                # Unlock first (worktrees are locked by the watcher)
+                subprocess.run(
+                    ["git", "worktree", "unlock", str(wt_dir)],
+                    cwd=rdir, capture_output=True, text=True, timeout=10,
+                )
                 subprocess.run(
                     ["git", "worktree", "remove", "--force", str(wt_dir)],
                     cwd=rdir, capture_output=True, text=True, timeout=30,
