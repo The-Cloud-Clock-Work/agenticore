@@ -460,9 +460,14 @@ async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
     stop_watcher = asyncio.Event()
     watcher_task = None
     watcher = _WorktreeWatcher()
+    print(f"[watcher-debug] rdir={rdir} type={type(rdir)}", flush=True)
     if rdir:
+        print(f"[watcher-debug] starting watcher for {rdir}", flush=True)
         await watcher.snapshot_existing(rdir)
         watcher_task = asyncio.create_task(watcher.watch(rdir, stop_watcher))
+        print(f"[watcher-debug] watcher task created: {watcher_task}", flush=True)
+    else:
+        print("[watcher-debug] rdir is falsy — watcher NOT started", flush=True)
 
     try:
         try:
