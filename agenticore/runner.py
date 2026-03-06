@@ -343,16 +343,50 @@ class _WorktreeWatcher:
             self._pre_existing.add(wt.get("path", ""))
 
     async def watch(self, rdir: Path, stop_event: asyncio.Event) -> None:
-        """Poll for new worktrees and lock them immediately."""
+        """Poll for new worktrees and lock them immediately.
+
+        Uses two detection methods:
+        1. Filesystem scan of .claude/worktrees/ (fast, catches dirs early)
+        2. git worktree list (authoritative, provides branch info)
+        """
         main_path = str(rdir)
+        claude_wt_dir = rdir / ".claude" / "worktrees"
 
         while not stop_event.is_set():
             try:
+                # Fast filesystem scan — catches worktree dirs before git knows
+                if claude_wt_dir.exists():
+                    for entry in claude_wt_dir.iterdir():
+                        if not entry.is_dir():
+                            continue
+                        wt_path = str(entry)
+                        if wt_path in self._locked:
+                            continue
+                        # Lock via git worktree lock
+                        proc = await asyncio.create_subprocess_exec(
+                            "git", "worktree", "lock", wt_path,
+                            "--reason", "agenticore: preserved for auto-PR",
+                            cwd=rdir,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        await proc.communicate()
+                        self._locked.add(wt_path)
+                        logger.info("Locked worktree %s", wt_path)
+                        if wt_path not in self._pre_existing:
+                            # Get branch info from git
+                            branch = ""
+                            for wt in await _list_worktrees_async(rdir):
+                                if wt.get("path") == wt_path:
+                                    branch = wt.get("branch", "")
+                                    break
+                            self.new_worktrees.append({"path": wt_path, "branch": branch})
+
+                # Also check git worktree list for worktrees outside .claude/
                 for wt in await _list_worktrees_async(rdir):
                     wt_path = wt.get("path", "")
                     if wt_path == main_path or wt_path in self._locked:
                         continue
-                    # Lock it
                     proc = await asyncio.create_subprocess_exec(
                         "git", "worktree", "lock", wt_path,
                         "--reason", "agenticore: preserved for auto-PR",
@@ -363,13 +397,12 @@ class _WorktreeWatcher:
                     await proc.communicate()
                     self._locked.add(wt_path)
                     logger.info("Locked worktree %s", wt_path)
-                    # Track if this is new (created during this job)
                     if wt_path not in self._pre_existing:
                         self.new_worktrees.append(wt)
             except Exception:
                 pass
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=3.0)
+                await asyncio.wait_for(stop_event.wait(), timeout=0.3)
             except asyncio.TimeoutError:
                 pass
 
