@@ -295,12 +295,7 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
         except Exception as e:
             return update_job(job.id, status="failed", error=f"Clone failed: {e}", ended_at=_now_iso())
 
-        # Record worktree path (computed, not yet created — Claude creates it)
-        repos_root = Path(cfg.repos.root)
-        from agenticore.repos import _repo_key
-
-        worktree_path = repos_root / _repo_key(job.repo_url) / "worktrees" / job.id
-        update_job(job.id, worktree_path=str(worktree_path))
+        # worktree_path is discovered after Claude exits (Claude picks its own name)
 
     try:
         job_config_dir = materialize_profile(profile, job_id=job.id)
@@ -334,74 +329,70 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
         end_job_trace(trace, final_job)
 
 
-def _recover_worktree(job: Job, rdir: Path) -> None:
-    """Re-create worktree from surviving cc-* branch if Claude deleted it on exit.
+async def _discover_and_record_worktree(job: Job, rdir: Path) -> None:
+    """After Claude exits, discover the worktree it created and record it on the job.
 
-    Claude Code --worktree deletes the worktree directory on session exit,
-    but the branch ref survives in the main repo. This recovers it so
-    auto-PR can access the committed changes.
+    Claude creates worktrees at {repo}/.claude/worktrees/{name} with branches
+    like worktree-{name}. We find them via `git worktree list`.
     """
-    if not job.worktree_path:
-        return
-    wt_path = Path(job.worktree_path)
-    if wt_path.exists():
-        return  # worktree still intact, nothing to do
-
-    import asyncio
-    from agenticore.pr import _get_worktree_branch
-
-    # Run the async branch lookup synchronously (we're called after subprocess exit)
-    loop = asyncio.get_event_loop()
-    branch = loop.run_until_complete(_get_worktree_branch(rdir, job.id))
-    if not branch:
-        logger.warning("Worktree %s missing and no cc-* branch found — commits lost", job.worktree_path)
-        return
-
-    try:
-        import subprocess as sp
-
-        sp.run(
-            ["git", "worktree", "add", str(wt_path), branch],
-            cwd=rdir,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=True,
-        )
-        logger.info("Recovered worktree %s from branch %s", wt_path, branch)
-    except Exception as e:
-        logger.warning("Failed to recover worktree %s: %s", wt_path, e)
-
-
-async def _recover_worktree_async(job: Job, rdir: Path) -> None:
-    """Async version of worktree recovery."""
-    if not job.worktree_path:
-        return
-    wt_path = Path(job.worktree_path)
-    if wt_path.exists():
+    if not rdir or not job.repo_url:
         return
 
     from agenticore.pr import _get_worktree_branch
 
     branch = await _get_worktree_branch(rdir, job.id)
     if not branch:
-        logger.warning("Worktree %s missing and no cc-* branch found — commits lost", job.worktree_path)
+        logger.debug("No worktree branch found for job %s", job.id)
         return
 
+    # Find worktree path from git worktree list
+    wt_path = await _find_worktree_path(rdir, branch)
+    if wt_path:
+        update_job(job.id, worktree_path=wt_path)
+        logger.info("Discovered worktree at %s (branch %s)", wt_path, branch)
+        return
+
+    # Worktree deleted by Claude on exit but branch survives — recover it
+    recover_path = rdir / ".claude" / "worktrees" / branch.replace("worktree-", "", 1)
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git", "worktree", "add", str(wt_path), branch,
+            "git", "worktree", "add", str(recover_path), branch,
             cwd=rdir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await proc.communicate()
         if proc.returncode == 0:
-            logger.info("Recovered worktree %s from branch %s", wt_path, branch)
+            update_job(job.id, worktree_path=str(recover_path))
+            logger.info("Recovered worktree at %s from branch %s", recover_path, branch)
         else:
-            logger.warning("Failed to recover worktree %s: %s", wt_path, stderr.decode())
+            logger.warning("Failed to recover worktree from branch %s: %s", branch, stderr.decode())
     except Exception as e:
-        logger.warning("Failed to recover worktree %s: %s", wt_path, e)
+        logger.warning("Failed to recover worktree from branch %s: %s", branch, e)
+
+
+async def _find_worktree_path(rdir: Path, branch: str) -> Optional[str]:
+    """Find worktree path for a branch via `git worktree list`."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "worktree", "list", "--porcelain",
+            cwd=rdir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        current_path = None
+        for line in stdout.decode().splitlines():
+            if line.startswith("worktree "):
+                current_path = line[len("worktree "):]
+            elif line.startswith("branch refs/heads/") and current_path:
+                if line[len("branch refs/heads/"):] == branch:
+                    return current_path
+            elif line == "":
+                current_path = None
+        return None
+    except Exception:
+        return None
 
 
 async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
@@ -444,9 +435,9 @@ async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
         ended_at=_now_iso(),
     )
 
-    # Recover worktree if Claude deleted it on exit (branch ref survives)
+    # Discover/recover worktree after Claude exits
     if rdir:
-        await _recover_worktree_async(job, rdir)
+        await _discover_and_record_worktree(job, rdir)
 
     return await _maybe_auto_pr(job, profile, status)
 

@@ -344,10 +344,10 @@ def ensure_repo_exists(repo_url: str, private: bool = True) -> None:
 
 
 def list_all_worktrees() -> list[dict]:
-    """List all worktrees across all cached repos.
+    """List all worktrees across all cached repos via `git worktree list`.
 
     Returns a list of dicts with:
-        job_id, repo_key, branch, created_at, age_hours, size_bytes, pushed
+        path, repo_key, branch, created_at, age_hours, size_bytes, pushed
     Sorted by age descending (oldest first).
     """
     root = _repos_root()
@@ -358,15 +358,13 @@ def list_all_worktrees() -> list[dict]:
     for key_dir in root.iterdir():
         if not key_dir.is_dir():
             continue
-        wt_root = key_dir / "worktrees"
-        if not wt_root.exists():
-            continue
         rdir = key_dir / "repo"
-        for wt_dir in wt_root.iterdir():
-            if not wt_dir.is_dir():
-                continue
-            job_id = wt_dir.name
-            info = _worktree_info(wt_dir, rdir, key_dir.name, job_id)
+        if not (rdir / ".git").exists():
+            continue
+        for wt in _git_worktree_list(rdir):
+            if wt["path"] == str(rdir):
+                continue  # skip main checkout
+            info = _worktree_info(Path(wt["path"]), rdir, key_dir.name, wt.get("branch", ""))
             if info:
                 results.append(info)
 
@@ -374,34 +372,40 @@ def list_all_worktrees() -> list[dict]:
     return results
 
 
-def _worktree_info(wt_dir: Path, rdir: Path, repo_key: str, job_id: str) -> Optional[dict]:
+def _git_worktree_list(rdir: Path) -> list[dict]:
+    """Parse `git worktree list --porcelain` output."""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=rdir, capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return []
+        entries = []
+        current = {}
+        for line in result.stdout.splitlines():
+            if line.startswith("worktree "):
+                current = {"path": line[len("worktree "):]}
+            elif line.startswith("branch refs/heads/"):
+                current["branch"] = line[len("branch refs/heads/"):]
+            elif line == "" and current:
+                entries.append(current)
+                current = {}
+        if current:
+            entries.append(current)
+        return entries
+    except Exception:
+        return []
+
+
+def _worktree_info(wt_dir: Path, rdir: Path, repo_key: str, branch: str) -> Optional[dict]:
     """Gather info about a single worktree directory."""
     try:
+        if not wt_dir.exists():
+            return None
         stat = wt_dir.stat()
         mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
         age_hours = (datetime.now(timezone.utc) - mtime).total_seconds() / 3600
-
-        # Read branch from HEAD
-        branch = ""
-        head_file = wt_dir / ".git" / "HEAD" if (wt_dir / ".git" / "HEAD").exists() else wt_dir / "HEAD"
-        # For worktrees, .git is a file pointing to the main repo's worktree metadata
-        # The branch is in the main repo's worktrees/<name>/HEAD
-        wt_meta = rdir / ".git" / "worktrees" / job_id / "HEAD"
-        if wt_meta.exists():
-            head_content = wt_meta.read_text().strip()
-            if head_content.startswith("ref: refs/heads/"):
-                branch = head_content[len("ref: refs/heads/"):]
-        elif (wt_dir / ".git").exists() and (wt_dir / ".git").is_file():
-            # Worktree .git is a file — try reading HEAD from the checkout
-            try:
-                result = subprocess.run(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    cwd=wt_dir, capture_output=True, text=True, timeout=5,
-                )
-                if result.returncode == 0:
-                    branch = result.stdout.strip()
-            except Exception:
-                pass
 
         # Size
         try:
@@ -415,7 +419,7 @@ def _worktree_info(wt_dir: Path, rdir: Path, repo_key: str, job_id: str) -> Opti
 
         # Check if branch is pushed to origin
         pushed = False
-        if branch and rdir.exists():
+        if branch:
             try:
                 result = subprocess.run(
                     ["git", "branch", "-r", "--list", f"origin/{branch}"],
@@ -426,7 +430,7 @@ def _worktree_info(wt_dir: Path, rdir: Path, repo_key: str, job_id: str) -> Opti
                 pass
 
         return {
-            "job_id": job_id,
+            "path": str(wt_dir),
             "repo_key": repo_key,
             "branch": branch,
             "created_at": mtime.isoformat(),
@@ -439,30 +443,29 @@ def _worktree_info(wt_dir: Path, rdir: Path, repo_key: str, job_id: str) -> Opti
         return None
 
 
-def remove_worktrees(job_ids: list[str]) -> list[dict]:
-    """Remove specific worktrees by job ID.
+def remove_worktrees(worktree_paths: list[str]) -> list[dict]:
+    """Remove specific worktrees by path.
 
-    Returns a list of {job_id, success, error} dicts.
+    Returns a list of {path, success, error} dicts.
     """
     root = _repos_root()
     results = []
-    for job_id in job_ids:
+    for wt_path in worktree_paths:
+        wt_dir = Path(wt_path)
         removed = False
         error = None
-        # Find the worktree across all repo keys
+        # Find which repo this worktree belongs to
         for key_dir in root.iterdir():
             if not key_dir.is_dir():
                 continue
-            wt_dir = key_dir / "worktrees" / job_id
-            if not wt_dir.exists():
-                continue
             rdir = key_dir / "repo"
+            if not str(wt_dir).startswith(str(key_dir)):
+                continue
             try:
                 subprocess.run(
                     ["git", "worktree", "remove", "--force", str(wt_dir)],
                     cwd=rdir, capture_output=True, text=True, timeout=30,
                 )
-                # If git worktree remove didn't clean up, force delete
                 if wt_dir.exists():
                     import shutil
                     shutil.rmtree(wt_dir)
@@ -472,5 +475,5 @@ def remove_worktrees(job_ids: list[str]) -> list[dict]:
             break
         if not removed and error is None:
             error = "Worktree not found"
-        results.append({"job_id": job_id, "success": removed, "error": error})
+        results.append({"path": wt_path, "success": removed, "error": error})
     return results

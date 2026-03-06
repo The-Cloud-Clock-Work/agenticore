@@ -547,15 +547,15 @@ async def list_worktrees() -> str:
 
 @mcp.tool()
 async def cleanup_worktrees(
-    job_ids: str = "",
+    paths: str = "",
     max_age_hours: int = 0,
 ) -> str:
-    """Remove worktrees by job ID or age threshold. Never called automatically.
+    """Remove worktrees by path or age threshold. Never called automatically.
 
-    At least one of job_ids or max_age_hours must be provided.
+    At least one of paths or max_age_hours must be provided.
 
     Args:
-        job_ids: Comma-separated list of job IDs to remove
+        paths: Comma-separated list of worktree paths to remove (from list_worktrees)
         max_age_hours: Remove all worktrees older than N hours (0 = disabled)
 
     Returns:
@@ -564,21 +564,21 @@ async def cleanup_worktrees(
     try:
         from agenticore.repos import list_all_worktrees, remove_worktrees
 
-        ids_to_remove = []
+        paths_to_remove = []
 
-        if job_ids:
-            ids_to_remove.extend([j.strip() for j in job_ids.split(",") if j.strip()])
+        if paths:
+            paths_to_remove.extend([p.strip() for p in paths.split(",") if p.strip()])
 
         if max_age_hours > 0:
             all_wt = list_all_worktrees()
             for wt in all_wt:
-                if wt["age_hours"] >= max_age_hours and wt["job_id"] not in ids_to_remove:
-                    ids_to_remove.append(wt["job_id"])
+                if wt["age_hours"] >= max_age_hours and wt["path"] not in paths_to_remove:
+                    paths_to_remove.append(wt["path"])
 
-        if not ids_to_remove:
-            return json.dumps({"success": False, "error": "No worktrees to remove — provide job_ids or max_age_hours"})
+        if not paths_to_remove:
+            return json.dumps({"success": False, "error": "No worktrees to remove — provide paths or max_age_hours"})
 
-        results = remove_worktrees(ids_to_remove)
+        results = remove_worktrees(paths_to_remove)
         return json.dumps({"success": True, "removed": len([r for r in results if r["success"]]), "results": results})
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
