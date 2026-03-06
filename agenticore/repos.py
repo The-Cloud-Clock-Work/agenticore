@@ -7,8 +7,8 @@ Layout::
         ├── .lock
         └── repo/
 
-Clone once, ``git fetch --all`` on re-use. Claude ``--worktree`` handles
-worktree creation inside the repo.
+Clone once, ``git fetch --all`` on re-use. Agenticore creates bespoke
+worktrees via ``create_worktree()`` before launching Claude.
 """
 
 import fcntl
@@ -148,7 +148,7 @@ def _with_redis_lock(lock_key: str, fn, timeout: int = 300):
 def ensure_clone(repo_url: str) -> Path:
     """Clone or fetch a repository, flock-protected.
 
-    Returns the path to the repo directory (ready for ``claude --worktree``).
+    Returns the path to the repo directory.
     """
     root = _repos_root()
     key = _repo_key(repo_url)
@@ -190,6 +190,26 @@ def ensure_clone(repo_url: str) -> Path:
                 fcntl.flock(lockfile, fcntl.LOCK_UN)
 
     return rdir
+
+
+def create_worktree(repo_dir: Path, job_id: str, base_ref: str = "") -> tuple[Path, str]:
+    """Create a locked git worktree for a job. Returns (worktree_path, branch_name)."""
+    branch = f"agenticore-{job_id[:8]}"
+    wt_dir = repo_dir / ".claude" / "worktrees" / job_id
+
+    if not base_ref:
+        base_ref = get_default_branch(repo_dir)
+
+    _run_git(
+        ["git", "worktree", "add", str(wt_dir), "-b", branch, f"origin/{base_ref}"],
+        cwd=repo_dir,
+    )
+    _run_git(
+        ["git", "worktree", "lock", str(wt_dir),
+         "--reason", f"agenticore: job {job_id}"],
+        cwd=repo_dir,
+    )
+    return wt_dir, branch
 
 
 def _run_git(cmd: list, cwd: Path | None = None, extra_env: dict | None = None) -> subprocess.CompletedProcess:

@@ -416,9 +416,6 @@ def _build_core_cli_args(c: ProfileClaude) -> List[str]:
     """Build core CLI flags from ProfileClaude settings."""
     args: List[str] = []
 
-    if c.worktree:
-        args.append("--worktree")
-
     args.extend(["--model", c.model])
     args.extend(["--max-turns", str(c.max_turns)])
     args.extend(["--output-format", c.output_format])

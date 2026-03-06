@@ -52,7 +52,8 @@ class TestBuildCliArgs:
             claude=ProfileClaude(model="sonnet", max_turns=80, worktree=True),
         )
         args = build_cli_args(profile, "fix the bug")
-        assert "--worktree" in args
+        # --worktree is never passed to CLI — agenticore manages worktrees
+        assert "--worktree" not in args
         assert "--model" in args
         assert args[args.index("--model") + 1] == "sonnet"
         assert "--max-turns" in args

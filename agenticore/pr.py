@@ -43,9 +43,11 @@ async def create_auto_pr(job: Job) -> Optional[str]:
     if not rdir.exists():
         return None
 
-    # Find the worktree branch created by Claude
-    # Claude --worktree creates branches like cc-worktree-{hash}
-    branch = await _get_worktree_branch(rdir, job.id)
+    # Deterministic branch name from bespoke worktree
+    branch = f"agenticore-{job.id[:8]}"
+    if not await _branch_exists(rdir, branch):
+        # Fallback for legacy jobs where Claude picked its own branch name
+        branch = await _get_worktree_branch(rdir, job.id)
     if not branch:
         return None
 
@@ -104,6 +106,21 @@ async def _commit_untracked(worktree_path: Path, job_id: str) -> None:
         # rc=1 with "nothing to commit" is normal when Claude committed already
     except Exception as e:
         print(f"_commit_untracked failed for {worktree_path}: {e}", file=sys.stderr)
+
+
+async def _branch_exists(rdir, branch: str) -> bool:
+    """Check if a local branch exists."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "--verify", branch,
+            cwd=rdir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+        return proc.returncode == 0
+    except Exception:
+        return False
 
 
 async def _get_worktree_branch(rdir, _job_id: str) -> Optional[str]:

@@ -1,8 +1,8 @@
 """Claude Code subprocess runner.
 
-Spawns ``claude --worktree -p "task"`` with profile-derived flags and
-OTEL environment variables. Manages the full job lifecycle: queued → running
-→ succeeded/failed.
+Spawns ``claude -p "task"`` in a bespoke worktree with profile-derived flags
+and OTEL environment variables. Manages the full job lifecycle: queued →
+running → succeeded/failed.
 """
 
 import asyncio
@@ -24,19 +24,6 @@ from agenticore.repos import ensure_clone, ensure_repo_exists, get_default_branc
 from agenticore.telemetry import end_job_trace, ship_transcript, start_job_trace
 
 logger = logging.getLogger(__name__)
-
-_WATCHER_LOG = "/tmp/watcher.log"
-
-def _wlog(msg: str) -> None:
-    """Debug log for worktree watcher — writes to file + stderr."""
-    line = f"[watcher] {msg}\n"
-    try:
-        with open(_WATCHER_LOG, "a") as f:
-            f.write(line)
-    except Exception:
-        pass
-    sys.stderr.write(line)
-    sys.stderr.flush()
 
 
 # Set to prevent GC of fire-and-forget background tasks
@@ -164,6 +151,8 @@ def _prepare_job_repo(job: Job, create_repo: bool = False, private: bool = True)
 
 def _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir: Optional[Path] = None):
     """Build the CLI command and environment for a job."""
+    import copy
+
     variables = {
         "TASK": job.task,
         "REPO_URL": job.repo_url or "",
@@ -171,12 +160,10 @@ def _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir: Optional[Pa
         "JOB_ID": job.id,
         "PROFILE": job.profile,
     }
-    if not job.repo_url and profile.claude.worktree:
-        import copy
-
-        profile = copy.deepcopy(profile)
-        profile.claude.worktree = False
-    cli_args = build_cli_args(profile, job.task, variables)
+    # Never pass --worktree to Claude — agenticore manages worktrees itself
+    cli_profile = copy.deepcopy(profile)
+    cli_profile.claude.worktree = False
+    cli_args = build_cli_args(cli_profile, job.task, variables)
     cmd = [cfg.claude.binary] + cli_args
     if job.session_id:
         cmd.extend(["--resume", job.session_id])
@@ -309,7 +296,19 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
         except Exception as e:
             return update_job(job.id, status="failed", error=f"Clone failed: {e}", ended_at=_now_iso())
 
-        # worktree_path is discovered after Claude exits (Claude picks its own name)
+        # Create bespoke worktree if profile wants one
+        if profile.claude.worktree:
+            try:
+                from agenticore.repos import create_worktree
+
+                worktree_path, branch = create_worktree(cwd, job.id, base_ref)
+                update_job(job.id, worktree_path=str(worktree_path))
+                cwd = worktree_path  # Claude runs in the worktree dir
+            except Exception as e:
+                return update_job(
+                    job.id, status="failed",
+                    error=f"Worktree creation failed: {e}", ended_at=_now_iso(),
+                )
 
     try:
         job_config_dir = materialize_profile(profile, job_id=job.id)
@@ -343,198 +342,47 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
         end_job_trace(trace, final_job)
 
 
-class _WorktreeWatcher:
-    """Tracks worktrees created during a job and locks them."""
-
-    def __init__(self):
-        self.new_worktrees: list[dict] = []  # worktrees created during this job
-        self._pre_existing: set[str] = set()
-        self._locked: set[str] = set()
-
-    async def snapshot_existing(self, rdir: Path) -> None:
-        """Record worktrees that exist before the job starts."""
-        for wt in await _list_worktrees_async(rdir):
-            self._pre_existing.add(wt.get("path", ""))
-
-    async def watch(self, rdir: Path, stop_event: asyncio.Event) -> None:
-        """Poll for new worktrees and lock them immediately.
-
-        Uses two detection methods:
-        1. Filesystem scan of .claude/worktrees/ (fast, catches dirs early)
-        2. git worktree list (authoritative, provides branch info)
-        """
-        main_path = str(rdir)
-        claude_wt_dir = rdir / ".claude" / "worktrees"
-
-        _wlog(f"started — watching {claude_wt_dir}")
-
-        while not stop_event.is_set():
-            try:
-                # Fast filesystem scan — catches worktree dirs before git knows
-                if claude_wt_dir.exists():
-                    for entry in claude_wt_dir.iterdir():
-                        if not entry.is_dir():
-                            continue
-                        wt_path = str(entry)
-                        if wt_path in self._locked:
-                            continue
-                        _wlog(f"detected worktree dir: {wt_path}")
-                        # Lock via git worktree lock
-                        proc = await asyncio.create_subprocess_exec(
-                            "git", "worktree", "lock", wt_path,
-                            "--reason", "agenticore: preserved for auto-PR",
-                            cwd=rdir,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                        )
-                        stdout_lock, stderr_lock = await proc.communicate()
-                        if proc.returncode == 0:
-                            _wlog(f"LOCKED {wt_path}")
-                        else:
-                            _wlog(f"lock failed rc={proc.returncode}: {stderr_lock.decode()}")
-                        self._locked.add(wt_path)
-                        logger.info("Locked worktree %s", wt_path)
-                        if wt_path not in self._pre_existing:
-                            # Get branch info from git
-                            branch = ""
-                            for wt in await _list_worktrees_async(rdir):
-                                if wt.get("path") == wt_path:
-                                    branch = wt.get("branch", "")
-                                    break
-                            self.new_worktrees.append({"path": wt_path, "branch": branch})
-
-                # Also check git worktree list for worktrees outside .claude/
-                for wt in await _list_worktrees_async(rdir):
-                    wt_path = wt.get("path", "")
-                    if wt_path == main_path or wt_path in self._locked:
-                        continue
-                    proc = await asyncio.create_subprocess_exec(
-                        "git", "worktree", "lock", wt_path,
-                        "--reason", "agenticore: preserved for auto-PR",
-                        cwd=rdir,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    await proc.communicate()
-                    self._locked.add(wt_path)
-                    logger.info("Locked worktree %s", wt_path)
-                    if wt_path not in self._pre_existing:
-                        self.new_worktrees.append(wt)
-            except Exception:
-                pass
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=0.3)
-            except asyncio.TimeoutError:
-                pass
-
-
-async def _list_worktrees_async(rdir: Path) -> list[dict]:
-    """Async `git worktree list --porcelain` parser."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "git", "worktree", "list", "--porcelain",
-            cwd=rdir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        entries = []
-        current: dict = {}
-        for line in stdout.decode().splitlines():
-            if line.startswith("worktree "):
-                current = {"path": line[len("worktree "):]}
-            elif line.startswith("branch refs/heads/"):
-                current["branch"] = line[len("branch refs/heads/"):]
-            elif line == "" and current:
-                entries.append(current)
-                current = {}
-        if current:
-            entries.append(current)
-        return entries
-    except Exception:
-        return []
-
-
-def _record_worktree_on_job(job: Job, watcher: _WorktreeWatcher) -> None:
-    """Record the worktree created during this job."""
-    if not watcher.new_worktrees:
-        logger.debug("No new worktree created for job %s", job.id)
-        return
-
-    # Use the last new worktree (in case multiple were created)
-    wt = watcher.new_worktrees[-1]
-    update_job(job.id, worktree_path=wt["path"])
-    logger.info("Recorded worktree %s (branch %s) on job %s", wt["path"], wt.get("branch", "?"), job.id)
-
-
 async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
     """Execute Claude subprocess and process results."""
-    # Start worktree lock watcher — locks any worktree Claude creates so it
-    # can't be deleted on session exit. Only cleanup_worktrees can remove them.
-    stop_watcher = asyncio.Event()
-    watcher_task = None
-    watcher = _WorktreeWatcher()
-    _wlog(f"rdir={rdir} type={type(rdir)}")
-    if rdir:
-        _wlog(f"starting watcher for {rdir}")
-        await watcher.snapshot_existing(rdir)
-        watcher_task = asyncio.create_task(watcher.watch(rdir, stop_watcher))
-        _wlog("watcher task created")
-    else:
-        _wlog("rdir is falsy — NOT started")
-
     try:
-        try:
-            async with asyncio.timeout(profile.claude.timeout):
-                proc, stdout, stderr = await _run_subprocess(job.id, cmd, cwd, env)
-        except asyncio.TimeoutError:
-            return update_job(
-                job.id,
-                status="failed",
-                error=f"Timeout after {profile.claude.timeout}s",
-                exit_code=-1,
-                ended_at=_now_iso(),
-            )
-        except FileNotFoundError:
-            return update_job(
-                job.id,
-                status="failed",
-                error=f"Claude binary not found: {cfg.claude.binary}",
-                ended_at=_now_iso(),
-            )
-        except Exception as e:
-            return update_job(job.id, status="failed", error=str(e), ended_at=_now_iso())
-
-        output_text = stdout.decode("utf-8", errors="replace") if stdout else ""
-        error_text = stderr.decode("utf-8", errors="replace") if stderr else ""
-
-        sid = _extract_session_id(output_text)
-        if sid:
-            update_job(job.id, session_id=sid)
-
-        status = "succeeded" if proc.returncode == 0 else "failed"
-        job = update_job(
+        async with asyncio.timeout(profile.claude.timeout):
+            proc, stdout, stderr = await _run_subprocess(job.id, cmd, cwd, env)
+    except asyncio.TimeoutError:
+        return update_job(
             job.id,
-            status=status,
-            exit_code=proc.returncode,
-            output=output_text[:50000],
-            error=error_text[:10000] if error_text else None,
+            status="failed",
+            error=f"Timeout after {profile.claude.timeout}s",
+            exit_code=-1,
             ended_at=_now_iso(),
         )
+    except FileNotFoundError:
+        return update_job(
+            job.id,
+            status="failed",
+            error=f"Claude binary not found: {cfg.claude.binary}",
+            ended_at=_now_iso(),
+        )
+    except Exception as e:
+        return update_job(job.id, status="failed", error=str(e), ended_at=_now_iso())
 
-        # Record worktree path on job (worktree is locked, guaranteed to exist)
-        _record_worktree_on_job(job, watcher)
+    output_text = stdout.decode("utf-8", errors="replace") if stdout else ""
+    error_text = stderr.decode("utf-8", errors="replace") if stderr else ""
 
-        return await _maybe_auto_pr(job, profile, status)
-    finally:
-        # Stop the worktree lock watcher
-        stop_watcher.set()
-        if watcher_task:
-            watcher_task.cancel()
-            try:
-                await watcher_task
-            except asyncio.CancelledError:
-                pass
+    sid = _extract_session_id(output_text)
+    if sid:
+        update_job(job.id, session_id=sid)
+
+    status = "succeeded" if proc.returncode == 0 else "failed"
+    job = update_job(
+        job.id,
+        status=status,
+        exit_code=proc.returncode,
+        output=output_text[:50000],
+        error=error_text[:10000] if error_text else None,
+        ended_at=_now_iso(),
+    )
+
+    return await _maybe_auto_pr(job, profile, status)
 
 
 _PLAN_PROMPT_TEMPLATE = (
