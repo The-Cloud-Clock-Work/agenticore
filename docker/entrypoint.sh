@@ -6,8 +6,17 @@ if [ -d "/opt/agentihooks-src" ]; then
   # Local dev: ~/dev/agentihooks mounted at /opt/agentihooks-src
   uv pip install --quiet -e /opt/agentihooks-src
 elif [ -n "${AGENTICORE_AGENTIHOOKS_URL:-}" ]; then
-  # K8s / CI: install from git URL at runtime
-  uv pip install --quiet "agentihooks @ git+${AGENTICORE_AGENTIHOOKS_URL}"
+  # K8s / CI: clone to shared FS, then editable install.
+  # Editable install means hot-reload (git fetch in background) updates the
+  # live code and profile files without needing a re-install or pod restart.
+  _hooks_dest="${AGENTICORE_SHARED_FS_ROOT:-$HOME/.agenticore}/agentihooks"
+  if [ ! -d "$_hooks_dest/.git" ]; then
+    git clone --quiet "$AGENTICORE_AGENTIHOOKS_URL" "$_hooks_dest"
+  else
+    git -C "$_hooks_dest" fetch --all --prune --quiet
+    git -C "$_hooks_dest" reset --hard origin/HEAD --quiet
+  fi
+  uv pip install --quiet -e "$_hooks_dest"
 fi
 # else: use package already installed in /opt/venv at build time
 

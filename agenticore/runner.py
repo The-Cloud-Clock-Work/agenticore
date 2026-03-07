@@ -52,6 +52,26 @@ def _build_otel_env() -> dict:
     }
 
 
+def _log_job_result(mgmt, job) -> None:
+    """Write job completion to management log."""
+    try:
+        duration = 0
+        if job.started_at and job.ended_at:
+            from datetime import datetime
+            fmt = "%Y-%m-%dT%H:%M:%S"
+            start = datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))
+            end = datetime.fromisoformat(job.ended_at.replace("Z", "+00:00"))
+            duration = int((end - start).total_seconds())
+        if job.status == "succeeded":
+            mgmt.info("job-done id=%s status=succeeded duration=%ds pr=%s", job.id, duration, job.pr_url or "-")
+        else:
+            err = (job.error or "")[:200]
+            mgmt.warning("job-fail id=%s status=%s duration=%ds exit=%s error=%s",
+                         job.id, job.status, duration, job.exit_code, err)
+    except Exception:
+        pass  # never let mgmt logging break job flow
+
+
 def _fetch_from_auth_broker(service: str, consumer_id: str = "agenticore") -> Optional[str]:
     """Fetch a credential string from Auth Broker. Returns None if unavailable."""
     from agenticore.auth_client import AuthClient  # lazy import
@@ -75,6 +95,8 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
     import logging
 
     _log = logging.getLogger(__name__)
+    from agenticore.mgmt_log import get_mgmt_logger
+    mgmt = get_mgmt_logger()
 
     env = os.environ.copy()
     env.update(_build_otel_env())
@@ -93,6 +115,7 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
             # not through the LiteLLM proxy
             env.pop("ANTHROPIC_BASE_URL", None)
             _log.debug("auth: using Auth Broker token (direct Anthropic)")
+            mgmt.info("auth broker=OK provider=anthropic")
         else:
             # Broker configured but unavailable or no token — fall back to
             # static ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL from env (LiteLLM)
@@ -100,6 +123,10 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
                 "Auth Broker unreachable or returned no Anthropic token — "
                 "falling back to static ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL"
             )
+            mgmt.warning("auth broker=FAIL fallback=static")
+    else:
+        base_url = env.get("ANTHROPIC_BASE_URL", "")
+        mgmt.info("auth static provider=%s", "litellm" if base_url else "anthropic")
 
     # GitHub token — delegate to the centralized resolver
     gh_token = resolve_github_token()
@@ -286,6 +313,10 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
     update_job(job.id, status="running", started_at=_now_iso(), pod_name=pod_name)
     trace = start_job_trace(job)
 
+    from agenticore.mgmt_log import get_mgmt_logger
+    mgmt = get_mgmt_logger()
+    mgmt.info("job-start id=%s profile=%s repo=%s pod=%s", job.id, job.profile, job.repo_url or "-", pod_name)
+
     cwd = None
     base_ref = job.base_ref
 
@@ -342,6 +373,7 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
         final_job = get_job(job.id)
         ship_transcript(trace, getattr(final_job, "session_id", None), cwd=str(cwd) if cwd else None)
         end_job_trace(trace, final_job)
+        _log_job_result(mgmt, final_job)
 
 
 async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
@@ -441,6 +473,10 @@ async def _run_plan_job(job: Job, plan) -> Job:
     pod_name = cfg.repos.pod_name or socket.gethostname()
     update_job(job.id, status="running", started_at=_now_iso(), pod_name=pod_name)
 
+    from agenticore.mgmt_log import get_mgmt_logger
+    mgmt = get_mgmt_logger()
+    mgmt.info("plan-start id=%s plan=%s repo=%s pod=%s", job.id, plan.id, job.repo_url or "-", pod_name)
+
     try:
         cwd, plan_config_dir = _prepare_plan_env(job)
     except Exception as e:
@@ -479,8 +515,10 @@ async def _run_plan_job(job: Job, plan) -> Job:
 
     if status == "succeeded" and output_text.strip():
         update_plan(plan.id, content=output_text.strip(), status="ready")
+        mgmt.info("plan-done id=%s plan=%s status=ready", job.id, plan.id)
     else:
         update_plan(plan.id, status="failed")
+        mgmt.warning("plan-fail id=%s plan=%s exit=%s", job.id, plan.id, proc.returncode)
 
     return job
 

@@ -23,9 +23,21 @@ from typing import Optional
 
 from agenticore.config import get_config
 from agenticore.git_credentials import git_askpass_env
+from agenticore.mgmt_log import get_mgmt_logger
 from agenticore.repos import _run_git, _with_redis_lock, resolve_github_token
 
 logger = logging.getLogger(__name__)
+
+
+def _get_head_ref(dest: Path) -> str:
+    """Return the short HEAD commit ref for a git repo, or '?' on failure."""
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(dest), "rev-parse", "--short", "HEAD"],
+            text=True, timeout=5,
+        ).strip()
+    except Exception:
+        return "?"
 
 
 def _install_dir() -> Path:
@@ -109,18 +121,24 @@ def start_sync_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
     Returns the started Thread (daemon, so it dies with the process).
     """
 
+    mgmt = get_mgmt_logger()
+
     def _watch():
         while True:
             time.sleep(interval)
             try:
                 _clone_or_fetch(url, dest)
+                ref = _get_head_ref(dest)
                 logger.info("agentihooks hot-reload complete (%s)", dest)
+                mgmt.info("hot-reload agentihooks OK ref=%s", ref)
             except Exception as exc:
                 logger.warning("agentihooks hot-reload failed: %s", exc)
+                mgmt.warning("hot-reload agentihooks FAIL: %s", exc)
 
     t = threading.Thread(target=_watch, name="agentihooks-watcher", daemon=True)
     t.start()
     logger.info("agentihooks watcher started (interval=%ds, dest=%s)", interval, dest)
+    mgmt.info("watcher agentihooks started interval=%ds dest=%s", interval, dest)
     return t
 
 
@@ -169,18 +187,24 @@ def start_mcp_lib_watcher(url: str, dest: Path, interval: int) -> threading.Thre
     Returns the started Thread (daemon, so it dies with the process).
     """
 
+    mgmt = get_mgmt_logger()
+
     def _watch():
         while True:
             time.sleep(interval)
             try:
                 _clone_or_fetch(url, dest)
+                ref = _get_head_ref(dest)
                 logger.info("mcp-lib hot-reload complete (%s)", dest)
+                mgmt.info("hot-reload mcp-lib OK ref=%s", ref)
             except Exception as exc:
                 logger.warning("mcp-lib hot-reload failed: %s", exc)
+                mgmt.warning("hot-reload mcp-lib FAIL: %s", exc)
 
     t = threading.Thread(target=_watch, name="mcp-lib-watcher", daemon=True)
     t.start()
     logger.info("mcp-lib watcher started (interval=%ds, dest=%s)", interval, dest)
+    mgmt.info("watcher mcp-lib started interval=%ds dest=%s", interval, dest)
     return t
 
 
