@@ -348,16 +348,16 @@ def materialize_profile(
     job_id: str = "",
     all_profiles: Optional[Dict[str, Profile]] = None,
 ) -> Optional[Path]:
-    """Return the CLAUDE_CONFIG_DIR path for the given profile.
+    """Return the profile directory path for tracking and MCP merging.
+
+    Claude Code uses ``~/.claude/`` by default — ``CLAUDE_CONFIG_DIR`` is NOT
+    set.  Agentihooks installs profiles into ``~/.claude/`` at container
+    startup via ``agentihooks global``.
 
     Simple profiles (no ``extends``) are returned as-is — no I/O at all.
-    Claude Code reads ``CLAUDE_CONFIG_DIR`` directly, so pointing it at the
-    profile directory is sufficient.
-
-    Profiles with an ``extends`` chain must be merged; the merged output is
-    written to an isolated per-job temp directory (``/tmp/agenticore-jobs/{id}``
-    in local/Docker mode, or ``{AGENTICORE_SHARED_FS_ROOT}/jobs/{id}`` in
-    Kubernetes mode).  The repo working directory is never touched.
+    Profiles with an ``extends`` chain are merged into a per-job temp
+    directory for ``*.mcp.json`` content; the runner injects this into the
+    job CWD, not into ``CLAUDE_CONFIG_DIR``.
 
     Args:
         profile: The resolved profile.
@@ -367,7 +367,7 @@ def materialize_profile(
                       If None, loads from defaults/user dirs.
 
     Returns:
-        Path to use as CLAUDE_CONFIG_DIR, or None if profile has no files.
+        Path to the profile directory (for audit/logging), or None.
     """
     if profile._legacy or profile.path is None:
         return None

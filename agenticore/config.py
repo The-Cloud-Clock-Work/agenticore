@@ -46,8 +46,9 @@ class ClaudeConfig:
     binary: str = "claude"
     timeout: int = 3600
     default_profile: str = "coding"
-    config_dir: str = ""
+    config_dir: str = ""  # DEPRECATED — kept for backward compat warning only
     default_mcp_file: str = ""  # AGENTICORE_DEFAULT_MCP_FILE — injected into every job
+    claude_home_dir: str = ""  # CLAUDE_CODE_HOME_DIR — home dir root (e.g. /shared)
 
 
 @dataclass
@@ -227,12 +228,22 @@ def load_config(config_path: Optional[str] = None) -> Config:
     )
 
     # Claude — env overrides
+    config_dir = _env("AGENTICORE_CLAUDE_CONFIG_DIR", claude_raw.get("config_dir", ""))
+    if config_dir:
+        _log.warning(
+            "AGENTICORE_CLAUDE_CONFIG_DIR is deprecated — Claude Code uses ~/.claude/ by default. "
+            "Set CLAUDE_CODE_HOME_DIR instead for discovery."
+        )
+    claude_home_dir = _env("CLAUDE_CODE_HOME_DIR", claude_raw.get("claude_home_dir", ""))
+    if not claude_home_dir:
+        claude_home_dir = str(Path.home())
     claude = ClaudeConfig(
         binary=_env("AGENTICORE_CLAUDE_BINARY", claude_raw.get("binary", "claude")),
         timeout=_env_int("AGENTICORE_CLAUDE_TIMEOUT", str(claude_raw.get("timeout", 3600))),
         default_profile=_env("AGENTICORE_DEFAULT_PROFILE", claude_raw.get("default_profile", "coding")),
-        config_dir=_env("AGENTICORE_CLAUDE_CONFIG_DIR", claude_raw.get("config_dir", "")),
+        config_dir=config_dir,
         default_mcp_file=_env("AGENTICORE_DEFAULT_MCP_FILE", claude_raw.get("default_mcp_file", "")),
+        claude_home_dir=claude_home_dir,
     )
 
     # Server — env overrides

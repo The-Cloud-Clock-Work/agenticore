@@ -11,6 +11,7 @@ import os
 import shutil
 import socket
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -79,8 +80,9 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
     env.update(_build_otel_env())
 
     cfg = get_config()
-    if cfg.claude.config_dir:
-        env["CLAUDE_CONFIG_DIR"] = cfg.claude.config_dir
+    # CLAUDE_CONFIG_DIR intentionally NOT set — Claude Code uses ~/.claude/ by default.
+    # Agentihooks installs profiles into ~/.claude/ at container startup.
+    env["CLAUDE_CODE_HOME_DIR"] = cfg.claude.claude_home_dir
 
     if cfg.auth_broker.url:
         # Attempt Auth Broker — returns Claude Max subscription token
@@ -149,7 +151,7 @@ def _prepare_job_repo(job: Job, create_repo: bool = False, private: bool = True)
     return cwd, base_ref
 
 
-def _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir: Optional[Path] = None):
+def _build_job_cmd(cfg, profile, job, base_ref, cwd):
     """Build the CLI command and environment for a job."""
     import copy
 
@@ -168,8 +170,6 @@ def _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir: Optional[Pa
     if job.session_id:
         cmd.extend(["--resume", job.session_id])
     env = _build_env(cwd)
-    if job_config_dir:
-        env["CLAUDE_CONFIG_DIR"] = str(job_config_dir)
     return cmd, env
 
 
@@ -288,7 +288,6 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
 
     cwd = None
     base_ref = job.base_ref
-    job_config_dir: Optional[Path] = None
 
     if job.repo_url:
         try:
@@ -311,9 +310,9 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
                 )
 
     try:
-        job_config_dir = materialize_profile(profile, job_id=job.id)
-        if job_config_dir:
-            update_job(job.id, job_config_dir=str(job_config_dir))
+        profile_dir = materialize_profile(profile, job_id=job.id)
+        if profile_dir:
+            update_job(job.id, job_config_dir=str(profile_dir))  # informational
     except Exception as e:
         return update_job(
             job.id,
@@ -322,16 +321,19 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
             ended_at=_now_iso(),
         )
 
-    # For no-repo jobs, run Claude in the job_config_dir so .mcp.json is in the CWD
-    if not job.repo_url and job_config_dir:
-        cwd = job_config_dir
+    # For no-repo jobs, create a temp CWD for .mcp.json injection
+    if not job.repo_url:
+        shared = cfg.repos.shared_fs_root or tempfile.gettempdir()
+        no_repo_cwd = Path(shared) / "jobs" / job.id / "cwd"
+        no_repo_cwd.mkdir(parents=True, exist_ok=True)
+        cwd = no_repo_cwd
 
-    mcp_cwd = cwd or job_config_dir
+    mcp_cwd = cwd
     failed = _inject_mcp_configs(job, cfg, mcp_cwd)
     if failed:
         return failed
 
-    cmd, env = _build_job_cmd(cfg, profile, job, base_ref, cwd, job_config_dir=job_config_dir)
+    cmd, env = _build_job_cmd(cfg, profile, job, base_ref, cwd)
 
     try:
         job = await _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=cwd)
@@ -446,8 +448,6 @@ async def _run_plan_job(job: Job, plan) -> Job:
         return update_job(job.id, status="failed", error=f"Plan setup failed: {e}", ended_at=_now_iso())
 
     cmd, env = _build_plan_cmd(cfg, job)
-    if plan_config_dir:
-        env["CLAUDE_CONFIG_DIR"] = str(plan_config_dir)
 
     try:
         async with asyncio.timeout(900):

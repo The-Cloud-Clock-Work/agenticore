@@ -25,4 +25,6 @@ if [ -f "/opt/agenticore/bashrc" ]; then
   { echo "# agenticore-shell"; cat /opt/agenticore/bashrc; } >> "$HOME/.bashrc" 2>/dev/null || true
 fi
 
+export CLAUDE_CODE_HOME_DIR="${CLAUDE_CODE_HOME_DIR:-$HOME/.claude}"
+
 exec "$@"

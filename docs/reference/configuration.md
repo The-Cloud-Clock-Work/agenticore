@@ -86,7 +86,8 @@ agentihooks_sync_interval: 300
 | `AGENTICORE_CLAUDE_BINARY` | `claude.binary` | `claude` | Path to Claude CLI binary |
 | `AGENTICORE_CLAUDE_TIMEOUT` | `claude.timeout` | `3600` | Max seconds per job |
 | `AGENTICORE_DEFAULT_PROFILE` | `claude.default_profile` | `code` | Default execution profile |
-| `AGENTICORE_CLAUDE_CONFIG_DIR` | `claude.config_dir` | (none) | Static `CLAUDE_CONFIG_DIR` (overridden per-job in K8s mode) |
+| `AGENTICORE_CLAUDE_CONFIG_DIR` | `claude.config_dir` | (none) | **DEPRECATED** — Claude Code uses `~/.claude/` by default |
+| `CLAUDE_CODE_HOME_DIR` | `claude.claude_home_dir` | `$HOME` | Safeguard: home dir root — Claude uses `$CLAUDE_CODE_HOME_DIR/.claude/` |
 
 ### Repos
 
