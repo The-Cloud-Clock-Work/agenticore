@@ -79,3 +79,19 @@ jobs:
           tags: ${{ steps.tags.outputs.auth_broker }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: [self-hosted, anton]
+    steps:
+      - name: Rollout restart agenticore
+        env:
+          KUBECONFIG_B64: ${{ secrets.K3S_KUBECONFIG }}
+        run: |
+          curl -sLO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          echo "$KUBECONFIG_B64" | base64 -d > /tmp/kc
+          trap 'rm -f /tmp/kc' EXIT
+          ./kubectl --kubeconfig=/tmp/kc rollout restart statefulset/agenticore -n agenticore-dev
+          ./kubectl --kubeconfig=/tmp/kc rollout status statefulset/agenticore -n agenticore-dev --timeout=180s
+          rm -f kubectl
