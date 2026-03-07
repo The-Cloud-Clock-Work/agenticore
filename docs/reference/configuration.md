@@ -159,6 +159,6 @@ agentihooks_sync_interval: 300
 | Path | Purpose |
 |------|---------|
 | `/shared/repos/{hash}/repo/` | Cloned repos on shared volume |
-| `/shared/jobs/{job-id}/` | Per-job `CLAUDE_CONFIG_DIR` (profile files for one job) |
+| `/shared/jobs/{job-id}/` | Per-job merge dir (extends profiles) / no-repo CWD |
 | `/shared/job-state/{id}.json` | Job data files (`AGENTICORE_JOBS_DIR=/shared/job-state`) |
 | `/shared/agentihooks/` | Cloned agentihooks repo (when `AGENTICORE_AGENTIHOOKS_URL` set) |

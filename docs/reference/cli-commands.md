@@ -173,7 +173,7 @@ Creates the directory layout and copies bundled profiles to the shared volume:
 /shared/
 ├── profiles/    ← bundled profiles copied here
 ├── repos/       ← git clone root
-├── jobs/        ← per-job CLAUDE_CONFIG_DIR directories
+├── jobs/        ← per-job merge directories (extends profiles, no-repo CWDs)
 └── job-state/   ← job JSON files (AGENTICORE_JOBS_DIR)
 ```
 

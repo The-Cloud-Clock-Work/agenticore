@@ -69,7 +69,7 @@ completion and optional PR creation.
 | `pid` | int/null | OS process ID of Claude subprocess |
 | `pod_name` | string | Pod that ran this job (Kubernetes) |
 | `worktree_path` | string | Absolute path to worktree on shared FS |
-| `job_config_dir` | string | `CLAUDE_CONFIG_DIR` used for this job |
+| `job_config_dir` | string | Profile directory used for this job (informational) |
 
 `pod_name` is recorded from `AGENTICORE_POD_NAME` (or `hostname` as fallback) at
 job start. `worktree_path` and `job_config_dir` are populated in Kubernetes mode.
@@ -94,16 +94,16 @@ The `run_job()` function in `runner.py` executes the following steps:
     - Locked immediately with reason "agenticore: job {job_id}"
     - Record worktree_path on job
     - Set cwd = worktree_path (Claude runs here)
- 7. Materialize profile's .claude/ package
-    - Local/Docker: copy into repo cwd
-    - Kubernetes:   copy into /shared/jobs/{job-id}/ (CLAUDE_CONFIG_DIR)
-    - Record job_config_dir on job
+ 7. Materialize profile (resolve path for tracking)
+    - Simple profiles: return profile directory as-is (zero I/O)
+    - Extends profiles: merge into /shared/jobs/{job-id}/ for .mcp.json
+    - Record job_config_dir on job (informational)
  8. Inject MCP configs (default + job.file_path) into cwd/.mcp.json
  9. Build template variables (TASK, REPO_URL, BASE_REF, JOB_ID, PROFILE)
 10. Build CLI args from profile (build_cli_args) — --worktree is NEVER passed
 11. Construct command: [claude_binary] + cli_args
 12. Append --resume session_id (if session_id provided)
-13. Build environment (inherit + OTEL vars + CLAUDE_CONFIG_DIR + GITHUB_TOKEN)
+13. Build environment (inherit + OTEL vars + CLAUDE_CODE_HOME_DIR + GITHUB_TOKEN)
 14. Spawn subprocess (asyncio.create_subprocess_exec) with cwd = worktree
 15. Store PID in job record
 16. Wait for completion with timeout (profile.claude.timeout)

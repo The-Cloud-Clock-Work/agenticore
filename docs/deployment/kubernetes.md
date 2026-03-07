@@ -42,7 +42,7 @@ Internet / Claude.ai ──► LoadBalancer :8200
 /shared/
 ├── repos/{hash}/repo/          ← git clone cache (shared across pods)
 ├── agentihooks/                ← cloned agentihooks repo (AGENTICORE_AGENTIHOOKS_URL)
-├── jobs/{job-id}/              ← per-job CLAUDE_CONFIG_DIR (extends profiles only)
+├── jobs/{job-id}/              ← per-job merge dir (extends profiles) / no-repo CWD
 │   ├── .claude/
 │   │   ├── settings.json
 │   │   └── CLAUDE.md
@@ -247,7 +247,7 @@ continue using Docker Compose.
 |---------|---------------|------------|
 | Shared FS | No (local volume) | RWX PVC |
 | Clone locking | `fcntl` flock | Redis `SET NX` |
-| Profile materialization (simple) | `CLAUDE_CONFIG_DIR` → profile dir in image | Same |
+| Profile materialization (simple) | `~/.claude/` (installed by agentihooks at startup) | Same |
 | Profile materialization (extends) | Merged to `/tmp/agenticore-jobs/{id}/` | Merged to `/shared/jobs/{id}/` |
 | Repo working dir | Never touched | Never touched |
 | Pod identity | hostname | StatefulSet name (Downward API) |

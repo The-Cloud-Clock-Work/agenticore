@@ -224,7 +224,7 @@ The full Job object returned by all endpoints:
 | `pid` | int/null | OS process ID |
 | `pod_name` | string | Pod that ran this job (Kubernetes) |
 | `worktree_path` | string | Absolute path to worktree on shared FS |
-| `job_config_dir` | string | `CLAUDE_CONFIG_DIR` used for this job |
+| `job_config_dir` | string | Profile directory used for this job (informational) |
 
 ## Profile Schema
 

@@ -161,24 +161,24 @@ profile replace the parent's versions; files only in the parent are kept.
 
 ## Materialization
 
-Before each job, `materialize_profile()` resolves the `CLAUDE_CONFIG_DIR` path
-that will be passed to the Claude subprocess.
+Before each job, `materialize_profile()` resolves the profile directory path
+for tracking and `.mcp.json` merging.
+
+Claude Code uses `~/.claude/` by default — `CLAUDE_CONFIG_DIR` is **not set**.
+Agentihooks installs profiles into `~/.claude/` at container startup via
+`agentihooks global`. The `CLAUDE_CODE_HOME_DIR` env var is set as a safeguard
+pointing to the home directory root (e.g., `/shared`).
 
 ### Simple profiles (no `extends`) — zero I/O
 
-`CLAUDE_CONFIG_DIR` is set directly to the profile's own directory. No files
-are copied. The repo working directory is never touched.
-
-```
-CLAUDE_CONFIG_DIR={AGENTICORE_AGENTIHOOKS_PATH}/profiles/coding
-                       └── already contains .claude/ and .mcp.json
-                           (pre-built by agentihooks build_profiles.py)
-```
+The profile directory path is returned for tracking only. No files are copied
+and no env var override is applied. Claude Code reads config from `~/.claude/`.
 
 ### Profiles with `extends` — isolated merge directory
 
 When a profile uses `extends`, the chain must be merged. The merged output goes
-to an isolated per-job directory — **never** into the repo working directory.
+to an isolated per-job directory for `.mcp.json` content, which the runner
+injects into the job CWD.
 
 Local / Docker mode (no `AGENTICORE_SHARED_FS_ROOT`):
 
@@ -200,9 +200,8 @@ Kubernetes / shared FS mode (`AGENTICORE_SHARED_FS_ROOT` set):
 └── .mcp.json
 ```
 
-In both cases the runner sets `CLAUDE_CONFIG_DIR` to the resolved path, and
-`job_config_dir` is stored on the job record for auditing. The repo clone is
-always left clean.
+The `job_config_dir` is stored on the job record for auditing. The repo clone
+is always left clean.
 
 ## Profile to CLI Args
 

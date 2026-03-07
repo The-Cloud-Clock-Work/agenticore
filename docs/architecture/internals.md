@@ -85,7 +85,7 @@ already provides natively:
                    |  run_job()      |
                    |  claude -p "task" --model X ...
                    |  cwd = /shared/repos/.../worktrees/{id}
-                   |  CLAUDE_CONFIG_DIR=/shared/jobs/{id}
+                   |  CLAUDE_CODE_HOME_DIR=/shared
                    +--------+--------+
                             |
               +-------------+-------------+

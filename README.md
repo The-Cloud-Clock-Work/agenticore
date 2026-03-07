@@ -35,7 +35,7 @@ Agenticore is a **thin orchestration layer** on top of Claude Code:
 - Accepts tasks from **MCP clients, REST, or CLI** — same API surface, one port
 - **Clones and caches repos**, serializes concurrent access with distributed locks
 - Creates **bespoke worktrees** — locked before Claude starts, deterministic branch names
-- **Applies execution profiles** — `.claude/` config, `.mcp.json`, hooks, skills
+- **Applies execution profiles** — installed into `~/.claude/` at startup via agentihooks
 - Spawns `claude -p "<task>"` in the worktree and **opens a PR when it succeeds**
 - Ships **full OTEL traces** (prompts, tool calls, token counts) to Langfuse / PostgreSQL
 - Runs standalone, in Docker, or on **Kubernetes** (Helm chart, KEDA autoscaling, graceful drain)
@@ -246,8 +246,8 @@ The `/health` endpoint is always public regardless of auth settings.
 ## Profiles
 
 Profiles are **directory packages** that configure how Claude Code runs. Each profile
-is a self-contained `.claude/` tree that Agenticore copies into the job's working
-directory before spawning Claude.
+is a self-contained `.claude/` tree installed into `~/.claude/` at container startup
+by `agentihooks global`. Claude Code reads from `~/.claude/` by default.
 
 ```
 <profiles-dir>/{name}/
@@ -288,9 +288,9 @@ parent) during materialization.
 
 ### What Agenticore does with a profile at job start
 
-1. Resolves the `extends` chain
-2. Copies `.claude/` into the working directory (or `/shared/jobs/{id}/` in Kubernetes)
-3. Merges `.mcp.json` with any existing `.mcp.json` in the repo
+1. Resolves the profile path (for tracking/audit)
+2. For `extends` profiles: merges chain into a per-job directory for `.mcp.json`
+3. Injects `.mcp.json` into the job CWD (merging with any existing `.mcp.json`)
 4. Translates `profile.yml` `claude:` fields into CLI flags:
    `--model sonnet --max-turns 80 --permission-mode bypassPermissions …`
 
@@ -524,6 +524,7 @@ Full compose details: [Docker Compose](docs/deployment/docker-compose.md).
 | `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Git URL to clone agentihooks from (supports `GITHUB_TOKEN`) |
 | `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `300` | Hot-reload interval in seconds (`0` disables) |
 | `AGENTICORE_SHARED_FS_ROOT` | _(empty)_ | Shared FS root (Kubernetes mode) |
+| `CLAUDE_CODE_HOME_DIR` | `$HOME` | Home dir root — Claude uses `$CLAUDE_CODE_HOME_DIR/.claude/` |
 
 Full reference: [Configuration docs](docs/reference/configuration.md)
 
