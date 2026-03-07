@@ -5,7 +5,12 @@ alias cc='claude --dangerously-skip-permissions'
 alias gs='git status'
 alias gp='git push'
 gc() { git add -A && git commit -m "$(claude -p 'Write a short conventional commit message for this diff. Output ONLY the message, nothing else.' <<< "$(git diff --cached --stat)")"; }
-anton() { ANTHROPIC_AUTH_TOKEN="${LITELLM_MCP_GATEWAY_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}" claude --dangerously-skip-permissions "$@"; }
+anton() { cd /app/package && ANTHROPIC_AUTH_TOKEN="${LITELLM_MCP_GATEWAY_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}" claude --dangerously-skip-permissions "$@"; }
+agentipull() {
+  echo "Pulling agentihooks..."
+  agenticore hooks sync && agentihooks global --force
+  echo "Done — ref: $(git -C "${AGENTICORE_SHARED_FS_ROOT:-$HOME/.agenticore}/agentihooks" rev-parse --short HEAD 2>/dev/null || echo '?')"
+}
 
 # wkt-get — search Claude projects, pick one, cd into it
 wkt-get() {
@@ -40,6 +45,7 @@ helpme() {
   echo "    gc               Auto-commit with AI message"
   echo "    gs / gp          Git status / push"
   echo "    wkt-get [q]      Find Claude project, cd into it"
+  echo "    agentipull       Force hot-reload agentihooks"
   echo "    helpme           Show this help"
   echo ""
   echo "  Installed Tools:"
