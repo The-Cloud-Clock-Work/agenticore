@@ -264,10 +264,13 @@
         ? `<a href="${authUrl}" target="_blank"><button class="primary">🔗 Authorize</button></a>`
         : '';
 
+      const codeHint = r.service === 'openai-codex'
+        ? 'After authorizing, the browser will redirect to a blank page. Copy the <strong>full URL</strong> from the address bar and paste below.'
+        : 'After authorizing, copy everything shown on screen (code, <code style="color:#888">code#state</code>, or full URL) and paste below.';
+
       const codeSection = isManualCode
         ? `<div style="margin-top:0.75rem;font-size:0.75rem;color:#888;">
-             After authorizing, copy everything shown on <code style="color:#aaa">platform.claude.com</code> and paste below.<br>
-             All formats auto-extracted: plain code, <code style="color:#888">code#state</code>, or full URL.
+             ${codeHint}
            </div>
            <div class="manual-input">
              <input id="code-${r.id}" type="text" placeholder="Paste code or full redirect URL..." />
