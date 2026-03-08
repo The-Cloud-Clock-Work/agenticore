@@ -1,5 +1,6 @@
 """Unit tests for runner module."""
 
+import json
 import os
 from unittest.mock import patch
 
@@ -64,13 +65,24 @@ class TestBuildEnvAuthBroker:
         {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
         clear=False,
     )
-    def test_broker_sets_ANTHROPIC_AUTH_TOKEN(self):
+    def test_broker_sets_oauth_token(self):
+        token_data = {
+            "token": "sk-ant-oat01-long-oauth-token-value",
+            "refresh_token": "refresh-abc",
+            "expires_at": 1750000000,
+            "scope": "user:inference user:profile",
+        }
         with patch(
-            "agenticore.runner._fetch_from_auth_broker",
-            side_effect=lambda svc, **kw: "sk-ant-123" if svc == "anthropic" else None,
+            "agenticore.runner._fetch_full_token_from_auth_broker",
+            side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
         ):
             env = _build_env()
-        assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-ant-123"
+        assert "CLAUDE_CODE_OAUTH_TOKEN" in env
+        oauth = json.loads(env["CLAUDE_CODE_OAUTH_TOKEN"])
+        assert oauth["accessToken"] == "sk-ant-oat01-long-oauth-token-value"
+        assert oauth["refreshToken"] == "refresh-abc"
+        assert oauth["scopes"] == ["user:inference", "user:profile"]
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
 
     @patch.dict(
         os.environ,
@@ -78,10 +90,11 @@ class TestBuildEnvAuthBroker:
         clear=False,
     )
     def test_resolve_github_token_sets_env(self):
+        token_data = {"token": "sk-ant-oat01-long-oauth-token-value", "refresh_token": "", "expires_at": 0, "scope": ""}
         with (
             patch(
-                "agenticore.runner._fetch_from_auth_broker",
-                side_effect=lambda svc, **kw: "sk-ant-123" if svc == "anthropic" else None,
+                "agenticore.runner._fetch_full_token_from_auth_broker",
+                side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
             ),
             patch("agenticore.runner.resolve_github_token", return_value="gh-tok"),
         ):
@@ -124,7 +137,7 @@ class TestBuildEnvAuthBroker:
         clear=False,
     )
     def test_broker_returns_none_leaves_env_key(self):
-        with patch("agenticore.runner._fetch_from_auth_broker", return_value=None):
+        with patch("agenticore.runner._fetch_full_token_from_auth_broker", return_value=None):
             env = _build_env()
         # Broker returned None → ANTHROPIC_AUTH_TOKEN from os.environ preserved
         assert env["ANTHROPIC_AUTH_TOKEN"] == "existing-key"
@@ -140,30 +153,38 @@ class TestBuildEnvAuthBroker:
     )
     def test_broker_connect_error_preserves_env_key(self):
         with patch(
-            "agenticore.runner._fetch_from_auth_broker",
+            "agenticore.runner._fetch_full_token_from_auth_broker",
             side_effect=None,
             return_value=None,
         ):
             env = _build_env()
         assert env["ANTHROPIC_AUTH_TOKEN"] == "existing-key"
 
-    def test_broker_clears_anthropic_base_url(self):
-        """When broker token received, ANTHROPIC_BASE_URL must be removed (direct Anthropic, not LiteLLM)."""
+    def test_broker_clears_anthropic_base_url_and_auth_token(self):
+        """When broker token received, ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN must be removed."""
+        token_data = {
+            "token": "sk-ant-oat01-long-oauth-token-value",
+            "refresh_token": "refresh-abc",
+            "expires_at": 1750000000,
+            "scope": "user:inference",
+        }
         with patch.dict(
             os.environ,
             {
                 "AUTH_BROKER_URL": "http://broker",
                 "AUTH_BROKER_API_KEY": "key",
                 "ANTHROPIC_BASE_URL": "http://litellm-proxy:4000",
+                "ANTHROPIC_AUTH_TOKEN": "old-static-key",
             },
             clear=False,
         ):
             with patch(
-                "agenticore.runner._fetch_from_auth_broker",
-                side_effect=lambda svc, **kw: "sk-ant-123" if svc == "anthropic" else None,
+                "agenticore.runner._fetch_full_token_from_auth_broker",
+                side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
             ):
                 env = _build_env()
-        assert env.get("ANTHROPIC_AUTH_TOKEN") == "sk-ant-123"
+        assert "CLAUDE_CODE_OAUTH_TOKEN" in env
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
         assert "ANTHROPIC_BASE_URL" not in env
 
     def test_broker_failure_warns(self, caplog):
@@ -180,7 +201,7 @@ class TestBuildEnvAuthBroker:
             },
             clear=False,
         ):
-            with patch("agenticore.runner._fetch_from_auth_broker", return_value=None):
+            with patch("agenticore.runner._fetch_full_token_from_auth_broker", return_value=None):
                 with caplog.at_level(logging.WARNING, logger="agenticore.runner"):
                     env = _build_env()
         assert "falling back" in caplog.text
@@ -227,12 +248,16 @@ class TestBuildEnvAuthBroker:
     )
     def test_broker_google_token_sets_env(self):
         """Google token from broker is set as GOOGLE_AUTH_TOKEN."""
-        with patch(
-            "agenticore.runner._fetch_from_auth_broker",
-            side_effect=lambda svc, **kw: {
-                "anthropic": "sk-ant-123",
-                "google": "ya29.google-token-value",
-            }.get(svc),
+        token_data = {"token": "sk-ant-oat01-long-oauth-token-value", "refresh_token": "", "expires_at": 0, "scope": ""}
+        with (
+            patch(
+                "agenticore.runner._fetch_full_token_from_auth_broker",
+                side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+            ),
+            patch(
+                "agenticore.runner._fetch_from_auth_broker",
+                side_effect=lambda svc, **kw: "ya29.google-token-value" if svc == "google" else None,
+            ),
         ):
             env = _build_env()
         assert env["GOOGLE_AUTH_TOKEN"] == "ya29.google-token-value"
@@ -244,9 +269,16 @@ class TestBuildEnvAuthBroker:
     )
     def test_broker_google_none_skips(self):
         """No Google token from broker → GOOGLE_AUTH_TOKEN not set."""
-        with patch(
-            "agenticore.runner._fetch_from_auth_broker",
-            side_effect=lambda svc, **kw: "sk-ant-123" if svc == "anthropic" else None,
+        token_data = {"token": "sk-ant-oat01-long-oauth-token-value", "refresh_token": "", "expires_at": 0, "scope": ""}
+        with (
+            patch(
+                "agenticore.runner._fetch_full_token_from_auth_broker",
+                side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+            ),
+            patch(
+                "agenticore.runner._fetch_from_auth_broker",
+                side_effect=lambda svc, **kw: None,
+            ),
         ):
             env = _build_env()
         assert "GOOGLE_AUTH_TOKEN" not in env
@@ -258,14 +290,60 @@ class TestBuildEnvAuthBroker:
     )
     def test_broker_short_token_rejected(self):
         """Token shorter than 10 chars is rejected as malformed."""
+        token_data = {"token": "short", "refresh_token": "", "expires_at": 0, "scope": ""}
         with patch(
-            "agenticore.runner._fetch_from_auth_broker",
-            side_effect=lambda svc, **kw: "short" if svc == "anthropic" else None,
+            "agenticore.runner._fetch_full_token_from_auth_broker",
+            side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
         ):
             with patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": "static-key"}, clear=False):
                 env = _build_env()
         # Short token rejected → static fallback preserved
         assert env["ANTHROPIC_AUTH_TOKEN"] == "static-key"
+
+    @patch.dict(
+        os.environ,
+        {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
+        clear=False,
+    )
+    def test_broker_oauth_token_json_format(self):
+        """CLAUDE_CODE_OAUTH_TOKEN must contain accessToken, refreshToken, expiresAt, scopes."""
+        token_data = {
+            "token": "sk-ant-oat01-abcdef1234567890",
+            "refresh_token": "refresh-xyz-999",
+            "expires_at": 1750000000,
+            "scope": "user:inference user:profile user:sessions:claude_code",
+        }
+        with patch(
+            "agenticore.runner._fetch_full_token_from_auth_broker",
+            side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+        ):
+            env = _build_env()
+        oauth = json.loads(env["CLAUDE_CODE_OAUTH_TOKEN"])
+        assert oauth["accessToken"] == "sk-ant-oat01-abcdef1234567890"
+        assert oauth["refreshToken"] == "refresh-xyz-999"
+        assert "2025" in oauth["expiresAt"]  # epoch 1750000000 → 2025 UTC
+        assert oauth["scopes"] == ["user:inference", "user:profile", "user:sessions:claude_code"]
+
+    @patch.dict(
+        os.environ,
+        {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
+        clear=False,
+    )
+    def test_broker_nested_token_dict(self):
+        """Handle Auth Broker returning token as nested dict."""
+        token_data = {
+            "token": {"token": "sk-ant-oat01-nested-token-value", "access_token": "fallback"},
+            "refresh_token": "",
+            "expires_at": 0,
+            "scope": "",
+        }
+        with patch(
+            "agenticore.runner._fetch_full_token_from_auth_broker",
+            side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+        ):
+            env = _build_env()
+        oauth = json.loads(env["CLAUDE_CODE_OAUTH_TOKEN"])
+        assert oauth["accessToken"] == "sk-ant-oat01-nested-token-value"
 
     @patch.dict(
         os.environ,
