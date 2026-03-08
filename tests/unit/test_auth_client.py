@@ -298,6 +298,44 @@ class TestGetToken:
         assert result == {"token": "tok"}
 
 
+    def test_expired_token_falls_through_to_slow_path(self):
+        """valid=false on fast path → should_stop=False → slow path creates a new request."""
+        # Fast path: valid=false (expired)
+        expired_resp = MagicMock()
+        expired_resp.status_code = 200
+        expired_resp.json = MagicMock(return_value={"token": None, "valid": False})
+
+        # Slow path: request created
+        request_resp = MagicMock()
+        request_resp.status_code = 200
+        request_resp.json = MagicMock(return_value={"request_id": "req-new", "status": "pending"})
+
+        # Poll: completed with fresh token
+        poll_resp = MagicMock()
+        poll_resp.status_code = 200
+        poll_resp.json = MagicMock(return_value={"status": "completed", "token": {"token": "fresh-tok"}})
+
+        def mock_get(url, **kwargs):
+            if "token/direct" in url:
+                return expired_resp
+            return poll_resp
+
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.get = MagicMock(side_effect=mock_get)
+        mock_client.post = MagicMock(return_value=request_resp)
+
+        with patch("agenticore.auth_client.httpx.Client", return_value=mock_client):
+            with patch("agenticore.auth_client.time.sleep"):
+                client = AuthClient(url="http://broker", api_key="key", poll_interval=0)
+                result = client.get_token("anthropic", timeout=30)
+
+        assert result == {"token": "fresh-tok"}
+        # Verify slow path was actually called (POST /auth/request)
+        mock_client.post.assert_called_once()
+
+
 @pytest.mark.unit
 class TestGetCredential:
     def test_returns_token_string(self):
@@ -311,3 +349,40 @@ class TestGetCredential:
         client = AuthClient(url="", api_key="")
         result = client.get_credential("anthropic")
         assert result is None
+
+    def test_nested_token_dict(self):
+        """Token field is a nested dict with 'token' key."""
+        nested = {"token": {"token": "inner-tok", "expires_at": 0}}
+        client = AuthClient(url="http://broker", api_key="key")
+        with patch.object(client, "get_token", return_value=nested):
+            result = client.get_credential("anthropic")
+        assert result == "inner-tok"
+
+    def test_nested_token_dict_access_token(self):
+        """Token field is a nested dict with 'access_token' key."""
+        nested = {"token": {"access_token": "gcp-tok", "expires_at": 0}}
+        client = AuthClient(url="http://broker", api_key="key")
+        with patch.object(client, "get_token", return_value=nested):
+            result = client.get_credential("google")
+        assert result == "gcp-tok"
+
+    def test_string_response(self):
+        """get_token returns a plain string."""
+        client = AuthClient(url="http://broker", api_key="key")
+        with patch.object(client, "get_token", return_value="plain-token-str"):
+            result = client.get_credential("anthropic")
+        assert result == "plain-token-str"
+
+    def test_empty_token_returns_none(self):
+        """Token field is empty string → None."""
+        client = AuthClient(url="http://broker", api_key="key")
+        with patch.object(client, "get_token", return_value={"token": ""}):
+            result = client.get_credential("anthropic")
+        assert result is None
+
+    def test_passes_timeout(self):
+        """Timeout parameter is forwarded to get_token."""
+        client = AuthClient(url="http://broker", api_key="key")
+        with patch.object(client, "get_token", return_value=None) as mock_gt:
+            client.get_credential("anthropic", timeout=42)
+        mock_gt.assert_called_once_with("anthropic", consumer_id="default", timeout=42)

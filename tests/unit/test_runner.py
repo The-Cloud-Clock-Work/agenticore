@@ -219,3 +219,64 @@ class TestBuildEnvAuthBroker:
         ):
             env = _build_env()
         assert env["ANTHROPIC_CUSTOM_HEADERS"] == '{"existing": "value"}'
+
+    @patch.dict(
+        os.environ,
+        {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
+        clear=False,
+    )
+    def test_broker_google_token_sets_env(self):
+        """Google token from broker is set as GOOGLE_AUTH_TOKEN."""
+        with patch(
+            "agenticore.runner._fetch_from_auth_broker",
+            side_effect=lambda svc, **kw: {
+                "anthropic": "sk-ant-123",
+                "google": "ya29.google-token-value",
+            }.get(svc),
+        ):
+            env = _build_env()
+        assert env["GOOGLE_AUTH_TOKEN"] == "ya29.google-token-value"
+
+    @patch.dict(
+        os.environ,
+        {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
+        clear=False,
+    )
+    def test_broker_google_none_skips(self):
+        """No Google token from broker → GOOGLE_AUTH_TOKEN not set."""
+        with patch(
+            "agenticore.runner._fetch_from_auth_broker",
+            side_effect=lambda svc, **kw: "sk-ant-123" if svc == "anthropic" else None,
+        ):
+            env = _build_env()
+        assert "GOOGLE_AUTH_TOKEN" not in env
+
+    @patch.dict(
+        os.environ,
+        {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
+        clear=False,
+    )
+    def test_broker_short_token_rejected(self):
+        """Token shorter than 10 chars is rejected as malformed."""
+        with patch(
+            "agenticore.runner._fetch_from_auth_broker",
+            side_effect=lambda svc, **kw: "short" if svc == "anthropic" else None,
+        ):
+            with patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": "static-key"}, clear=False):
+                env = _build_env()
+        # Short token rejected → static fallback preserved
+        assert env["ANTHROPIC_AUTH_TOKEN"] == "static-key"
+
+    @patch.dict(
+        os.environ,
+        {"AUTH_BROKER_URL": "", "AUTH_BROKER_API_KEY": ""},
+        clear=False,
+    )
+    def test_no_broker_skips_google(self):
+        """When broker is not configured, Google token is not attempted."""
+        with patch("agenticore.runner._fetch_from_auth_broker") as mock_fetch:
+            with patch("agenticore.runner.resolve_github_token", return_value=None):
+                env = _build_env()
+        # _fetch_from_auth_broker should never be called when broker is not configured
+        mock_fetch.assert_not_called()
+        assert "GOOGLE_AUTH_TOKEN" not in env

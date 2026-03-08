@@ -72,14 +72,18 @@ def _log_job_result(mgmt, job) -> None:
         pass  # never let mgmt logging break job flow
 
 
-def _fetch_from_auth_broker(service: str, consumer_id: str = "agenticore") -> Optional[str]:
+def _fetch_from_auth_broker(
+    service: str,
+    consumer_id: str = "agenticore",
+    timeout: int = 300,
+) -> Optional[str]:
     """Fetch a credential string from Auth Broker. Returns None if unavailable."""
     from agenticore.auth_client import AuthClient  # lazy import
 
     client = AuthClient()
     if not client.enabled:
         return None
-    return client.get_credential(service, consumer_id=consumer_id)
+    return client.get_credential(service, consumer_id=consumer_id, timeout=timeout)
 
 
 def _build_env(_cwd: Optional[Path] = None) -> dict:
@@ -108,8 +112,10 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
 
     if cfg.auth_broker.url:
         # Attempt Auth Broker — returns Claude Max subscription token
-        key = _fetch_from_auth_broker("anthropic")
-        if key:
+        # 30s timeout: fast-path returns instantly if token exists,
+        # slow-path polls up to 30s for operator approval before falling back
+        key = _fetch_from_auth_broker("anthropic", timeout=30)
+        if key and isinstance(key, str) and len(key) >= 10:
             env["ANTHROPIC_AUTH_TOKEN"] = key
             # Broker token is a real Anthropic credential — route directly,
             # not through the LiteLLM proxy
@@ -117,6 +123,8 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
             _log.debug("auth: using Auth Broker token (direct Anthropic)")
             mgmt.info("auth broker=OK provider=anthropic")
         else:
+            if key is not None:
+                _log.warning("Auth Broker returned invalid token (empty or malformed) — falling back")
             # Broker configured but unavailable or no token — fall back to
             # static ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL from env (LiteLLM)
             _log.warning(
@@ -134,6 +142,13 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
         env["GITHUB_TOKEN"] = gh_token
     else:
         env.pop("GITHUB_TOKEN", None)
+
+    # Google token — for Google Docs, Gmail, Drive access (publishing agent)
+    if cfg.auth_broker.url:
+        google_token = _fetch_from_auth_broker("google", timeout=30)
+        if google_token and isinstance(google_token, str) and len(google_token) >= 10:
+            env["GOOGLE_AUTH_TOKEN"] = google_token
+            _log.debug("auth: using Auth Broker token for Google")
 
     # Auto-build ANTHROPIC_CUSTOM_HEADERS for CF Access-protected proxies
     cf_id = env.get("CF_ACCESS_CLIENT_ID", "")

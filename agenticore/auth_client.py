@@ -50,8 +50,8 @@ class AuthClient:
             if resp.status_code == 200:
                 data = resp.json()
                 if not data.get("valid"):
-                    logger.warning("Auth Broker token invalid/expired for service=%s — using static fallback", service)
-                    return None, True
+                    logger.info("Auth Broker token expired for service=%s — requesting new token", service)
+                    return None, False  # fall through to slow path (POST /auth/request)
                 return data.get("token"), True
         except httpx.ConnectError as e:
             logger.warning("Auth Broker unreachable: %s", e)
@@ -135,9 +135,15 @@ class AuthClient:
 
         return self._poll_for_token(base, request_id, service, timeout)
 
-    def get_credential(self, service: str, consumer_id: str = "default") -> Optional[str]:
+    def get_credential(self, service: str, consumer_id: str = "default", timeout: int = 300) -> Optional[str]:
         """Returns the token string or None."""
-        data = self.get_token(service, consumer_id=consumer_id)
+        data = self.get_token(service, consumer_id=consumer_id, timeout=timeout)
         if not data:
             return None
-        return data.get("token") if isinstance(data, dict) else None
+        if isinstance(data, dict):
+            tok = data.get("token")
+            # token field may itself be a string or nested dict
+            if isinstance(tok, dict):
+                return tok.get("token") or tok.get("access_token")
+            return tok if isinstance(tok, str) and tok else None
+        return data if isinstance(data, str) and data else None
