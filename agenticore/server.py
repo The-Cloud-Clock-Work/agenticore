@@ -791,61 +791,6 @@ def _build_rest_app():
 
             return JSONResponse({"success": True, "notifications": asdict(config)})
 
-        async def post_openai_chat_completions(request: Request):
-            from agenticore.agent_mode.agent import AgentExecutor
-            from agenticore.agent_mode.openai_compat import (
-                build_openai_error,
-                build_openai_response,
-                extract_request_id,
-                flatten_messages,
-            )
-
-            body = await request.json()
-            messages = body.get("messages")
-            if not messages:
-                err, code = build_openai_error("messages is required", 400)
-                return JSONResponse(err, status_code=code)
-
-            if body.get("stream", False):
-                err, code = build_openai_error("streaming not yet supported", 501)
-                return JSONResponse(err, status_code=code)
-
-            message = flatten_messages(messages)
-            headers = {k.decode(): v.decode() for k, v in request.scope.get("headers", [])}
-            request_uuid = extract_request_id(headers, body)
-            model_name = body.get("model", "")
-
-            executor = AgentExecutor()
-            result = await executor.execute(
-                message=message,
-                external_uuid=request_uuid,
-                wait=True,
-                stateless=True,
-                model=model_name if model_name else "",
-                timeout=body.get("timeout", 0),
-            )
-
-            if result.get("is_error"):
-                err, code = build_openai_error(result.get("error", "Agent error"), 500)
-                return JSONResponse(err, status_code=code)
-
-            return JSONResponse(build_openai_response(result, model_name, request_uuid))
-
-        async def get_openai_models(request: Request):
-            return JSONResponse(
-                {
-                    "object": "list",
-                    "data": [
-                        {
-                            "id": cfg.agent_mode.model or "agenticore-agent",
-                            "object": "model",
-                            "created": 0,
-                            "owned_by": "agenticore",
-                        }
-                    ],
-                }
-            )
-
     routes = [
         Route("/health", health, methods=["GET"]),
         Route("/jobs", post_jobs, methods=["POST"]),
@@ -866,8 +811,6 @@ def _build_rest_app():
                 Route("/completions", get_completions_list, methods=["GET"]),
                 Route("/completions/{uuid:path}", get_completion_route, methods=["GET"]),
                 Route("/completions/{uuid:path}/notifications", patch_notifications_route, methods=["PATCH"]),
-                Route("/v1/chat/completions", post_openai_chat_completions, methods=["POST"]),
-                Route("/v1/models", get_openai_models, methods=["GET"]),
             ]
         )
 
