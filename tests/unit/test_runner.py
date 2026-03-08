@@ -17,6 +17,10 @@ def _reset():
     reset_config()
 
 
+# Patch _write_oauth_credentials globally — tests shouldn't write real files
+_WRITE_CREDS_PATCH = "agenticore.runner._write_oauth_credentials"
+
+
 @pytest.mark.unit
 class TestBuildOtelEnv:
     @patch.dict(
@@ -65,24 +69,31 @@ class TestBuildEnvAuthBroker:
         {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
         clear=False,
     )
-    def test_broker_sets_oauth_token(self):
+    def test_broker_sets_oauth_token_raw_string(self):
+        """CLAUDE_CODE_OAUTH_TOKEN must be the raw access token string."""
         token_data = {
             "token": "sk-ant-oat01-long-oauth-token-value",
             "refresh_token": "refresh-abc",
             "expires_at": 1750000000,
             "scope": "user:inference user:profile",
         }
-        with patch(
-            "agenticore.runner._fetch_full_token_from_auth_broker",
-            side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+        with (
+            patch(
+                "agenticore.runner._fetch_full_token_from_auth_broker",
+                side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+            ),
+            patch(_WRITE_CREDS_PATCH) as mock_write,
         ):
             env = _build_env()
-        assert "CLAUDE_CODE_OAUTH_TOKEN" in env
-        oauth = json.loads(env["CLAUDE_CODE_OAUTH_TOKEN"])
-        assert oauth["accessToken"] == "sk-ant-oat01-long-oauth-token-value"
-        assert oauth["refreshToken"] == "refresh-abc"
-        assert oauth["scopes"] == ["user:inference", "user:profile"]
+        # Raw token string, not JSON
+        assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-long-oauth-token-value"
         assert "ANTHROPIC_AUTH_TOKEN" not in env
+        # Credentials file written with full OAuth data
+        mock_write.assert_called_once()
+        args = mock_write.call_args
+        assert args[0][0] == "sk-ant-oat01-long-oauth-token-value"
+        assert args[0][1] == "refresh-abc"
+        assert args[0][2] == 1750000000
 
     @patch.dict(
         os.environ,
@@ -97,6 +108,7 @@ class TestBuildEnvAuthBroker:
                 side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
             ),
             patch("agenticore.runner.resolve_github_token", return_value="gh-tok"),
+            patch(_WRITE_CREDS_PATCH),
         ):
             env = _build_env()
         assert env["GITHUB_TOKEN"] == "gh-tok"
@@ -178,12 +190,15 @@ class TestBuildEnvAuthBroker:
             },
             clear=False,
         ):
-            with patch(
-                "agenticore.runner._fetch_full_token_from_auth_broker",
-                side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+            with (
+                patch(
+                    "agenticore.runner._fetch_full_token_from_auth_broker",
+                    side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+                ),
+                patch(_WRITE_CREDS_PATCH),
             ):
                 env = _build_env()
-        assert "CLAUDE_CODE_OAUTH_TOKEN" in env
+        assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-long-oauth-token-value"
         assert "ANTHROPIC_AUTH_TOKEN" not in env
         assert "ANTHROPIC_BASE_URL" not in env
 
@@ -258,6 +273,7 @@ class TestBuildEnvAuthBroker:
                 "agenticore.runner._fetch_from_auth_broker",
                 side_effect=lambda svc, **kw: "ya29.google-token-value" if svc == "google" else None,
             ),
+            patch(_WRITE_CREDS_PATCH),
         ):
             env = _build_env()
         assert env["GOOGLE_AUTH_TOKEN"] == "ya29.google-token-value"
@@ -279,6 +295,7 @@ class TestBuildEnvAuthBroker:
                 "agenticore.runner._fetch_from_auth_broker",
                 side_effect=lambda svc, **kw: None,
             ),
+            patch(_WRITE_CREDS_PATCH),
         ):
             env = _build_env()
         assert "GOOGLE_AUTH_TOKEN" not in env
@@ -305,30 +322,6 @@ class TestBuildEnvAuthBroker:
         {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
         clear=False,
     )
-    def test_broker_oauth_token_json_format(self):
-        """CLAUDE_CODE_OAUTH_TOKEN must contain accessToken, refreshToken, expiresAt, scopes."""
-        token_data = {
-            "token": "sk-ant-oat01-abcdef1234567890",
-            "refresh_token": "refresh-xyz-999",
-            "expires_at": 1750000000,
-            "scope": "user:inference user:profile user:sessions:claude_code",
-        }
-        with patch(
-            "agenticore.runner._fetch_full_token_from_auth_broker",
-            side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
-        ):
-            env = _build_env()
-        oauth = json.loads(env["CLAUDE_CODE_OAUTH_TOKEN"])
-        assert oauth["accessToken"] == "sk-ant-oat01-abcdef1234567890"
-        assert oauth["refreshToken"] == "refresh-xyz-999"
-        assert "2025" in oauth["expiresAt"]  # epoch 1750000000 → 2025 UTC
-        assert oauth["scopes"] == ["user:inference", "user:profile", "user:sessions:claude_code"]
-
-    @patch.dict(
-        os.environ,
-        {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
-        clear=False,
-    )
     def test_broker_nested_token_dict(self):
         """Handle Auth Broker returning token as nested dict."""
         token_data = {
@@ -337,13 +330,43 @@ class TestBuildEnvAuthBroker:
             "expires_at": 0,
             "scope": "",
         }
-        with patch(
-            "agenticore.runner._fetch_full_token_from_auth_broker",
-            side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+        with (
+            patch(
+                "agenticore.runner._fetch_full_token_from_auth_broker",
+                side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+            ),
+            patch(_WRITE_CREDS_PATCH),
         ):
             env = _build_env()
-        oauth = json.loads(env["CLAUDE_CODE_OAUTH_TOKEN"])
-        assert oauth["accessToken"] == "sk-ant-oat01-nested-token-value"
+        assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat01-nested-token-value"
+
+    @patch.dict(
+        os.environ,
+        {"AUTH_BROKER_URL": "http://broker", "AUTH_BROKER_API_KEY": "key"},
+        clear=False,
+    )
+    def test_credentials_file_written(self):
+        """Verify _write_oauth_credentials is called with correct args."""
+        token_data = {
+            "token": "sk-ant-oat01-abcdef1234567890",
+            "refresh_token": "sk-ant-ort01-refresh-token",
+            "expires_at": 1773038462,
+            "scope": "user:inference user:profile user:sessions:claude_code user:mcp_servers",
+        }
+        with (
+            patch(
+                "agenticore.runner._fetch_full_token_from_auth_broker",
+                side_effect=lambda svc, **kw: token_data if svc == "anthropic" else None,
+            ),
+            patch(_WRITE_CREDS_PATCH) as mock_write,
+        ):
+            _build_env()
+        mock_write.assert_called_once()
+        args, kwargs = mock_write.call_args
+        assert args[0] == "sk-ant-oat01-abcdef1234567890"
+        assert args[1] == "sk-ant-ort01-refresh-token"
+        assert args[2] == 1773038462
+        assert args[3] == "user:inference user:profile user:sessions:claude_code user:mcp_servers"
 
     @patch.dict(
         os.environ,
@@ -358,3 +381,42 @@ class TestBuildEnvAuthBroker:
         # _fetch_from_auth_broker should never be called when broker is not configured
         mock_fetch.assert_not_called()
         assert "GOOGLE_AUTH_TOKEN" not in env
+
+
+@pytest.mark.unit
+class TestWriteOAuthCredentials:
+    def test_writes_credentials_json(self, tmp_path):
+        from agenticore.runner import _write_oauth_credentials
+
+        _write_oauth_credentials(
+            "sk-ant-oat01-test-access-token",
+            "sk-ant-ort01-test-refresh-token",
+            1773038462,
+            "user:inference user:profile",
+            claude_home=str(tmp_path),
+        )
+        creds_file = tmp_path / ".credentials.json"
+        assert creds_file.exists()
+        creds = json.loads(creds_file.read_text())
+        oauth = creds["claudeAiOauth"]
+        assert oauth["accessToken"] == "sk-ant-oat01-test-access-token"
+        assert oauth["refreshToken"] == "sk-ant-ort01-test-refresh-token"
+        assert oauth["expiresAt"] == 1773038462000  # seconds → milliseconds
+        assert oauth["scopes"] == ["user:inference", "user:profile"]
+
+    def test_preserves_existing_keys(self, tmp_path):
+        from agenticore.runner import _write_oauth_credentials
+
+        creds_file = tmp_path / ".credentials.json"
+        creds_file.write_text(json.dumps({"otherKey": "preserved"}))
+
+        _write_oauth_credentials(
+            "sk-ant-oat01-test",
+            "",
+            0,
+            "",
+            claude_home=str(tmp_path),
+        )
+        creds = json.loads(creds_file.read_text())
+        assert creds["otherKey"] == "preserved"
+        assert "claudeAiOauth" in creds

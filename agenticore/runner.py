@@ -106,6 +106,47 @@ def _fetch_full_token_from_auth_broker(
     return client.get_token(service, consumer_id=consumer_id, timeout=timeout)
 
 
+def _write_oauth_credentials(
+    access_token: str,
+    refresh_token: str,
+    expires_at,
+    scope,
+    claude_home: str = "",
+) -> None:
+    """Write OAuth credentials to ~/.claude/.credentials.json.
+
+    Claude Code reads this file on startup for OAuth-authenticated sessions.
+    Format: {"claudeAiOauth": {"accessToken": ..., "refreshToken": ..., "expiresAt": ..., "scopes": [...]}}
+    """
+    home = Path(claude_home) if claude_home else Path.home() / ".claude"
+    creds_file = home / ".credentials.json"
+    home.mkdir(parents=True, exist_ok=True)
+
+    # expires_at: Auth Broker returns seconds, Claude Code expects milliseconds
+    if isinstance(expires_at, (int, float)) and expires_at > 0:
+        expires_ms = int(expires_at * 1000)
+    else:
+        expires_ms = 0
+
+    scopes = scope.split() if isinstance(scope, str) else (scope or [])
+
+    creds = {}
+    if creds_file.exists():
+        try:
+            creds = json.loads(creds_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    creds["claudeAiOauth"] = {
+        "accessToken": access_token,
+        "refreshToken": refresh_token or "",
+        "expiresAt": expires_ms,
+        "scopes": scopes,
+    }
+
+    creds_file.write_text(json.dumps(creds, indent=2))
+
+
 def _build_env(_cwd: Optional[Path] = None) -> dict:
     """Build full environment for the Claude subprocess.
 
@@ -146,27 +187,21 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
             scope = token_data.get("scope", "")
 
             if access_token and isinstance(access_token, str) and len(access_token) >= 10:
-                # Build CLAUDE_CODE_OAUTH_TOKEN JSON — Claude Code's native OAuth mechanism
-                import datetime as _dt
-
-                if isinstance(expires_at, (int, float)) and expires_at > 0:
-                    exp_iso = _dt.datetime.fromtimestamp(expires_at, tz=_dt.timezone.utc).isoformat()
-                else:
-                    exp_iso = str(expires_at)
-
-                oauth_json = json.dumps(
-                    {
-                        "accessToken": access_token,
-                        "refreshToken": refresh_token,
-                        "expiresAt": exp_iso,
-                        "scopes": scope.split() if isinstance(scope, str) else scope,
-                    }
+                # Write ~/.claude/.credentials.json — Claude Code's native OAuth storage.
+                # This lets Claude Code handle token refresh automatically.
+                _write_oauth_credentials(
+                    access_token,
+                    refresh_token,
+                    expires_at,
+                    scope,
+                    claude_home=cfg.claude.claude_home_dir,
                 )
-                env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_json
+                # Also set env var as raw token string (overrides credentials file)
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = access_token
                 # Remove API key auth — OAuth takes precedence
                 env.pop("ANTHROPIC_AUTH_TOKEN", None)
                 env.pop("ANTHROPIC_BASE_URL", None)
-                _log.debug("auth: using Auth Broker OAuth token (CLAUDE_CODE_OAUTH_TOKEN)")
+                _log.debug("auth: using Auth Broker OAuth token (credentials.json + env)")
                 mgmt.info("auth broker=OK provider=anthropic-oauth")
             else:
                 _log.warning("Auth Broker returned empty/malformed token — falling back")
