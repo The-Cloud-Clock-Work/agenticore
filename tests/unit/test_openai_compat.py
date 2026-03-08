@@ -27,7 +27,12 @@ class TestFlattenMessages:
             {"role": "user", "content": "Do something"},
         ]
         result = flatten_messages(msgs)
-        assert result == ("[system] You are helpful\n[user] Hi\n[assistant] Hello!\n[user] Do something")
+        assert result == (
+            "[system] You are helpful\n"
+            "[user] Hi\n"
+            "[assistant] Hello!\n"
+            "[user] Do something"
+        )
 
     def test_system_only(self):
         msgs = [{"role": "system", "content": "Be concise"}]
