@@ -34,10 +34,15 @@ def get_mgmt_logger() -> logging.Logger:
     _mgmt.propagate = False  # file-only — don't duplicate to stderr
 
     handler = RotatingFileHandler(
-        str(log_file), maxBytes=5 * 1024 * 1024, backupCount=3,
+        str(log_file),
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
     )
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S",
-    ))
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
     _mgmt.addHandler(handler)
     return _mgmt

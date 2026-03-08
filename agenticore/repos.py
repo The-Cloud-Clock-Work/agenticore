@@ -205,8 +205,7 @@ def create_worktree(repo_dir: Path, job_id: str, base_ref: str = "") -> tuple[Pa
         cwd=repo_dir,
     )
     _run_git(
-        ["git", "worktree", "lock", str(wt_dir),
-         "--reason", f"agenticore: job {job_id}"],
+        ["git", "worktree", "lock", str(wt_dir), "--reason", f"agenticore: job {job_id}"],
         cwd=repo_dir,
     )
     return wt_dir, branch
@@ -407,7 +406,10 @@ def _git_worktree_list(rdir: Path) -> list[dict]:
     try:
         result = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
-            cwd=rdir, capture_output=True, text=True, timeout=10,
+            cwd=rdir,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             return []
@@ -415,9 +417,9 @@ def _git_worktree_list(rdir: Path) -> list[dict]:
         current = {}
         for line in result.stdout.splitlines():
             if line.startswith("worktree "):
-                current = {"path": line[len("worktree "):]}
+                current = {"path": line[len("worktree ") :]}
             elif line.startswith("branch refs/heads/"):
-                current["branch"] = line[len("branch refs/heads/"):]
+                current["branch"] = line[len("branch refs/heads/") :]
             elif line == "" and current:
                 entries.append(current)
                 current = {}
@@ -441,7 +443,9 @@ def _worktree_info(wt_dir: Path, rdir: Path, repo_key: str, branch: str) -> Opti
         try:
             result = subprocess.run(
                 ["du", "-sb", str(wt_dir)],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             size_bytes = int(result.stdout.split()[0]) if result.returncode == 0 else 0
         except Exception:
@@ -453,7 +457,10 @@ def _worktree_info(wt_dir: Path, rdir: Path, repo_key: str, branch: str) -> Opti
             try:
                 result = subprocess.run(
                     ["git", "branch", "-r", "--list", f"origin/{branch}"],
-                    cwd=rdir, capture_output=True, text=True, timeout=5,
+                    cwd=rdir,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 pushed = bool(result.stdout.strip())
             except Exception:
@@ -495,14 +502,21 @@ def remove_worktrees(worktree_paths: list[str]) -> list[dict]:
                 # Unlock first (worktrees are locked by the watcher)
                 subprocess.run(
                     ["git", "worktree", "unlock", str(wt_dir)],
-                    cwd=rdir, capture_output=True, text=True, timeout=10,
+                    cwd=rdir,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
                 subprocess.run(
                     ["git", "worktree", "remove", "--force", str(wt_dir)],
-                    cwd=rdir, capture_output=True, text=True, timeout=30,
+                    cwd=rdir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
                 )
                 if wt_dir.exists():
                     import shutil
+
                     shutil.rmtree(wt_dir)
                 removed = True
             except Exception as e:

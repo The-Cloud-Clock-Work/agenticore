@@ -58,7 +58,7 @@ def _log_job_result(mgmt, job) -> None:
         duration = 0
         if job.started_at and job.ended_at:
             from datetime import datetime
-            fmt = "%Y-%m-%dT%H:%M:%S"
+
             start = datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))
             end = datetime.fromisoformat(job.ended_at.replace("Z", "+00:00"))
             duration = int((end - start).total_seconds())
@@ -66,8 +66,14 @@ def _log_job_result(mgmt, job) -> None:
             mgmt.info("job-done id=%s status=succeeded duration=%ds pr=%s", job.id, duration, job.pr_url or "-")
         else:
             err = (job.error or "")[:200]
-            mgmt.warning("job-fail id=%s status=%s duration=%ds exit=%s error=%s",
-                         job.id, job.status, duration, job.exit_code, err)
+            mgmt.warning(
+                "job-fail id=%s status=%s duration=%ds exit=%s error=%s",
+                job.id,
+                job.status,
+                duration,
+                job.exit_code,
+                err,
+            )
     except Exception:
         pass  # never let mgmt logging break job flow
 
@@ -86,20 +92,78 @@ def _fetch_from_auth_broker(
     return client.get_credential(service, consumer_id=consumer_id, timeout=timeout)
 
 
+def _fetch_full_token_from_auth_broker(
+    service: str,
+    consumer_id: str = "agenticore",
+    timeout: int = 300,
+) -> Optional[dict]:
+    """Fetch full token dict from Auth Broker (includes refresh_token, expires_at)."""
+    from agenticore.auth_client import AuthClient  # lazy import
+
+    client = AuthClient()
+    if not client.enabled:
+        return None
+    return client.get_token(service, consumer_id=consumer_id, timeout=timeout)
+
+
+def _write_oauth_credentials(
+    access_token: str,
+    refresh_token: str,
+    expires_at,
+    scope,
+    claude_home: str = "",
+) -> None:
+    """Write OAuth credentials to ~/.claude/.credentials.json.
+
+    Claude Code reads this file on startup for OAuth-authenticated sessions.
+    Format: {"claudeAiOauth": {"accessToken": ..., "refreshToken": ..., "expiresAt": <ms>, "scopes": [...]}}
+    """
+    home = Path(claude_home) if claude_home else Path.home() / ".claude"
+    creds_file = home / ".credentials.json"
+    home.mkdir(parents=True, exist_ok=True)
+
+    # Auth Broker returns seconds, Claude Code expects milliseconds
+    if isinstance(expires_at, (int, float)) and expires_at > 0:
+        expires_ms = int(expires_at * 1000)
+    else:
+        expires_ms = 0
+
+    scopes = scope.split() if isinstance(scope, str) else (scope or [])
+
+    creds = {}
+    if creds_file.exists():
+        try:
+            creds = json.loads(creds_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    creds["claudeAiOauth"] = {
+        "accessToken": access_token,
+        "refreshToken": refresh_token or "",
+        "expiresAt": expires_ms,
+        "scopes": scopes,
+    }
+
+    creds_file.write_text(json.dumps(creds, indent=2))
+
+
 def _build_env(_cwd: Optional[Path] = None) -> dict:
     """Build full environment for the Claude subprocess.
 
     Credential resolution order:
-      1. Auth Broker (AUTH_BROKER_URL) — Claude Max subscription token, direct Anthropic.
-         When broker returns a token, ANTHROPIC_BASE_URL is cleared so the CLI hits
-         Anthropic directly (not the LiteLLM proxy).
+      1. Auth Broker (AUTH_BROKER_URL) — OAuth token written to ~/.claude/.credentials.json.
+         Claude Code reads this file and routes through its internal OAuth endpoint.
+         ANTHROPIC_AUTH_TOKEN is removed to prevent conflict.
       2. Static env fallback — ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL as configured
          in the container (typically pointing at the LiteLLM proxy).
+         Only works if ANTHROPIC_BASE_URL is present; otherwise cleared to prevent
+         stale LiteLLM keys hitting api.anthropic.com.
     """
     import logging
 
     _log = logging.getLogger(__name__)
     from agenticore.mgmt_log import get_mgmt_logger
+
     mgmt = get_mgmt_logger()
 
     env = os.environ.copy()
@@ -111,27 +175,50 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
     env["CLAUDE_CODE_HOME_DIR"] = cfg.claude.claude_home_dir
 
     if cfg.auth_broker.url:
-        # Attempt Auth Broker — returns Claude Max subscription token
+        # Attempt Auth Broker — returns OAuth token for Claude Max subscription
         # 30s timeout: fast-path returns instantly if token exists,
         # slow-path polls up to 30s for operator approval before falling back
-        key = _fetch_from_auth_broker("anthropic", timeout=30)
-        if key and isinstance(key, str) and len(key) >= 10:
-            env["ANTHROPIC_AUTH_TOKEN"] = key
-            # Broker token is a real Anthropic credential — route directly,
-            # not through the LiteLLM proxy
-            env.pop("ANTHROPIC_BASE_URL", None)
-            _log.debug("auth: using Auth Broker token (direct Anthropic)")
-            mgmt.info("auth broker=OK provider=anthropic")
+        token_data = _fetch_full_token_from_auth_broker("anthropic", timeout=30)
+        if token_data and isinstance(token_data, dict):
+            # Extract access token — may be a string or nested dict
+            access_token = token_data.get("token", "")
+            if isinstance(access_token, dict):
+                access_token = access_token.get("token") or access_token.get("access_token") or ""
+            refresh_token = token_data.get("refresh_token", "")
+            expires_at = token_data.get("expires_at", 0)
+            scope = token_data.get("scope", "")
+
+            if access_token and isinstance(access_token, str) and len(access_token) >= 10:
+                # Write ~/.claude/.credentials.json — Claude Code's native OAuth storage
+                _write_oauth_credentials(
+                    access_token,
+                    refresh_token,
+                    expires_at,
+                    scope,
+                    claude_home=cfg.claude.claude_home_dir,
+                )
+                # Remove API key env vars — OAuth uses credentials file, not env vars.
+                # ANTHROPIC_AUTH_TOKEN would conflict (Claude sends it to api.anthropic.com
+                # which rejects OAuth tokens).
+                env.pop("ANTHROPIC_AUTH_TOKEN", None)
+                env.pop("ANTHROPIC_BASE_URL", None)
+                _log.debug("auth: using Auth Broker OAuth (credentials.json)")
+                mgmt.info("auth broker=OK provider=anthropic-oauth")
+            else:
+                _log.warning("Auth Broker returned empty/malformed token — falling back")
+                mgmt.warning("auth broker=FAIL fallback=static")
         else:
-            if key is not None:
-                _log.warning("Auth Broker returned invalid token (empty or malformed) — falling back")
-            # Broker configured but unavailable or no token — fall back to
-            # static ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL from env (LiteLLM)
             _log.warning(
                 "Auth Broker unreachable or returned no Anthropic token — "
                 "falling back to static ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL"
             )
             mgmt.warning("auth broker=FAIL fallback=static")
+        # Fallback safety: if ANTHROPIC_BASE_URL is missing, clear ANTHROPIC_AUTH_TOKEN
+        # to prevent stale LiteLLM key going to api.anthropic.com.
+        # Claude Code will use persisted .credentials.json from NFS instead.
+        if "ANTHROPIC_AUTH_TOKEN" in env and "ANTHROPIC_BASE_URL" not in env:
+            _log.warning("auth: clearing orphaned ANTHROPIC_AUTH_TOKEN (no ANTHROPIC_BASE_URL)")
+            env.pop("ANTHROPIC_AUTH_TOKEN", None)
     else:
         base_url = env.get("ANTHROPIC_BASE_URL", "")
         mgmt.info("auth static provider=%s", "litellm" if base_url else "anthropic")
@@ -329,6 +416,7 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
     trace = start_job_trace(job)
 
     from agenticore.mgmt_log import get_mgmt_logger
+
     mgmt = get_mgmt_logger()
     mgmt.info("job-start id=%s profile=%s repo=%s pod=%s", job.id, job.profile, job.repo_url or "-", pod_name)
 
@@ -351,8 +439,10 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
                 cwd = worktree_path  # Claude runs in the worktree dir
             except Exception as e:
                 return update_job(
-                    job.id, status="failed",
-                    error=f"Worktree creation failed: {e}", ended_at=_now_iso(),
+                    job.id,
+                    status="failed",
+                    error=f"Worktree creation failed: {e}",
+                    ended_at=_now_iso(),
                 )
 
     try:
@@ -489,6 +579,7 @@ async def _run_plan_job(job: Job, plan) -> Job:
     update_job(job.id, status="running", started_at=_now_iso(), pod_name=pod_name)
 
     from agenticore.mgmt_log import get_mgmt_logger
+
     mgmt = get_mgmt_logger()
     mgmt.info("plan-start id=%s plan=%s repo=%s pod=%s", job.id, plan.id, job.repo_url or "-", pod_name)
 

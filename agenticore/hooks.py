@@ -34,7 +34,8 @@ def _get_head_ref(dest: Path) -> str:
     try:
         return subprocess.check_output(
             ["git", "-C", str(dest), "rev-parse", "--short", "HEAD"],
-            text=True, timeout=5,
+            text=True,
+            timeout=5,
         ).strip()
     except Exception:
         return "?"
