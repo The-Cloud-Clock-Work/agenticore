@@ -58,7 +58,6 @@ def _log_job_result(mgmt, job) -> None:
         duration = 0
         if job.started_at and job.ended_at:
             from datetime import datetime
-            fmt = "%Y-%m-%dT%H:%M:%S"
             start = datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))
             end = datetime.fromisoformat(job.ended_at.replace("Z", "+00:00"))
             duration = int((end - start).total_seconds())

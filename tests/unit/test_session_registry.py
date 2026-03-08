@@ -52,7 +52,7 @@ class TestSessionRegistry:
         from agenticore.agent_mode.session_registry import SessionRegistry
 
         reg = SessionRegistry()
-        m1 = reg.register("ext-123", stateless=False)
+        reg.register("ext-123", stateless=False)
         # Simulate first call populating the real session ID
         reg.update_claude_session_id("ext-123", "real-claude-id")
         m2 = reg.register("ext-123", stateless=False)
