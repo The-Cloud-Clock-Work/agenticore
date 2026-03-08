@@ -297,7 +297,6 @@ class TestGetToken:
 
         assert result == {"token": "tok"}
 
-
     def test_expired_token_falls_through_to_slow_path(self):
         """valid=false on fast path → should_stop=False → slow path creates a new request."""
         # Fast path: valid=false (expired)

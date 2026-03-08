@@ -58,6 +58,7 @@ def _log_job_result(mgmt, job) -> None:
         duration = 0
         if job.started_at and job.ended_at:
             from datetime import datetime
+
             start = datetime.fromisoformat(job.started_at.replace("Z", "+00:00"))
             end = datetime.fromisoformat(job.ended_at.replace("Z", "+00:00"))
             duration = int((end - start).total_seconds())
@@ -65,8 +66,14 @@ def _log_job_result(mgmt, job) -> None:
             mgmt.info("job-done id=%s status=succeeded duration=%ds pr=%s", job.id, duration, job.pr_url or "-")
         else:
             err = (job.error or "")[:200]
-            mgmt.warning("job-fail id=%s status=%s duration=%ds exit=%s error=%s",
-                         job.id, job.status, duration, job.exit_code, err)
+            mgmt.warning(
+                "job-fail id=%s status=%s duration=%ds exit=%s error=%s",
+                job.id,
+                job.status,
+                duration,
+                job.exit_code,
+                err,
+            )
     except Exception:
         pass  # never let mgmt logging break job flow
 
@@ -113,6 +120,7 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
 
     _log = logging.getLogger(__name__)
     from agenticore.mgmt_log import get_mgmt_logger
+
     mgmt = get_mgmt_logger()
 
     env = os.environ.copy()
@@ -146,12 +154,14 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
                 else:
                     exp_iso = str(expires_at)
 
-                oauth_json = json.dumps({
-                    "accessToken": access_token,
-                    "refreshToken": refresh_token,
-                    "expiresAt": exp_iso,
-                    "scopes": scope.split() if isinstance(scope, str) else scope,
-                })
+                oauth_json = json.dumps(
+                    {
+                        "accessToken": access_token,
+                        "refreshToken": refresh_token,
+                        "expiresAt": exp_iso,
+                        "scopes": scope.split() if isinstance(scope, str) else scope,
+                    }
+                )
                 env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_json
                 # Remove API key auth — OAuth takes precedence
                 env.pop("ANTHROPIC_AUTH_TOKEN", None)
@@ -364,6 +374,7 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
     trace = start_job_trace(job)
 
     from agenticore.mgmt_log import get_mgmt_logger
+
     mgmt = get_mgmt_logger()
     mgmt.info("job-start id=%s profile=%s repo=%s pod=%s", job.id, job.profile, job.repo_url or "-", pod_name)
 
@@ -386,8 +397,10 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
                 cwd = worktree_path  # Claude runs in the worktree dir
             except Exception as e:
                 return update_job(
-                    job.id, status="failed",
-                    error=f"Worktree creation failed: {e}", ended_at=_now_iso(),
+                    job.id,
+                    status="failed",
+                    error=f"Worktree creation failed: {e}",
+                    ended_at=_now_iso(),
                 )
 
     try:
@@ -524,6 +537,7 @@ async def _run_plan_job(job: Job, plan) -> Job:
     update_job(job.id, status="running", started_at=_now_iso(), pod_name=pod_name)
 
     from agenticore.mgmt_log import get_mgmt_logger
+
     mgmt = get_mgmt_logger()
     mgmt.info("plan-start id=%s plan=%s repo=%s pod=%s", job.id, plan.id, job.repo_url or "-", pod_name)
 

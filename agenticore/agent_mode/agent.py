@@ -274,6 +274,7 @@ class AgentExecutor:
                 if not stateless and not claude_session_id and result.get("session_id"):
                     claude_session_id = result["session_id"]
                     from agenticore.agent_mode.session_registry import update_session_claude_id
+
                     update_session_claude_id(external_uuid, claude_session_id)
                     env["AGENTICORE_CLAUDE_SESSION_ID"] = claude_session_id
 

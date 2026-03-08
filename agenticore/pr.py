@@ -112,7 +112,10 @@ async def _branch_exists(rdir, branch: str) -> bool:
     """Check if a local branch exists."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git", "rev-parse", "--verify", branch,
+            "git",
+            "rev-parse",
+            "--verify",
+            branch,
             cwd=rdir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
