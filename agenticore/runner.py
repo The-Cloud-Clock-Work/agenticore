@@ -116,13 +116,13 @@ def _write_oauth_credentials(
     """Write OAuth credentials to ~/.claude/.credentials.json.
 
     Claude Code reads this file on startup for OAuth-authenticated sessions.
-    Format: {"claudeAiOauth": {"accessToken": ..., "refreshToken": ..., "expiresAt": <ms>, "scopes": [...]}}
+    Format: {"claudeAiOauth": {"accessToken": ..., "refreshToken": ..., "expiresAt": ..., "scopes": [...]}}
     """
     home = Path(claude_home) if claude_home else Path.home() / ".claude"
     creds_file = home / ".credentials.json"
     home.mkdir(parents=True, exist_ok=True)
 
-    # Auth Broker returns seconds, Claude Code expects milliseconds
+    # expires_at: Auth Broker returns seconds, Claude Code expects milliseconds
     if isinstance(expires_at, (int, float)) and expires_at > 0:
         expires_ms = int(expires_at * 1000)
     else:
@@ -151,13 +151,11 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
     """Build full environment for the Claude subprocess.
 
     Credential resolution order:
-      1. Auth Broker (AUTH_BROKER_URL) — OAuth token written to ~/.claude/.credentials.json.
-         Claude Code reads this file and routes through its internal OAuth endpoint.
-         ANTHROPIC_AUTH_TOKEN is removed to prevent conflict.
+      1. Auth Broker (AUTH_BROKER_URL) — Claude Max subscription token, direct Anthropic.
+         When broker returns a token, ANTHROPIC_BASE_URL is cleared so the CLI hits
+         Anthropic directly (not the LiteLLM proxy).
       2. Static env fallback — ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL as configured
          in the container (typically pointing at the LiteLLM proxy).
-         Only works if ANTHROPIC_BASE_URL is present; otherwise cleared to prevent
-         stale LiteLLM keys hitting api.anthropic.com.
     """
     import logging
 
@@ -175,7 +173,7 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
     env["CLAUDE_CODE_HOME_DIR"] = cfg.claude.claude_home_dir
 
     if cfg.auth_broker.url:
-        # Attempt Auth Broker — returns OAuth token for Claude Max subscription
+        # Attempt Auth Broker — returns OAuth token for Claude Code
         # 30s timeout: fast-path returns instantly if token exists,
         # slow-path polls up to 30s for operator approval before falling back
         token_data = _fetch_full_token_from_auth_broker("anthropic", timeout=30)
@@ -189,7 +187,8 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
             scope = token_data.get("scope", "")
 
             if access_token and isinstance(access_token, str) and len(access_token) >= 10:
-                # Write ~/.claude/.credentials.json — Claude Code's native OAuth storage
+                # Write ~/.claude/.credentials.json — Claude Code's native OAuth storage.
+                # This lets Claude Code handle token refresh automatically.
                 _write_oauth_credentials(
                     access_token,
                     refresh_token,
@@ -197,12 +196,12 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
                     scope,
                     claude_home=cfg.claude.claude_home_dir,
                 )
-                # Remove API key env vars — OAuth uses credentials file, not env vars.
-                # ANTHROPIC_AUTH_TOKEN would conflict (Claude sends it to api.anthropic.com
-                # which rejects OAuth tokens).
+                # Also set env var as raw token string (overrides credentials file)
+                env["CLAUDE_CODE_OAUTH_TOKEN"] = access_token
+                # Remove API key auth — OAuth takes precedence
                 env.pop("ANTHROPIC_AUTH_TOKEN", None)
                 env.pop("ANTHROPIC_BASE_URL", None)
-                _log.debug("auth: using Auth Broker OAuth (credentials.json)")
+                _log.debug("auth: using Auth Broker OAuth token (credentials.json + env)")
                 mgmt.info("auth broker=OK provider=anthropic-oauth")
             else:
                 _log.warning("Auth Broker returned empty/malformed token — falling back")
@@ -213,12 +212,6 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
                 "falling back to static ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL"
             )
             mgmt.warning("auth broker=FAIL fallback=static")
-        # Fallback safety: if ANTHROPIC_BASE_URL is missing, clear ANTHROPIC_AUTH_TOKEN
-        # to prevent stale LiteLLM key going to api.anthropic.com.
-        # Claude Code will use persisted .credentials.json from NFS instead.
-        if "ANTHROPIC_AUTH_TOKEN" in env and "ANTHROPIC_BASE_URL" not in env:
-            _log.warning("auth: clearing orphaned ANTHROPIC_AUTH_TOKEN (no ANTHROPIC_BASE_URL)")
-            env.pop("ANTHROPIC_AUTH_TOKEN", None)
     else:
         base_url = env.get("ANTHROPIC_BASE_URL", "")
         mgmt.info("auth static provider=%s", "litellm" if base_url else "anthropic")

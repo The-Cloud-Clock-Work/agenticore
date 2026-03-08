@@ -127,3 +127,26 @@ async def get_history(limit: int = 50) -> list:
     """Return up to `limit` historical requests, newest first."""
     raw = await _redis.zrevrange("auth:history", 0, limit - 1)
     return [json.loads(r) for r in raw]
+
+
+async def deny_all_pending() -> list[str]:
+    """Deny all pending requests. Returns list of denied request IDs."""
+    ids = await _redis.zrange("auth:pending", 0, -1)
+    denied_ids = []
+    for rid in ids:
+        data = await _redis.hgetall(f"auth:request:{rid}")
+        if data:
+            await update_status(rid, AuthStatus.denied)
+            denied_ids.append(rid)
+    return denied_ids
+
+
+async def find_pending_by_service(service: str, consumer_id: str) -> List[str]:
+    """Return request IDs from auth:pending that match service+consumer_id."""
+    ids = await _redis.zrange("auth:pending", 0, -1)
+    matches = []
+    for rid in ids:
+        data = await _redis.hgetall(f"auth:request:{rid}")
+        if data and data.get("service") == service and data.get("consumer_id") == consumer_id:
+            matches.append(rid)
+    return matches
