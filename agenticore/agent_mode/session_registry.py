@@ -102,7 +102,7 @@ class SessionRegistry:
                 self._save(existing)
                 return existing
 
-        claude_session_id = external_uuid if not stateless else str(uuid.uuid4())
+        claude_session_id = "" if not stateless else str(uuid.uuid4())
         now = _now_iso()
         mapping = SessionMapping(
             external_uuid=external_uuid,
@@ -141,6 +141,14 @@ class SessionRegistry:
             mapping.updated_at = _now_iso()
             self._save(mapping)
 
+    def update_claude_session_id(self, external_uuid: str, claude_session_id: str) -> None:
+        """Store the real Claude session ID after first successful call."""
+        mapping = self.get(external_uuid)
+        if mapping and mapping.status == "active":
+            mapping.claude_session_id = claude_session_id
+            mapping.updated_at = _now_iso()
+            self._save(mapping)
+
     def _save(self, mapping: SessionMapping) -> None:
         data = mapping.to_dict()
 
@@ -173,6 +181,10 @@ def mark_session_complete(external_uuid: str) -> None:
 
 def mark_session_failed(external_uuid: str) -> None:
     _registry.mark_failed(external_uuid)
+
+
+def update_session_claude_id(external_uuid: str, claude_session_id: str) -> None:
+    _registry.update_claude_session_id(external_uuid, claude_session_id)
 
 
 def resolve_external_uuid(external_uuid: str) -> Optional[SessionMapping]:

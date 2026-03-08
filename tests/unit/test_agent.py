@@ -576,9 +576,9 @@ class TestAgentExecutor:
         assert cmd[sid_idx] != "ext-uuid"
 
     @pytest.mark.asyncio
-    async def test_execute_persistent_uses_resume(self, _agent_env):
-        """Persistent calls use --resume with external UUID."""
-        output = json.dumps({"result": "ok"})
+    async def test_execute_persistent_first_call_no_resume(self, _agent_env):
+        """First persistent call has no --resume (empty claude_session_id)."""
+        output = json.dumps({"result": "ok", "session_id": "real-sid"})
         mock_proc = _mock_subprocess(output)
 
         captured_cmds = []
@@ -592,8 +592,8 @@ class TestAgentExecutor:
             await executor.execute(message="test", external_uuid="persist-uuid", stateless=False, wait=True)
 
         cmd = captured_cmds[0]
-        assert "--resume" in cmd
-        assert "persist-uuid" in cmd
+        assert "--resume" not in cmd
+        assert "--session-id" not in cmd
 
     @pytest.mark.asyncio
     async def test_execute_with_context_via_stdin(self, _agent_env):
@@ -849,3 +849,45 @@ class TestAgentExecutor:
             result = await executor.execute(message="test", external_uuid="comm-timeout", wait=True)
 
         assert result["is_error"] is True
+
+    @pytest.mark.asyncio
+    async def test_persistent_first_call_captures_session_id(self, _agent_env):
+        """First persistent call captures real Claude session ID in registry."""
+        from agenticore.agent_mode.session_registry import resolve_external_uuid
+
+        output = json.dumps({"result": "Hello!", "session_id": "real-claude-sid"})
+        mock_proc = _mock_subprocess(output)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            result = await executor.execute(message="hi", external_uuid="capture-uuid", stateless=False, wait=True)
+
+        assert result["session_id"] == "real-claude-sid"
+        mapping = resolve_external_uuid("capture-uuid")
+        assert mapping.claude_session_id == "real-claude-sid"
+
+    @pytest.mark.asyncio
+    async def test_persistent_second_call_uses_resume(self, _agent_env):
+        """Second persistent call uses --resume with real Claude session ID."""
+        from agenticore.agent_mode.session_registry import register_session, update_session_claude_id
+
+        # Pre-populate registry as if first call already happened
+        register_session("resume-uuid", stateless=False)
+        update_session_claude_id("resume-uuid", "established-sid")
+
+        output = json.dumps({"result": "Continued!", "session_id": "established-sid"})
+        mock_proc = _mock_subprocess(output)
+
+        captured_cmds = []
+
+        async def capture_exec(*args, **kwargs):
+            captured_cmds.append(list(args))
+            return mock_proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=capture_exec):
+            executor = AgentExecutor()
+            await executor.execute(message="continue", external_uuid="resume-uuid", stateless=False, wait=True)
+
+        cmd = captured_cmds[0]
+        assert "--resume" in cmd
+        assert "established-sid" in cmd

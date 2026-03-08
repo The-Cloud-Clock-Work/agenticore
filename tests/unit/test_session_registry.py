@@ -44,7 +44,7 @@ class TestSessionRegistry:
         reg = SessionRegistry()
         mapping = reg.register("ext-123", stateless=False)
         assert mapping.external_uuid == "ext-123"
-        assert mapping.claude_session_id == "ext-123"  # same as external for persistent
+        assert mapping.claude_session_id == ""  # empty until first Claude call
         assert mapping.session_type == "persistent"
         assert mapping.status == "active"
 
@@ -53,8 +53,10 @@ class TestSessionRegistry:
 
         reg = SessionRegistry()
         m1 = reg.register("ext-123", stateless=False)
+        # Simulate first call populating the real session ID
+        reg.update_claude_session_id("ext-123", "real-claude-id")
         m2 = reg.register("ext-123", stateless=False)
-        assert m1.claude_session_id == m2.claude_session_id
+        assert m2.claude_session_id == "real-claude-id"
 
     def test_register_stateless_always_fresh(self, _clean_sessions):
         from agenticore.agent_mode.session_registry import SessionRegistry
@@ -98,7 +100,7 @@ class TestSessionRegistry:
         reg2 = SessionRegistry()
         mapping = reg2.get("ext-persist")
         assert mapping is not None
-        assert mapping.claude_session_id == "ext-persist"
+        assert mapping.claude_session_id == ""
 
     def test_completed_session_not_reused_by_persistent(self, _clean_sessions):
         """A completed persistent session should create a NEW mapping when re-registered."""
@@ -111,8 +113,8 @@ class TestSessionRegistry:
         # Re-register — the completed one should not be reused
         mapping = reg.register("ext-done", stateless=False)
         assert mapping.status == "active"
-        # The session ID is still the external UUID for persistent
-        assert mapping.claude_session_id == "ext-done"
+        # New persistent session starts with empty claude_session_id
+        assert mapping.claude_session_id == ""
 
     def test_failed_session_not_reused_by_persistent(self, _clean_sessions):
         """A failed persistent session should create a NEW mapping."""
@@ -155,6 +157,35 @@ class TestSessionRegistry:
         _clean_sessions.write_text("{{not json}}")
         reg = SessionRegistry()
         assert reg.get("any") is None
+
+    def test_update_claude_session_id(self, _clean_sessions):
+        from agenticore.agent_mode.session_registry import SessionRegistry
+
+        reg = SessionRegistry()
+        reg.register("ext-upd", stateless=False)
+        reg.update_claude_session_id("ext-upd", "real-claude-abc")
+        mapping = reg.get("ext-upd")
+        assert mapping.claude_session_id == "real-claude-abc"
+
+    def test_update_only_active_sessions(self, _clean_sessions):
+        from agenticore.agent_mode.session_registry import SessionRegistry
+
+        reg = SessionRegistry()
+        reg.register("ext-done2", stateless=False)
+        reg.mark_complete("ext-done2")
+        reg.update_claude_session_id("ext-done2", "should-not-stick")
+        mapping = reg.get("ext-done2")
+        assert mapping.claude_session_id == ""
+
+    def test_reuse_established_session(self, _clean_sessions):
+        from agenticore.agent_mode.session_registry import SessionRegistry
+
+        reg = SessionRegistry()
+        reg.register("ext-est", stateless=False)
+        reg.update_claude_session_id("ext-est", "real-id-xyz")
+        # Re-register should reuse the established session
+        m = reg.register("ext-est", stateless=False)
+        assert m.claude_session_id == "real-id-xyz"
 
     def test_multiple_registrations_tracked(self, _clean_sessions):
         """Multiple distinct sessions coexist in the file."""
