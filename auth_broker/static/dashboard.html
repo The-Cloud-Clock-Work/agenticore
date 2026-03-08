@@ -116,6 +116,10 @@
 
   <section>
     <h2>Pending Requests</h2>
+    <div id="bulk-actions" style="display:none;margin-bottom:0.75rem;gap:0.5rem">
+      <button class="primary" onclick="authorizeAll()">🔗 Authorize All</button>
+      <button class="danger" onclick="denyAll()">✕ Deny All</button>
+    </div>
     <div id="pending-list"><div class="empty">Loading...</div></div>
   </section>
 
@@ -212,6 +216,27 @@
       loadPending();
     }
 
+    async function denyAll() {
+      if (!confirm('Deny all pending requests?')) return;
+      const resp = await fetch('/auth/requests/pending', {
+        method: 'DELETE',
+        headers
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        loadPending();
+        loadHistory();
+        toast(`🚫 Denied ${data.denied} requests`);
+      }
+    }
+
+    function authorizeAll() {
+      const links = document.querySelectorAll('#pending-list a[target="_blank"]');
+      if (links.length === 0) return;
+      links.forEach(a => window.open(a.href, '_blank'));
+      toast(`🔗 Opened ${links.length} auth URLs`);
+    }
+
     async function submitManual(id) {
       const inp = document.getElementById(`manual-${id}`);
       const token = inp.value.trim();
@@ -228,12 +253,15 @@
     // ── Render ───────────────────────────────────────────────────────────────
     function renderPending(requests) {
       const el = document.getElementById('pending-list');
+      const bulk = document.getElementById('bulk-actions');
       const active = requests.filter(r => !['completed','denied'].includes(r.status));
       if (active.length === 0) {
         el.innerHTML = '<div class="empty">No pending requests.</div>';
+        bulk.style.display = 'none';
         return;
       }
       el.innerHTML = active.map(r => cardHTML(r)).join('');
+      bulk.style.display = 'flex';
     }
 
     async function submitCode(id) {

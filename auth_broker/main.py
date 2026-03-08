@@ -174,12 +174,27 @@ async def create_auth_request(
             return {"request_id": None, "status": AuthStatus.completed.value,
                     "token": existing, "cached": True}
 
+    # Dedup: deny any existing pending requests for the same service+consumer_id
+    existing_pending = await store.find_pending_by_service(req.service, req.consumer_id)
+    for old_id in existing_pending:
+        await store.update_status(old_id, AuthStatus.denied)
+        await ws_module.ws_manager.broadcast("request_denied", {"id": old_id})
+        await store.append_event("request_superseded", {"id": old_id, "service": req.service})
+
     request_id = await store.create_request(
         service=req.service,
         consumer_id=req.consumer_id,
         callback_url=req.callback_url,
         scopes=req.scopes or provider.get("scopes", []),
     )
+
+    # Post-create dedup: deny any older pending for same service+consumer_id
+    remaining = await store.find_pending_by_service(req.service, req.consumer_id)
+    for old_id in remaining:
+        if old_id != request_id:
+            await store.update_status(old_id, AuthStatus.denied)
+            await ws_module.ws_manager.broadcast("request_denied", {"id": old_id})
+            await store.append_event("request_superseded", {"id": old_id, "replaced_by": request_id})
 
     auth_url = None
     if provider.get("auth_type") == "oauth2":
@@ -282,6 +297,16 @@ async def deny_request(request_id: str, _: None = Depends(require_auth)) -> dict
     await ws_module.ws_manager.broadcast("request_denied", {"id": request_id})
     await store.append_event("request_denied", {"id": request_id})
     return {"request_id": request_id, "status": "denied"}
+
+
+@app.delete("/auth/requests/pending")
+async def deny_all_pending(_: None = Depends(require_auth)) -> dict:
+    """Deny all pending requests at once."""
+    denied_ids = await store.deny_all_pending()
+    for req_id in denied_ids:
+        await ws_module.ws_manager.broadcast("request_denied", {"id": req_id})
+        await store.append_event("request_denied", {"id": req_id})
+    return {"denied": len(denied_ids), "ids": denied_ids}
 
 
 @app.post("/auth/code/{request_id}")
