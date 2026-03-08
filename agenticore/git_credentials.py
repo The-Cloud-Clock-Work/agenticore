@@ -44,11 +44,17 @@ def git_askpass_env(token: Optional[str]):
             "GIT_ASKPASS": script_path,
             "_AGENTICORE_GIT_CREDENTIAL": token,
             "GIT_TERMINAL_PROMPT": "0",
-            # Set credential.username via env so git uses x-access-token as
-            # the username without needing a .gitconfig entry.
-            "GIT_CONFIG_COUNT": "1",
+            # Override credential config via env to:
+            # 1. Set username to x-access-token (GitHub App/PAT convention)
+            # 2. Disable any credential.helper (e.g. gh auth git-credential)
+            #    so GIT_ASKPASS is actually used
+            "GIT_CONFIG_COUNT": "3",
             "GIT_CONFIG_KEY_0": "credential.username",
             "GIT_CONFIG_VALUE_0": "x-access-token",
+            "GIT_CONFIG_KEY_1": "credential.https://github.com.helper",
+            "GIT_CONFIG_VALUE_1": "",
+            "GIT_CONFIG_KEY_2": "credential.helper",
+            "GIT_CONFIG_VALUE_2": "",
         }
         yield env
     finally:
