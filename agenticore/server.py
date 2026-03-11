@@ -811,7 +811,15 @@ def _build_rest_app():
             message = flatten_messages(messages)
             headers = {k.decode(): v.decode() for k, v in request.scope.get("headers", [])}
             request_uuid = extract_request_id(headers, body)
-            model_name = body.get("model", "")
+            raw_model = body.get("model", "")
+            # Strip provider prefixes (e.g. "openai/publishing-agent") and
+            # ignore model names that aren't valid Claude model aliases.
+            valid_models = {"sonnet", "opus", "haiku", "claude-sonnet-4-6",
+                            "claude-opus-4-6", "claude-haiku-4-5",
+                            "claude-sonnet-4-5", "claude-sonnet-4"}
+            model_name = raw_model.split("/")[-1] if "/" in raw_model else raw_model
+            if model_name not in valid_models:
+                model_name = ""  # fall back to AGENT_MODE_MODEL default
 
             executor = AgentExecutor()
             result = await executor.execute(
@@ -819,7 +827,7 @@ def _build_rest_app():
                 external_uuid=request_uuid,
                 wait=True,
                 stateless=True,
-                model=model_name if model_name else "",
+                model=model_name,
                 timeout=body.get("timeout", 0),
             )
 
