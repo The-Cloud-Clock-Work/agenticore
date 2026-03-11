@@ -796,6 +796,7 @@ def _build_rest_app():
             from agenticore.agent_mode.openai_compat import (
                 build_openai_error,
                 build_openai_response,
+                build_openai_stream_chunks,
                 extract_request_id,
                 flatten_messages,
             )
@@ -806,10 +807,7 @@ def _build_rest_app():
                 err, code = build_openai_error("messages is required", 400)
                 return JSONResponse(err, status_code=code)
 
-            if body.get("stream", False):
-                err, code = build_openai_error("streaming not yet supported", 501)
-                return JSONResponse(err, status_code=code)
-
+            stream = body.get("stream", False)
             message = flatten_messages(messages)
             headers = {k.decode(): v.decode() for k, v in request.scope.get("headers", [])}
             request_uuid = extract_request_id(headers, body)
@@ -828,6 +826,10 @@ def _build_rest_app():
             if result.get("is_error"):
                 err, code = build_openai_error(result.get("error", "Agent error"), 500)
                 return JSONResponse(err, status_code=code)
+
+            if stream:
+                sse_payload = build_openai_stream_chunks(result, model_name, request_uuid)
+                return Response(sse_payload, media_type="text/event-stream")
 
             return JSONResponse(build_openai_response(result, model_name, request_uuid))
 
