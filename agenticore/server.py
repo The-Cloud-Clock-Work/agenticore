@@ -591,7 +591,7 @@ def _build_rest_app():
     """Build a Starlette app with REST endpoints mirroring MCP tools."""
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.responses import JSONResponse
+    from starlette.responses import JSONResponse, Response
     from starlette.routing import Route
 
     def health(request: Request):  # noqa: ARG001 — Starlette requires request param
