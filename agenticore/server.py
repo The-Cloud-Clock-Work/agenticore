@@ -591,7 +591,7 @@ def _build_rest_app():
     """Build a Starlette app with REST endpoints mirroring MCP tools."""
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.responses import JSONResponse
+    from starlette.responses import JSONResponse, Response
     from starlette.routing import Route
 
     def health(request: Request):  # noqa: ARG001 — Starlette requires request param
@@ -791,6 +791,71 @@ def _build_rest_app():
 
             return JSONResponse({"success": True, "notifications": asdict(config)})
 
+        async def post_openai_chat_completions(request: Request):
+            from agenticore.agent_mode.agent import AgentExecutor
+            from agenticore.agent_mode.openai_compat import (
+                build_openai_error,
+                build_openai_response,
+                build_openai_stream_chunks,
+                extract_request_id,
+                flatten_messages,
+            )
+
+            body = await request.json()
+            messages = body.get("messages")
+            if not messages:
+                err, code = build_openai_error("messages is required", 400)
+                return JSONResponse(err, status_code=code)
+
+            stream = body.get("stream", False)
+            message = flatten_messages(messages)
+            headers = {k.decode(): v.decode() for k, v in request.scope.get("headers", [])}
+            request_uuid = extract_request_id(headers, body)
+            raw_model = body.get("model", "")
+            # Strip provider prefixes (e.g. "openai/publishing-agent") and
+            # ignore model names that aren't valid Claude model aliases.
+            valid_models = {"sonnet", "opus", "haiku", "claude-sonnet-4-6",
+                            "claude-opus-4-6", "claude-haiku-4-5",
+                            "claude-sonnet-4-5", "claude-sonnet-4"}
+            model_name = raw_model.split("/")[-1] if "/" in raw_model else raw_model
+            if model_name not in valid_models:
+                model_name = ""  # fall back to AGENT_MODE_MODEL default
+
+            executor = AgentExecutor()
+            result = await executor.execute(
+                message=message,
+                external_uuid=request_uuid,
+                wait=True,
+                stateless=True,
+                model=model_name,
+                timeout=body.get("timeout", 0),
+            )
+
+            if result.get("is_error"):
+                err, code = build_openai_error(result.get("error", "Agent error"), 500)
+                return JSONResponse(err, status_code=code)
+
+            if stream:
+                sse_payload = build_openai_stream_chunks(result, model_name, request_uuid)
+                return Response(sse_payload, media_type="text/event-stream")
+
+            return JSONResponse(build_openai_response(result, model_name, request_uuid))
+
+        async def get_openai_models(request: Request):
+            return JSONResponse(
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": cfg.agent_mode.model or "agenticore-agent",
+                            "object": "model",
+                            "created": 0,
+                            "owned_by": "agenticore",
+                        }
+                    ],
+                }
+            )
+
     routes = [
         Route("/health", health, methods=["GET"]),
         Route("/jobs", post_jobs, methods=["POST"]),
@@ -811,6 +876,8 @@ def _build_rest_app():
                 Route("/completions", get_completions_list, methods=["GET"]),
                 Route("/completions/{uuid:path}", get_completion_route, methods=["GET"]),
                 Route("/completions/{uuid:path}/notifications", patch_notifications_route, methods=["PATCH"]),
+                Route("/v1/chat/completions", post_openai_chat_completions, methods=["POST"]),
+                Route("/v1/models", get_openai_models, methods=["GET"]),
             ]
         )
 

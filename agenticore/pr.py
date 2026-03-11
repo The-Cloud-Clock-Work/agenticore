@@ -25,7 +25,7 @@ async def create_auto_pr(job: Job) -> Optional[str]:
     """Create a PR for a completed job.
 
     Requires:
-    - GITHUB_TOKEN in env (for ``gh`` CLI)
+    - A GitHub token (App, Auth Broker, or static GITHUB_TOKEN)
     - Changes committed by Claude in the worktree branch
 
     Returns:
@@ -196,36 +196,63 @@ async def _push_branch(rdir, branch: str) -> bool:
 
 
 async def _create_pr(rdir, branch: str, job: Job) -> Optional[str]:
-    """Create a PR using the gh CLI."""
+    """Create a PR using the GitHub REST API.
+
+    Uses REST instead of ``gh`` CLI because GitHub App installation tokens
+    fail GraphQL repo resolution in ``gh pr create``.
+    """
+    import re
+
+    import httpx
+
     title = job.task[:70] if len(job.task) > 70 else job.task
     body = f"Job: {job.id}\n\nTask: {job.task}\n\nProfile: {job.profile}"
 
     token = resolve_github_token()
-    env = os.environ.copy()
-    if token:
-        env["GITHUB_TOKEN"] = token
+    if not token:
+        print("PR creation skipped: no GitHub token", file=sys.stderr)
+        return None
 
+    # Extract owner/repo from the remote URL
     try:
         result = await asyncio.create_subprocess_exec(
-            "gh",
-            "pr",
-            "create",
-            "--title",
-            title,
-            "--body",
-            body,
-            "--head",
-            branch,
+            "git",
+            "remote",
+            "get-url",
+            "origin",
             cwd=rdir,
-            env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await result.communicate()
-        if result.returncode == 0:
-            return stdout.decode().strip()
+        stdout, _ = await result.communicate()
+        remote_url = stdout.decode().strip()
+    except Exception:
+        return None
+
+    # Parse owner/repo from HTTPS or SSH URL
+    m = re.match(r"https?://github\.com/([^/]+)/([^/.]+?)(?:\.git)?/?$", remote_url)
+    if not m:
+        m = re.match(r"git@github\.com:([^/]+)/([^/.]+?)(?:\.git)?$", remote_url)
+    if not m:
+        print(f"PR creation failed: cannot parse remote URL: {remote_url}", file=sys.stderr)
+        return None
+
+    owner, repo_name = m.group(1), m.group(2)
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"https://api.github.com/repos/{owner}/{repo_name}/pulls",
+                json={"title": title, "head": branch, "base": "main", "body": body},
+                headers={
+                    "Authorization": f"token {token}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+        if resp.status_code == 201:
+            return resp.json().get("html_url", "")
         else:
-            print(f"PR creation failed: {stderr.decode()}", file=sys.stderr)
+            print(f"PR creation failed: HTTP {resp.status_code} — {resp.text[:200]}", file=sys.stderr)
             return None
     except Exception as e:
         print(f"PR creation error: {e}", file=sys.stderr)

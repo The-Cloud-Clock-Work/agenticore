@@ -117,7 +117,6 @@
   <section>
     <h2>Pending Requests</h2>
     <div id="bulk-actions" style="display:none;margin-bottom:0.75rem;gap:0.5rem">
-      <button class="primary" onclick="authorizeAll()">🔗 Authorize All</button>
       <button class="danger" onclick="denyAll()">✕ Deny All</button>
     </div>
     <div id="pending-list"><div class="empty">Loading...</div></div>
@@ -230,13 +229,6 @@
       }
     }
 
-    function authorizeAll() {
-      const links = document.querySelectorAll('#pending-list a[target="_blank"]');
-      if (links.length === 0) return;
-      links.forEach(a => window.open(a.href, '_blank'));
-      toast(`🔗 Opened ${links.length} auth URLs`);
-    }
-
     async function submitManual(id) {
       const inp = document.getElementById(`manual-${id}`);
       const token = inp.value.trim();
@@ -292,10 +284,13 @@
         ? `<a href="${authUrl}" target="_blank"><button class="primary">🔗 Authorize</button></a>`
         : '';
 
+      const codeHint = r.service === 'openai-codex'
+        ? 'After authorizing, the browser will redirect to a blank page. Copy the <strong>full URL</strong> from the address bar and paste below.'
+        : 'After authorizing, copy everything shown on screen (code, <code style="color:#888">code#state</code>, or full URL) and paste below.';
+
       const codeSection = isManualCode
         ? `<div style="margin-top:0.75rem;font-size:0.75rem;color:#888;">
-             After authorizing, copy everything shown on <code style="color:#aaa">platform.claude.com</code> and paste below.<br>
-             All formats auto-extracted: plain code, <code style="color:#888">code#state</code>, or full URL.
+             ${codeHint}
            </div>
            <div class="manual-input">
              <input id="code-${r.id}" type="text" placeholder="Paste code or full redirect URL..." />

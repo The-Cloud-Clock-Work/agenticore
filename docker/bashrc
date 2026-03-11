@@ -5,7 +5,7 @@ alias cc='claude --dangerously-skip-permissions'
 alias gs='git status'
 alias gp='git push'
 gc() { git add -A && git commit -m "$(claude -p 'Write a short conventional commit message for this diff. Output ONLY the message, nothing else.' <<< "$(git diff --cached --stat)")"; }
-anton() { cd /app/package && ANTHROPIC_AUTH_TOKEN="${LITELLM_MCP_GATEWAY_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}" claude --dangerously-skip-permissions "$@"; }
+anton() { cd /app/package && unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"; }
 agentipull() {
   echo "Pulling agentihooks..."
   agenticore hooks sync && agentihooks global --force
@@ -40,7 +40,7 @@ helpme() {
   echo "========================================"
   echo ""
   echo "  Shell Commands:"
-  echo "    anton [args]     Claude with LiteLLM gateway auth"
+  echo "    anton [args]     Claude with OAuth auth (credentials.json)"
   echo "    cc [args]        Claude (skip permissions)"
   echo "    gc               Auto-commit with AI message"
   echo "    gs / gp          Git status / push"
