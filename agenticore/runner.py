@@ -80,7 +80,7 @@ def _log_job_result(mgmt, job) -> None:
 
 def _fetch_from_auth_broker(
     service: str,
-    consumer_id: str = "agenticore",
+    consumer_id: str = "default",
     timeout: int = 300,
 ) -> Optional[str]:
     """Fetch a credential string from Auth Broker. Returns None if unavailable."""
@@ -94,7 +94,7 @@ def _fetch_from_auth_broker(
 
 def _fetch_full_token_from_auth_broker(
     service: str,
-    consumer_id: str = "agenticore",
+    consumer_id: str = "default",
     timeout: int = 300,
 ) -> Optional[dict]:
     """Fetch full token dict from Auth Broker (includes refresh_token, expires_at)."""
