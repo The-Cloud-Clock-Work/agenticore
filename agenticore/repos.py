@@ -183,6 +183,15 @@ def create_worktree(repo_dir: Path, job_id: str, base_ref: str = "") -> tuple[Pa
     branch = f"agenticore-{job_id[:8]}"
     wt_dir = repo_dir / ".claude" / "worktrees" / job_id
 
+    # Wait for repo_dir to be visible on NFS (post-clone propagation)
+    for attempt in range(5):
+        if repo_dir.exists() and (repo_dir / ".git").exists():
+            break
+        logger.warning("repo_dir not visible on NFS (attempt %d/5): %s", attempt + 1, repo_dir)
+        time.sleep(0.5)
+    else:
+        raise FileNotFoundError(f"repo_dir not visible after 5 retries (NFS?): {repo_dir}")
+
     if not base_ref:
         base_ref = get_default_branch(repo_dir)
 
