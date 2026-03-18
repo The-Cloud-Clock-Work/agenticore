@@ -83,12 +83,6 @@ class GithubConfig:
 
 
 @dataclass
-class AuthBrokerConfig:
-    url: str = ""
-    api_key: str = ""
-
-
-@dataclass
 class AgentModeConfig:
     enabled: bool = False
     package_dir: str = "/app/package"
@@ -127,7 +121,6 @@ class Config:
     otel: OtelConfig = field(default_factory=OtelConfig)
     github: GithubConfig = field(default_factory=GithubConfig)
     langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
-    auth_broker: AuthBrokerConfig = field(default_factory=AuthBrokerConfig)
     agent_mode: AgentModeConfig = field(default_factory=AgentModeConfig)
     agentihooks_path: str = ""
     agentihooks_url: str = ""
@@ -327,13 +320,6 @@ def load_config(config_path: Optional[str] = None) -> Config:
     agentihub_path = _env("AGENTIHUB_PATH", raw.get("agentihub_path", ""))
     agentihub_sync_interval = _env_int("AGENTIHUB_SYNC_INTERVAL", str(raw.get("agentihub_sync_interval", 0)))
 
-    # Auth Broker — env overrides
-    auth_broker_raw = raw.get("auth_broker", {})
-    auth_broker = AuthBrokerConfig(
-        url=_env("AUTH_BROKER_URL", auth_broker_raw.get("url", "")),
-        api_key=_env("AUTH_BROKER_API_KEY", auth_broker_raw.get("api_key", "")),
-    )
-
     return Config(
         repos=repos,
         claude=claude,
@@ -342,7 +328,6 @@ def load_config(config_path: Optional[str] = None) -> Config:
         otel=otel,
         github=github,
         langfuse=langfuse,
-        auth_broker=auth_broker,
         agent_mode=agent_mode,
         agentihooks_path=agentihooks_path,
         agentihooks_url=agentihooks_url,

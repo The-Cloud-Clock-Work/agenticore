@@ -530,24 +530,18 @@ Full reference: [Configuration docs](docs/reference/configuration.md)
 
 ---
 
-## Auth Broker
-
-For environments where Claude Code jobs need **short-lived, human-authorized
-tokens** (rather than long-lived static keys), Agenticore integrates with
-**Auth Broker** — a companion service that handles OAuth flows on behalf of
-running jobs.
+## Authentication
 
 Agenticore resolves Claude credentials in order:
 
-1. **Auth Broker** (`AUTH_BROKER_URL`) — returns a Claude Max subscription token; `ANTHROPIC_BASE_URL` is cleared so Claude Code hits Anthropic directly (not the LiteLLM proxy).
-2. **Static env** — `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` as configured (typically pointing at the LiteLLM proxy).
+1. **`CLAUDE_CODE_OAUTH_TOKEN`** — Long-lived OAuth token (set as a K8s secret or env var). When present, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are removed so Claude Code talks directly to Anthropic.
+2. **Static env** — `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` as configured (typically pointing at a LiteLLM proxy).
 
-When `AUTH_BROKER_URL` is set, the runner fetches credentials at job start
-instead of reading them from environment variables. A pod requests a token,
-Auth Broker notifies an operator, the operator approves via OAuth, and the
-token lands in the job environment — no secret rotation required.
+GitHub token resolution:
 
-Auth Broker ships as a separate Docker image: `tccw/auth-broker`.
+1. **GitHub App** — `GITHUB_APP_ID` + private key + `GITHUB_APP_INSTALLATION_ID` (short-lived, auto-rotated).
+2. **Static `GITHUB_TOKEN`** — PAT (classic or fine-grained).
+3. **None** — public repos only, no PRs.
 
 ---
 

@@ -78,84 +78,13 @@ def _log_job_result(mgmt, job) -> None:
         pass  # never let mgmt logging break job flow
 
 
-def _fetch_from_auth_broker(
-    service: str,
-    consumer_id: str = "default",
-    timeout: int = 300,
-) -> Optional[str]:
-    """Fetch a credential string from Auth Broker. Returns None if unavailable."""
-    from agenticore.auth_client import AuthClient  # lazy import
-
-    client = AuthClient()
-    if not client.enabled:
-        return None
-    return client.get_credential(service, consumer_id=consumer_id, timeout=timeout)
-
-
-def _fetch_full_token_from_auth_broker(
-    service: str,
-    consumer_id: str = "default",
-    timeout: int = 300,
-) -> Optional[dict]:
-    """Fetch full token dict from Auth Broker (includes refresh_token, expires_at)."""
-    from agenticore.auth_client import AuthClient  # lazy import
-
-    client = AuthClient()
-    if not client.enabled:
-        return None
-    return client.get_token(service, consumer_id=consumer_id, timeout=timeout)
-
-
-def _write_oauth_credentials(
-    access_token: str,
-    refresh_token: str,
-    expires_at,
-    scope,
-    claude_home: str = "",
-) -> None:
-    """Write OAuth credentials to ~/.claude/.credentials.json.
-
-    Claude Code reads this file on startup for OAuth-authenticated sessions.
-    Format: {"claudeAiOauth": {"accessToken": ..., "refreshToken": ..., "expiresAt": ..., "scopes": [...]}}
-    """
-    home = Path(claude_home) if claude_home else Path.home() / ".claude"
-    creds_file = home / ".credentials.json"
-    home.mkdir(parents=True, exist_ok=True)
-
-    # expires_at: Auth Broker returns seconds, Claude Code expects milliseconds
-    if isinstance(expires_at, (int, float)) and expires_at > 0:
-        expires_ms = int(expires_at * 1000)
-    else:
-        expires_ms = 0
-
-    scopes = scope.split() if isinstance(scope, str) else (scope or [])
-
-    creds = {}
-    if creds_file.exists():
-        try:
-            creds = json.loads(creds_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    creds["claudeAiOauth"] = {
-        "accessToken": access_token,
-        "refreshToken": refresh_token or "",
-        "expiresAt": expires_ms,
-        "scopes": scopes,
-    }
-
-    creds_file.write_text(json.dumps(creds, indent=2))
 
 
 def _build_env(_cwd: Optional[Path] = None) -> dict:
     """Build full environment for the Claude subprocess.
 
-    Credential resolution order:
-      1. Auth Broker (AUTH_BROKER_URL) — Claude Max subscription token, direct Anthropic.
-         When broker returns a token, ANTHROPIC_BASE_URL is cleared so the CLI hits
-         Anthropic directly (not the LiteLLM proxy).
-      2. Static env fallback — ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL as configured
-         in the container (typically pointing at the LiteLLM proxy).
+    Auth uses CLAUDE_CODE_OAUTH_TOKEN (set externally as a secret) when present,
+    otherwise falls back to ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL.
     """
     import logging
 
@@ -168,50 +97,16 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
     env.update(_build_otel_env())
 
     cfg = get_config()
-    # CLAUDE_CONFIG_DIR intentionally NOT set — Claude Code uses ~/.claude/ by default.
-    # Agentihooks installs profiles into ~/.claude/ at container startup.
     env["CLAUDE_CODE_HOME_DIR"] = cfg.claude.claude_home_dir
 
-    if cfg.auth_broker.url:
-        # Attempt Auth Broker — returns OAuth token for Claude Code
-        # 30s timeout: fast-path returns instantly if token exists,
-        # slow-path polls up to 30s for operator approval before falling back
-        token_data = _fetch_full_token_from_auth_broker("anthropic", timeout=30)
-        if token_data and isinstance(token_data, dict):
-            # Extract access token — may be a string or nested dict
-            access_token = token_data.get("token", "")
-            if isinstance(access_token, dict):
-                access_token = access_token.get("token") or access_token.get("access_token") or ""
-            refresh_token = token_data.get("refresh_token", "")
-            expires_at = token_data.get("expires_at", 0)
-            scope = token_data.get("scope", "")
-
-            if access_token and isinstance(access_token, str) and len(access_token) >= 10:
-                # Write ~/.claude/.credentials.json — Claude Code's native OAuth storage.
-                # This lets Claude Code handle token refresh automatically.
-                _write_oauth_credentials(
-                    access_token,
-                    refresh_token,
-                    expires_at,
-                    scope,
-                    claude_home=cfg.claude.claude_home_dir,
-                )
-                # Also set env var as raw token string (overrides credentials file)
-                env["CLAUDE_CODE_OAUTH_TOKEN"] = access_token
-                # Remove API key auth — OAuth takes precedence
-                env.pop("ANTHROPIC_AUTH_TOKEN", None)
-                env.pop("ANTHROPIC_BASE_URL", None)
-                _log.debug("auth: using Auth Broker OAuth token (credentials.json + env)")
-                mgmt.info("auth broker=OK provider=anthropic-oauth")
-            else:
-                _log.warning("Auth Broker returned empty/malformed token — falling back")
-                mgmt.warning("auth broker=FAIL fallback=static")
-        else:
-            _log.warning(
-                "Auth Broker unreachable or returned no Anthropic token — "
-                "falling back to static ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL"
-            )
-            mgmt.warning("auth broker=FAIL fallback=static")
+    # CLAUDE_CODE_OAUTH_TOKEN is set externally (K8s secret / env var).
+    # When present, remove API-key auth so Claude Code uses OAuth directly.
+    oauth_token = env.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+    if oauth_token:
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        env.pop("ANTHROPIC_BASE_URL", None)
+        _log.debug("auth: using CLAUDE_CODE_OAUTH_TOKEN from environment")
+        mgmt.info("auth provider=anthropic-oauth")
     else:
         base_url = env.get("ANTHROPIC_BASE_URL", "")
         mgmt.info("auth static provider=%s", "litellm" if base_url else "anthropic")
@@ -222,13 +117,6 @@ def _build_env(_cwd: Optional[Path] = None) -> dict:
         env["GITHUB_TOKEN"] = gh_token
     else:
         env.pop("GITHUB_TOKEN", None)
-
-    # Google token — for Google Docs, Gmail, Drive access (publishing agent)
-    if cfg.auth_broker.url:
-        google_token = _fetch_from_auth_broker("google", timeout=30)
-        if google_token and isinstance(google_token, str) and len(google_token) >= 10:
-            env["GOOGLE_AUTH_TOKEN"] = google_token
-            _log.debug("auth: using Auth Broker token for Google")
 
     # Auto-build ANTHROPIC_CUSTOM_HEADERS for CF Access-protected proxies
     cf_id = env.get("CF_ACCESS_CLIENT_ID", "")
