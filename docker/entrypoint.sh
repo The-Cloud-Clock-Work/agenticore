@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+# Purge stale gh credential helpers from persistent gitconfig (gh CLI removed in v0.10.2)
+git config --global --unset-all credential.https://github.com.helper 2>/dev/null || true
+git config --global --unset-all credential.https://gist.github.com.helper 2>/dev/null || true
+
 # Resolve agentihooks source (priority: local mount > git URL > installed venv)
 if [ -d "/opt/agentihooks-src" ]; then
   # Local dev: ~/dev/agentihooks mounted at /opt/agentihooks-src
