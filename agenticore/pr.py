@@ -43,11 +43,18 @@ async def create_auto_pr(job: Job) -> Optional[str]:
     if not rdir.exists():
         return None
 
-    # Deterministic branch name from bespoke worktree
-    branch = f"agenticore-{job.id[:8]}"
-    if not await _branch_exists(rdir, branch):
-        # Fallback for legacy jobs where Claude picked its own branch name
-        branch = await _get_worktree_branch(rdir, job.id)
+    # 1. Stored branch from job (set by runner.py)
+    branch = job.branch if job.branch else ""
+
+    # 2. Detect current HEAD of the worktree (catches Claude's branch switches)
+    if not branch and job.worktree_path:
+        branch = await _get_worktree_branch(Path(job.worktree_path))
+
+    # 3. Fall back to deterministic branch name
+    if not branch:
+        det = f"agenticore-{job.id[:8]}"
+        if await _branch_exists(rdir, det):
+            branch = det
     if not branch:
         return None
 
@@ -126,28 +133,22 @@ async def _branch_exists(rdir, branch: str) -> bool:
         return False
 
 
-async def _get_worktree_branch(rdir, _job_id: str) -> Optional[str]:
-    """Find the most recently created worktree branch for this job.
-
-    Claude Code creates worktree branches with varying prefixes (cc-*, worktree-*).
-    We sort by committerdate descending and return the newest non-main branch.
-    """
+async def _get_worktree_branch(worktree_path: Path) -> Optional[str]:
+    """Get the current branch of a worktree via git rev-parse."""
     try:
         result = await asyncio.create_subprocess_exec(
             "git",
-            "branch",
-            "--sort=-committerdate",
-            "--format=%(refname:short)",
-            cwd=rdir,
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            cwd=worktree_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, _ = await result.communicate()
-        skip = {"main", "master", "dev"}
-        for line in stdout.decode().strip().split("\n"):
-            b = line.strip()
-            if b and b not in skip:
-                return b
+        branch = stdout.decode().strip()
+        if branch and branch != "HEAD":
+            return branch
         return None
     except Exception:
         return None
@@ -249,11 +250,31 @@ async def _create_pr(rdir, branch: str, job: Job) -> Optional[str]:
                     "Accept": "application/vnd.github+json",
                 },
             )
-        if resp.status_code == 201:
-            return resp.json().get("html_url", "")
-        else:
+            if resp.status_code == 201:
+                return resp.json().get("html_url", "")
+            if resp.status_code == 422 and "already exists" in resp.text.lower():
+                existing = await _find_existing_pr(client, owner, repo_name, branch, token)
+                if existing:
+                    return existing
             print(f"PR creation failed: HTTP {resp.status_code} — {resp.text[:200]}", file=sys.stderr)
             return None
     except Exception as e:
         print(f"PR creation error: {e}", file=sys.stderr)
         return None
+
+
+async def _find_existing_pr(client, owner: str, repo: str, branch: str, token: str) -> Optional[str]:
+    """Find an existing open PR for the given branch."""
+    try:
+        resp = await client.get(
+            f"https://api.github.com/repos/{owner}/{repo}/pulls",
+            params={"head": f"{owner}:{branch}", "state": "open"},
+            headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"},
+        )
+        if resp.status_code == 200:
+            prs = resp.json()
+            if prs:
+                return prs[0].get("html_url", "")
+    except Exception as e:
+        print(f"Failed to find existing PR: {e}", file=sys.stderr)
+    return None

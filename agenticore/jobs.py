@@ -6,6 +6,7 @@ Jobs are stored as Redis hashes or JSON files under ``~/.agenticore/jobs/``.
 import json
 import os
 import sys
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ class Job:
     job_config_dir: str = ""  # CLAUDE_CONFIG_DIR used for this job
     plan_id: str = ""  # set when this job was created by execute_plan
     file_path: str = ""  # path to a .mcp.json on the shared FS; merged into job config dir
+    branch: str = ""  # branch name used by this job's worktree
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -67,6 +69,7 @@ class Job:
             job_config_dir=data.get("job_config_dir", ""),
             plan_id=data.get("plan_id", ""),
             file_path=data.get("file_path", ""),
+            branch=data.get("branch", ""),
         )
 
 
@@ -79,36 +82,38 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 _redis_client = None
-_redis_checked = False
+_redis_last_attempt: float = 0.0
+_REDIS_RETRY_COOLDOWN = 30.0
 
 
 def _get_redis():
-    global _redis_client, _redis_checked
-    if _redis_checked:
+    global _redis_client, _redis_last_attempt
+    if _redis_client is not None:
         return _redis_client
-    _redis_checked = True
-
+    now = time.monotonic()
+    if _redis_last_attempt and (now - _redis_last_attempt) < _REDIS_RETRY_COOLDOWN:
+        return None
+    _redis_last_attempt = now
     url = os.getenv("REDIS_URL", "")
     if not url:
         return None
-
     try:
         import redis as redis_lib
 
-        _redis_client = redis_lib.Redis.from_url(url, decode_responses=True, socket_timeout=5.0)
-        _redis_client.ping()
+        client = redis_lib.Redis.from_url(url, decode_responses=True, socket_timeout=5.0)
+        client.ping()
+        _redis_client = client
     except Exception as exc:
         print(f"Redis connection failed: {exc}", file=sys.stderr)
         _redis_client = None
-
     return _redis_client
 
 
 def _reset_redis():
     """Reset redis singleton (for testing)."""
-    global _redis_client, _redis_checked
+    global _redis_client, _redis_last_attempt
     _redis_client = None
-    _redis_checked = False
+    _redis_last_attempt = 0.0
 
 
 def _redis_key(job_id: str) -> str:
@@ -176,7 +181,7 @@ def _coerce_redis_types(data: dict) -> dict:
         if key in data:
             data[key] = convert(data[key]) if data[key] != "None" else None
     # String fields stored as "None" in Redis — normalize to empty string
-    for key in ("pod_name", "worktree_path", "job_config_dir", "plan_id", "file_path"):
+    for key in ("pod_name", "worktree_path", "job_config_dir", "plan_id", "file_path", "branch"):
         if data.get(key) == "None":
             data[key] = ""
     return data
@@ -249,11 +254,15 @@ def _load_jobs_from_files() -> List[Job]:
 def list_jobs(limit: int = 20, status: Optional[str] = None) -> List[Job]:
     """List recent jobs, optionally filtered by status."""
     r = _get_redis()
-    jobs = _load_jobs_from_redis(r) if r is not None else _load_jobs_from_files()
-
+    jobs_by_id: dict[str, Job] = {}
+    for job in _load_jobs_from_files():
+        jobs_by_id[job.id] = job
+    if r is not None:
+        for job in _load_jobs_from_redis(r):
+            jobs_by_id[job.id] = job  # Redis wins on duplicates
+    jobs = list(jobs_by_id.values())
     if status:
         jobs = [j for j in jobs if j.status == status]
-
     jobs.sort(key=lambda j: j.created_at, reverse=True)
     return jobs[:limit]
 

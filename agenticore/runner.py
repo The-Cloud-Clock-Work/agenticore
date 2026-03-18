@@ -316,7 +316,7 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
                 from agenticore.repos import create_worktree
 
                 worktree_path, branch = create_worktree(cwd, job.id, base_ref)
-                update_job(job.id, worktree_path=str(worktree_path))
+                update_job(job.id, worktree_path=str(worktree_path), branch=branch)
                 cwd = worktree_path  # Claude runs in the worktree dir
             except Exception as e:
                 return update_job(
