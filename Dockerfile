@@ -8,9 +8,6 @@
 # Build:
 #   docker build -t agenticore .
 
-# ── pinned tool versions (easy to bump) ──────────────────────────
-ARG GH_VERSION=2.87.3
-
 # ── Stage 1: Python builder ──────────────────────────────────────
 FROM python:3.13-slim AS python-builder
 
@@ -36,8 +33,6 @@ LABEL org.opencontainers.image.source="https://github.com/The-Cloud-Clock-Work/a
 LABEL org.opencontainers.image.description="Claude Code runner and orchestrator"
 LABEL org.opencontainers.image.licenses="MIT"
 
-ARG GH_VERSION
-
 # Runtime packages — dev/debug tools + AWS CLI deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -57,15 +52,6 @@ RUN ARCH=$(dpkg --print-architecture) && \
     /tmp/aws/install && \
     rm -rf /tmp/awscliv2.zip /tmp/aws && \
     aws --version
-
-# gh CLI — direct tarball, no apt key needed
-RUN ARCH=$(dpkg --print-architecture) && \
-    curl -fsSL --retry 3 --retry-delay 2 -o /tmp/gh.tar.gz \
-      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${ARCH}.tar.gz" && \
-    tar xzf /tmp/gh.tar.gz -C /tmp && \
-    mv "/tmp/gh_${GH_VERSION}_linux_${ARCH}/bin/gh" /usr/local/bin/gh && \
-    rm -rf /tmp/gh* && \
-    gh --version
 
 # Claude Code — native binary install (no Node.js required)
 RUN curl -fsSL https://claude.ai/install.sh | bash && \
