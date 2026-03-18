@@ -196,18 +196,23 @@ def _build_job_cmd(cfg, profile, job, base_ref, cwd):
 async def _run_subprocess(job_id, cmd, cwd, env):
     """Run Claude subprocess. Returns (proc, stdout, stderr).
 
-    Validates CWD exists before exec. On NFS, retries up to 5 times
-    (0.5s apart) to cover eventual-consistency propagation.
+    Validates CWD exists before exec. On NFS, retries up to 10 times
+    (1s apart) with parent-dir invalidation to bust attribute cache.
     """
     if cwd is not None:
         cwd_path = Path(cwd) if not isinstance(cwd, Path) else cwd
-        for attempt in range(5):
-            if cwd_path.exists():
+        for attempt in range(10):
+            # Force NFS attribute cache invalidation by listing parent dir
+            try:
+                os.listdir(cwd_path.parent)
+            except OSError:
+                pass
+            if cwd_path.is_dir():
                 break
-            logger.warning("CWD not visible (attempt %d/5): %s", attempt + 1, cwd_path)
-            await asyncio.sleep(0.5)
+            logger.warning("CWD not visible (attempt %d/10): %s", attempt + 1, cwd_path)
+            await asyncio.sleep(1.0)
         else:
-            raise FileNotFoundError(f"CWD does not exist after 5 retries (NFS?): {cwd_path}")
+            raise FileNotFoundError(f"CWD does not exist after 10 retries (NFS?): {cwd_path}")
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
