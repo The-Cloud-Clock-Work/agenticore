@@ -5,6 +5,9 @@ set -e
 git config --global --unset-all credential.https://github.com.helper 2>/dev/null || true
 git config --global --unset-all credential.https://gist.github.com.helper 2>/dev/null || true
 
+# Clear stale NFS locks in uv tools cache (NFS .nfs files prevent uv from replacing dirs on restart)
+rm -rf "${HOME:?}/.local/share/uv/tools/agentihooks" 2>/dev/null || true
+
 # Resolve agentihooks source (priority: local mount > git URL > installed venv)
 if [ -d "/opt/agentihooks-src" ]; then
   # Local dev: ~/dev/agentihooks mounted at /opt/agentihooks-src
