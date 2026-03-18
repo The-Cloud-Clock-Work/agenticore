@@ -1,4 +1,4 @@
-anton() { ANTHROPIC_AUTH_TOKEN="${LITELLM_MCP_GATEWAY_KEY:-${ANTHROPIC_AUTH_TOKEN:-}}" claude --dangerously-skip-permissions "$@"; }
+anton() { unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"; }
 wkt-get() {
   local query="${1:-}" wt_root="$HOME/.agenticore/worktrees"
   [ -d "$wt_root" ] || { echo "No worktrees dir: $wt_root"; return 1; }
