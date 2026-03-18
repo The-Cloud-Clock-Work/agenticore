@@ -117,11 +117,24 @@ agentihooks_sync_interval: 300
 | `AGENTICORE_OTEL_LOG_PROMPTS` | `otel.log_prompts` | `false` | Log user prompts in telemetry |
 | `AGENTICORE_OTEL_LOG_TOOL_DETAILS` | `otel.log_tool_details` | `true` | Log tool call details |
 
+### Anthropic
+
+| Variable | YAML Key | Default | Description |
+|----------|----------|---------|-------------|
+| `CLAUDE_CODE_OAUTH_TOKEN` | (env only) | (none) | Long-lived OAuth token for direct Anthropic auth. When set, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are removed from the job env. |
+| `ANTHROPIC_AUTH_TOKEN` | (env only) | (none) | Static API key (fallback when `CLAUDE_CODE_OAUTH_TOKEN` is not set) |
+| `ANTHROPIC_BASE_URL` | (env only) | (none) | Custom API endpoint (e.g. LiteLLM proxy) |
+
 ### GitHub
 
 | Variable | YAML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `GITHUB_TOKEN` | `github.token` | (none) | GitHub token for auto-PR creation |
+| `GITHUB_TOKEN` | `github.token` | (none) | GitHub PAT for auto-PR + private repo access |
+| `GITHUB_APP_ID` | `github.app_id` | (none) | GitHub App numeric ID |
+| `GITHUB_APP_INSTALLATION_ID` | `github.app_installation_id` | (none) | GitHub App installation ID |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | (env only) | (none) | Path to GitHub App PEM key file |
+| `GITHUB_APP_PRIVATE_KEY` | (env only) | (none) | Raw PEM text (K8s `--from-file` secrets) |
+| `GITHUB_APP_PRIVATE_KEY_BASE64` | (env only) | (none) | Base64-encoded PEM key |
 
 ### Langfuse
 

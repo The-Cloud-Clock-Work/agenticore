@@ -66,22 +66,8 @@ def resolve_github_token() -> Optional[str]:
     except Exception as exc:
         logger.debug("github auth: GitHub App error: %s", exc)
 
-    # 2. Auth Broker
+    # 2. Static token
     cfg = get_config()
-    if cfg.auth_broker.url:
-        try:
-            from agenticore.auth_client import AuthClient
-
-            client = AuthClient()
-            if client.enabled:
-                cred = client.get_credential("github")
-                if cred:
-                    logger.debug("github auth: using Auth Broker token")
-                    return cred
-        except Exception as exc:
-            logger.debug("github auth: Auth Broker error: %s", exc)
-
-    # 3. Static token
     if cfg.github.token:
         logger.debug("github auth: using static GITHUB_TOKEN")
         return cfg.github.token

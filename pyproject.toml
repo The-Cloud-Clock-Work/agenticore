@@ -56,7 +56,7 @@ build-backend = "setuptools.build_meta"
 include = ["agenticore*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "auth_broker/tests"]
+testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "unit: no external deps",
