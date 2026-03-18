@@ -186,6 +186,12 @@ def create_worktree(repo_dir: Path, job_id: str, base_ref: str = "") -> tuple[Pa
     if not base_ref:
         base_ref = get_default_branch(repo_dir)
 
+    # Prune stale worktree entries from dead pods / interrupted jobs
+    try:
+        _run_git(["git", "worktree", "prune"], cwd=repo_dir)
+    except Exception as e:
+        logger.warning("git worktree prune failed (non-fatal): %s", e)
+
     _run_git(
         ["git", "worktree", "add", str(wt_dir), "-b", branch, f"origin/{base_ref}"],
         cwd=repo_dir,

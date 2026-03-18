@@ -31,6 +31,16 @@ logger = logging.getLogger(__name__)
 _background_tasks: set = set()
 
 
+def _task_done_callback(task: asyncio.Task) -> None:
+    """Log unhandled exceptions from fire-and-forget tasks, then discard."""
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error("Background task %s failed with unhandled exception: %s", task.get_name(), exc, exc_info=exc)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -184,7 +194,21 @@ def _build_job_cmd(cfg, profile, job, base_ref, cwd):
 
 
 async def _run_subprocess(job_id, cmd, cwd, env):
-    """Run Claude subprocess. Returns (proc, stdout, stderr)."""
+    """Run Claude subprocess. Returns (proc, stdout, stderr).
+
+    Validates CWD exists before exec. On NFS, retries up to 5 times
+    (0.5s apart) to cover eventual-consistency propagation.
+    """
+    if cwd is not None:
+        cwd_path = Path(cwd) if not isinstance(cwd, Path) else cwd
+        for attempt in range(5):
+            if cwd_path.exists():
+                break
+            logger.warning("CWD not visible (attempt %d/5): %s", attempt + 1, cwd_path)
+            await asyncio.sleep(0.5)
+        else:
+            raise FileNotFoundError(f"CWD does not exist after 5 retries (NFS?): {cwd_path}")
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
@@ -375,11 +399,18 @@ async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
             exit_code=-1,
             ended_at=_now_iso(),
         )
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        cwd_exists = Path(cwd).exists() if cwd else "N/A"
+        binary_found = shutil.which(cfg.claude.binary)
         return update_job(
             job.id,
             status="failed",
-            error=f"Claude binary not found: {cfg.claude.binary}",
+            error=(
+                f"FileNotFoundError: {exc} | "
+                f"filename={exc.filename} | "
+                f"cwd_exists={cwd_exists} | "
+                f"binary_at={binary_found}"
+            ),
             ended_at=_now_iso(),
         )
     except Exception as e:
@@ -478,10 +509,20 @@ async def _run_plan_job(job: Job, plan) -> Job:
     except asyncio.TimeoutError:
         update_plan(plan.id, status="failed")
         return update_job(job.id, status="failed", error="Planning timeout", exit_code=-1, ended_at=_now_iso())
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        cwd_exists = Path(cwd).exists() if cwd else "N/A"
+        binary_found = shutil.which(cfg.claude.binary)
         update_plan(plan.id, status="failed")
         return update_job(
-            job.id, status="failed", error=f"Claude binary not found: {cfg.claude.binary}", ended_at=_now_iso()
+            job.id,
+            status="failed",
+            error=(
+                f"FileNotFoundError: {exc} | "
+                f"filename={exc.filename} | "
+                f"cwd_exists={cwd_exists} | "
+                f"binary_at={binary_found}"
+            ),
+            ended_at=_now_iso(),
         )
     except Exception as e:
         update_plan(plan.id, status="failed")
@@ -541,7 +582,7 @@ async def submit_plan_job(
     else:
         t = asyncio.create_task(_run_plan_job(job, plan))
         _background_tasks.add(t)
-        t.add_done_callback(_background_tasks.discard)
+        t.add_done_callback(_task_done_callback)
 
     return job, plan
 
@@ -639,5 +680,5 @@ async def submit_job(
         _background_task = asyncio.create_task(run_job(job, create_repo=create_repo, private=private))
         # Store reference to prevent GC of fire-and-forget task
         _background_tasks.add(_background_task)
-        _background_task.add_done_callback(_background_tasks.discard)
+        _background_task.add_done_callback(_task_done_callback)
         return job
