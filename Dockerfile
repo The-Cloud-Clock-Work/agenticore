@@ -43,6 +43,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       git curl wget jq vim less \
       unzip groff \
+      tini \
       netcat-openbsd iputils-ping dnsutils procps && \
     rm -rf /var/lib/apt/lists/*
 
@@ -110,5 +111,5 @@ EXPOSE 8200
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf http://localhost:8200/health || exit 1
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["tini", "--", "/entrypoint.sh"]
 CMD ["python", "-m", "agenticore"]

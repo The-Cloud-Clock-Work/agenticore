@@ -13,6 +13,7 @@ Tools:
 import json
 import logging
 import os
+import signal
 import sys
 
 from mcp.server.fastmcp import FastMCP
@@ -1021,6 +1022,9 @@ def _auto_sync_mcp_lib(cfg):
 
 def main():
     """Entrypoint for ``python -m agenticore``."""
+    # Auto-reap orphaned child processes (zombie prevention when running as PID 1)
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+
     cfg = get_config()
 
     print("Starting Agenticore...", file=sys.stderr)
