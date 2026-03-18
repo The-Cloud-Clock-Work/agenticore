@@ -65,7 +65,8 @@ async def create_auto_pr(job: Job) -> Optional[str]:
         await _commit_untracked(Path(job.worktree_path), job.id)
 
     # Check if there are commits on this branch
-    has_changes = await _has_changes(rdir, branch)
+    base = job.base_ref or "main"
+    has_changes = await _has_changes(rdir, branch, base)
     if not has_changes:
         return None
 
@@ -154,13 +155,13 @@ async def _get_worktree_branch(worktree_path: Path) -> Optional[str]:
         return None
 
 
-async def _has_changes(rdir, branch: str) -> bool:
-    """Check if the branch has commits ahead of the default branch."""
+async def _has_changes(rdir, branch: str, base: str = "main") -> bool:
+    """Check if the branch has commits ahead of the base branch."""
     try:
         result = await asyncio.create_subprocess_exec(
             "git",
             "log",
-            f"origin/HEAD..{branch}",
+            f"origin/{base}..{branch}",
             "--oneline",
             cwd=rdir,
             stdout=asyncio.subprocess.PIPE,
@@ -244,7 +245,7 @@ async def _create_pr(rdir, branch: str, job: Job) -> Optional[str]:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(
                 f"https://api.github.com/repos/{owner}/{repo_name}/pulls",
-                json={"title": title, "head": branch, "base": "main", "body": body},
+                json={"title": title, "head": branch, "base": job.base_ref or "main", "body": body},
                 headers={
                     "Authorization": f"token {token}",
                     "Accept": "application/vnd.github+json",
