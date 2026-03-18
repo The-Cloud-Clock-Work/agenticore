@@ -90,7 +90,7 @@ The `run_job()` function in `runner.py` executes the following steps:
  6. Create bespoke worktree (if profile.claude.worktree: true)
     - create_worktree(repo_dir, job_id, base_ref)
     - Branch: agenticore-{job_id[:8]}
-    - Path: {repo}/.claude/worktrees/{job_id}
+    - Path: ~/.agenticore/worktrees/{job_id}
     - Locked immediately with reason "agenticore: job {job_id}"
     - Record worktree_path on job
     - Set cwd = worktree_path (Claude runs here)

@@ -34,7 +34,7 @@ class Job:
     ttl_seconds: int = 86400
     pid: Optional[int] = None  # OS process ID of claude subprocess
     pod_name: str = ""  # Which pod ran this job (K8s)
-    worktree_path: str = ""  # Absolute path to worktree on shared FS
+    worktree_path: str = ""  # Absolute path to worktree (~/.agenticore/worktrees/)
     job_config_dir: str = ""  # CLAUDE_CONFIG_DIR used for this job
     plan_id: str = ""  # set when this job was created by execute_plan
     file_path: str = ""  # path to a .mcp.json on the shared FS; merged into job config dir

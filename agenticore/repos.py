@@ -178,10 +178,22 @@ def ensure_clone(repo_url: str) -> Path:
     return rdir
 
 
-def create_worktree(repo_dir: Path, job_id: str, base_ref: str = "") -> tuple[Path, str]:
+def _worktree_dirname(repo_url: str, base_ref: str, job_id: str) -> str:
+    """Build human-readable worktree dir name: {repo}-{branch}-{job_short}."""
+    # Extract repo name from URL
+    name = repo_url.rstrip("/").rsplit("/", 1)[-1]
+    name = name.removesuffix(".git")
+    # Normalize: underscores to dashes, lowercase
+    name = name.replace("_", "-").lower()
+    branch = base_ref.replace("_", "-").replace("/", "-").lower()
+    return f"{name}-{branch}-{job_id[:8]}"
+
+
+def create_worktree(repo_dir: Path, job_id: str, base_ref: str = "", repo_url: str = "") -> tuple[Path, str]:
     """Create a locked git worktree for a job. Returns (worktree_path, branch_name)."""
+    dirname = _worktree_dirname(repo_url or str(repo_dir), base_ref or "main", job_id)
     branch = f"agenticore-{job_id[:8]}"
-    wt_dir = repo_dir / ".claude" / "worktrees" / job_id
+    wt_dir = Path.home() / ".agenticore" / "worktrees" / dirname
 
     # Wait for repo_dir to be visible on NFS (post-clone propagation)
     for attempt in range(10):
@@ -199,12 +211,6 @@ def create_worktree(repo_dir: Path, job_id: str, base_ref: str = "") -> tuple[Pa
 
     if not base_ref:
         base_ref = get_default_branch(repo_dir)
-
-    # Prune stale worktree entries from dead pods / interrupted jobs
-    try:
-        _run_git(["git", "worktree", "prune"], cwd=repo_dir)
-    except Exception as e:
-        logger.warning("git worktree prune failed (non-fatal): %s", e)
 
     _run_git(
         ["git", "worktree", "add", str(wt_dir), "-b", branch, f"origin/{base_ref}"],
@@ -497,15 +503,18 @@ def remove_worktrees(worktree_paths: list[str]) -> list[dict]:
         wt_dir = Path(wt_path)
         removed = False
         error = None
-        # Find which repo this worktree belongs to
+        # Find which repo owns this worktree via git worktree list
         for key_dir in root.iterdir():
             if not key_dir.is_dir():
                 continue
             rdir = key_dir / "repo"
-            if not str(wt_dir).startswith(str(key_dir)):
+            if not (rdir / ".git").is_dir():
+                continue
+            # Check if this repo owns the worktree
+            known_paths = {wt["path"] for wt in _git_worktree_list(rdir)}
+            if str(wt_dir) not in known_paths:
                 continue
             try:
-                # Unlock first (worktrees are locked by the watcher)
                 subprocess.run(
                     ["git", "worktree", "unlock", str(wt_dir)],
                     cwd=rdir,

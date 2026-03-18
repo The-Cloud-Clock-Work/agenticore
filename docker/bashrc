@@ -8,29 +8,30 @@ gc() { git add -A && git commit -m "$(claude -p 'Write a short conventional comm
 anton() { cd /app/package && unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"; }
 agentipull() {
   echo "Pulling agentihooks..."
-  agenticore hooks sync && agentihooks global --force
+  agenticore hooks sync && agentihooks global
   echo "Done — ref: $(git -C "${AGENTICORE_SHARED_FS_ROOT:-$HOME/.agenticore}/agentihooks" rev-parse --short HEAD 2>/dev/null || echo '?')"
 }
 
-# wkt-get — search Claude projects, pick one, cd into it
+# wkt-get — list agenticore worktrees, pick one, cd into it
 wkt-get() {
-  local query="${1:-}" projects_dir="$HOME/.claude/projects"
-  local -a base_paths=()
-  for proj_dir in "$projects_dir"/*/; do
-    local dir_name="${proj_dir%/}"; dir_name="${dir_name##*/}"
-    [[ "$dir_name" == *"--worktree"* ]] && continue
-    local idx="$proj_dir/sessions-index.json"
-    [ -f "$idx" ] || continue
-    local orig_path
-    orig_path=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('originalPath',''))" "$idx" 2>/dev/null)
-    [ -n "$orig_path" ] && [ -d "$orig_path" ] || continue
-    if [ -z "$query" ] || [[ "${orig_path,,}" == *"${query,,}"* ]]; then base_paths+=("$orig_path"); fi
+  local query="${1:-}" wt_root="$HOME/.agenticore/worktrees"
+  [ -d "$wt_root" ] || { echo "No worktrees dir: $wt_root"; return 1; }
+  local -a dirs=() names=()
+  for d in "$wt_root"/*/; do
+    [ -d "$d" ] || continue
+    local name="${d%/}"; name="${name##*/}"
+    if [ -z "$query" ] || [[ "${name,,}" == *"${query,,}"* ]]; then
+      dirs+=("$d"); names+=("$name")
+    fi
   done
-  [ ${#base_paths[@]} -gt 0 ] || { echo "No projects found${query:+ matching '$query'}"; return 1; }
-  local i=1; for p in "${base_paths[@]}"; do printf "%d) %s\n" "$i" "$p"; ((i++)); done
-  local sel; read -rp "Project [1-${#base_paths[@]}]: " sel
-  [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#base_paths[@]}" ] || { echo "Invalid"; return 1; }
-  echo "-> ${base_paths[$((sel-1))]}"; cd "${base_paths[$((sel-1))]}" || return 1
+  [ ${#dirs[@]} -gt 0 ] || { echo "No worktrees${query:+ matching '$query'}"; return 1; }
+  local i=1; for n in "${names[@]}"; do printf "%d) %s\n" "$i" "$n"; ((i++)); done
+  if [ ${#dirs[@]} -eq 1 ]; then
+    echo "-> ${dirs[0]}"; cd "${dirs[0]}" || return 1; return 0
+  fi
+  local sel; read -rp "Worktree [1-${#dirs[@]}]: " sel
+  [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#dirs[@]}" ] || { echo "Invalid"; return 1; }
+  echo "-> ${dirs[$((sel-1))]}"; cd "${dirs[$((sel-1))]}" || return 1
 }
 
 # Welcome banner
@@ -44,7 +45,7 @@ helpme() {
   echo "    cc [args]        Claude (skip permissions)"
   echo "    gc               Auto-commit with AI message"
   echo "    gs / gp          Git status / push"
-  echo "    wkt-get [q]      Find Claude project, cd into it"
+  echo "    wkt-get [q]      List worktrees, cd into one"
   echo "    agentipull       Force hot-reload agentihooks"
   echo "    helpme           Show this help"
   echo ""
