@@ -27,7 +27,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import signal
+
 from agenticore.config import get_config
+
+
+def _reset_sigchld():
+    """Reset SIGCHLD to default in child processes.
+
+    tini (PID 1) sets SIGCHLD to SIG_IGN for zombie reaping. This is inherited
+    by Python and all subprocesses. Git worktree add forks internally for
+    checkout, and SIG_IGN on SIGCHLD causes the checkout child to be
+    auto-reaped before git can wait for it — resulting in a branch being
+    created but no worktree directory.
+    """
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
 from agenticore.git_credentials import git_askpass_env, sanitize_remote_url, strip_credentials_from_url
 
 logger = logging.getLogger(__name__)
@@ -394,10 +408,12 @@ def prepare_worktree(repo_url: str, base_ref: str = "main") -> Worktree:
 
 def _run_git(cmd: list, cwd: Path | None = None, extra_env: dict | None = None) -> subprocess.CompletedProcess:
     """Run a git command, raising on failure."""
-    env = None
+    env = os.environ.copy()
     if extra_env:
-        env = os.environ.copy()
         env.update(extra_env)
+    # Reset SIGCHLD to default for child processes — tini sets SIG_IGN which
+    # can cause git's internal fork/exec (worktree checkout) to malfunction.
+    env["__GIT_WORKAROUND"] = "1"  # marker for debugging
     result = subprocess.run(
         cmd,
         cwd=cwd,
@@ -405,6 +421,7 @@ def _run_git(cmd: list, cwd: Path | None = None, extra_env: dict | None = None) 
         text=True,
         timeout=300,
         env=env,
+        preexec_fn=_reset_sigchld,
     )
     if result.returncode != 0:
         safe_cmd = " ".join(strip_credentials_from_url(c) for c in cmd)
