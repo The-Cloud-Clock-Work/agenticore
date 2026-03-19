@@ -34,11 +34,12 @@ class Job:
     ttl_seconds: int = 86400
     pid: Optional[int] = None  # OS process ID of claude subprocess
     pod_name: str = ""  # Which pod ran this job (K8s)
-    worktree_path: str = ""  # Absolute path to worktree on shared FS
+    worktree_path: str = ""  # Absolute path to worktree (~/.agenticore/worktrees/)
     job_config_dir: str = ""  # CLAUDE_CONFIG_DIR used for this job
     plan_id: str = ""  # set when this job was created by execute_plan
     file_path: str = ""  # path to a .mcp.json on the shared FS; merged into job config dir
     branch: str = ""  # branch name used by this job's worktree
+    worktree_id: str = ""  # ID of pre-prepared worktree (two-phase workflow)
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None}
@@ -70,6 +71,7 @@ class Job:
             plan_id=data.get("plan_id", ""),
             file_path=data.get("file_path", ""),
             branch=data.get("branch", ""),
+            worktree_id=data.get("worktree_id", ""),
         )
 
 
@@ -181,7 +183,7 @@ def _coerce_redis_types(data: dict) -> dict:
         if key in data:
             data[key] = convert(data[key]) if data[key] != "None" else None
     # String fields stored as "None" in Redis — normalize to empty string
-    for key in ("pod_name", "worktree_path", "job_config_dir", "plan_id", "file_path", "branch"):
+    for key in ("pod_name", "worktree_path", "job_config_dir", "plan_id", "file_path", "branch", "worktree_id"):
         if data.get(key) == "None":
             data[key] = ""
     return data

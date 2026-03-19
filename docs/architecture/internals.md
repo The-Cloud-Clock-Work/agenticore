@@ -162,13 +162,12 @@ on the lock falls through safely.
 /shared/repos/
 ├── a1b2c3d4e5f6/
 |   └── repo/                          ← git clone (shared across pods)
-|       └── .claude/worktrees/
-|           ├── {job_id_1}/            ← bespoke worktree (locked)
-|           └── {job_id_2}/            ← bespoke worktree (locked)
-...
+~/.agenticore/worktrees/
+├── {job_id_1}/                       ← bespoke worktree (locked)
+└── {job_id_2}/                       ← bespoke worktree (locked)
 ```
 
-Worktrees are created inside the repo's `.claude/worktrees/` directory with
+Worktrees are created under `~/.agenticore/worktrees/` (local filesystem, not NFS) with
 deterministic branch names (`agenticore-{job_id[:8]}`). Each worktree is locked
 immediately after creation and survives job completion. The `cleanup_worktrees`
 MCP tool handles removal.

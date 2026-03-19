@@ -7,18 +7,22 @@ Layout::
         ├── .lock
         └── repo/
 
-Clone once, ``git fetch --all`` on re-use. Agenticore creates bespoke
-worktrees via ``create_worktree()`` before launching Claude.
+Clone once, ``git fetch --all`` on re-use. Worktrees are first-class
+resources: ``prepare_worktree()`` creates and validates them, then jobs
+reference them by ID.
 """
 
 import fcntl
 import hashlib
+import json
 import logging
 import os
 import re
 import subprocess
 import sys
 import time
+import uuid
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -178,23 +182,190 @@ def ensure_clone(repo_url: str) -> Path:
     return rdir
 
 
-def create_worktree(repo_dir: Path, job_id: str, base_ref: str = "") -> tuple[Path, str]:
-    """Create a locked git worktree for a job. Returns (worktree_path, branch_name)."""
-    branch = f"agenticore-{job_id[:8]}"
-    wt_dir = repo_dir / ".claude" / "worktrees" / job_id
+def _worktree_dirname(repo_url: str, base_ref: str, wt_id: str) -> str:
+    """Build human-readable worktree dir name: {repo}-{branch}-{id_short}."""
+    name = repo_url.rstrip("/").rsplit("/", 1)[-1]
+    name = name.removesuffix(".git")
+    name = name.replace("_", "-").lower()
+    branch = base_ref.replace("_", "-").replace("/", "-").lower()
+    return f"{name}-{branch}-{wt_id[:8]}"
 
-    if not base_ref:
-        base_ref = get_default_branch(repo_dir)
 
-    _run_git(
-        ["git", "worktree", "add", str(wt_dir), "-b", branch, f"origin/{base_ref}"],
-        cwd=repo_dir,
+# ── Worktree as First-Class Resource ─────────────────────────────────────
+
+
+@dataclass
+class Worktree:
+    id: str = ""
+    repo_url: str = ""
+    base_ref: str = ""
+    branch: str = ""
+    path: str = ""
+    repo_dir: str = ""
+    status: str = "preparing"  # preparing|ready|in_use|failed|removed
+    created_at: str = ""
+    error: str = ""
+
+    def to_dict(self) -> dict:
+        return {k: v for k, v in asdict(self).items() if v is not None}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Worktree":
+        return cls(
+            id=data.get("id", ""),
+            repo_url=data.get("repo_url", ""),
+            base_ref=data.get("base_ref", ""),
+            branch=data.get("branch", ""),
+            path=data.get("path", ""),
+            repo_dir=data.get("repo_dir", ""),
+            status=data.get("status", "preparing"),
+            created_at=data.get("created_at", ""),
+            error=data.get("error", ""),
+        )
+
+
+class WorktreeNotReady(Exception):
+    def __init__(self, path: str, attempts: int):
+        self.path = path
+        self.attempts = attempts
+        super().__init__(f"Worktree not ready after {attempts} attempts: {path}")
+
+
+def _worktrees_meta_dir() -> Path:
+    d = Path.home() / ".agenticore" / "worktrees-meta"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _save_worktree(wt: Worktree) -> None:
+    path = _worktrees_meta_dir() / f"{wt.id}.json"
+    with open(path, "w") as f:
+        json.dump(wt.to_dict(), f, indent=2)
+
+
+def get_worktree(wt_id: str) -> Optional[Worktree]:
+    path = _worktrees_meta_dir() / f"{wt_id}.json"
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return Worktree.from_dict(json.load(f))
+
+
+def update_worktree(wt_id: str, **kwargs) -> Optional[Worktree]:
+    wt = get_worktree(wt_id)
+    if wt is None:
+        return None
+    for key, value in kwargs.items():
+        if hasattr(wt, key):
+            setattr(wt, key, value)
+    _save_worktree(wt)
+    return wt
+
+
+def list_worktrees_from_store(status: str = "") -> list[Worktree]:
+    results = []
+    meta_dir = _worktrees_meta_dir()
+    for p in meta_dir.glob("*.json"):
+        try:
+            with open(p) as f:
+                wt = Worktree.from_dict(json.load(f))
+            if status and wt.status != status:
+                continue
+            results.append(wt)
+        except Exception:
+            continue
+    results.sort(key=lambda w: w.created_at, reverse=True)
+    return results
+
+
+def validate_worktree_ready(wt_path: Path, max_retries: int = 15, delay: float = 1.0) -> None:
+    """Readiness gate: verify worktree dir exists, .git resolves, git status OK.
+
+    Busts NFS attribute cache by listing parent dir on each attempt.
+    Raises WorktreeNotReady if all retries exhausted.
+    """
+    for attempt in range(max_retries):
+        try:
+            os.listdir(wt_path.parent)
+        except OSError:
+            pass
+        if not wt_path.is_dir():
+            logger.debug("worktree not visible (attempt %d/%d): %s", attempt + 1, max_retries, wt_path)
+            time.sleep(delay)
+            continue
+        git_link = wt_path / ".git"
+        if not git_link.exists():
+            logger.debug("worktree .git missing (attempt %d/%d): %s", attempt + 1, max_retries, wt_path)
+            time.sleep(delay)
+            continue
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(wt_path), "status"],
+                capture_output=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                return  # READY
+        except Exception:
+            pass
+        time.sleep(delay)
+    raise WorktreeNotReady(path=str(wt_path), attempts=max_retries)
+
+
+def prepare_worktree(repo_url: str, base_ref: str = "main") -> Worktree:
+    """Phase 1: Clone repo, create worktree, validate readiness.
+
+    Returns a Worktree with status='ready' on success, status='failed' on error.
+    """
+    wt_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    wt = Worktree(
+        id=wt_id,
+        repo_url=repo_url,
+        base_ref=base_ref,
+        status="preparing",
+        created_at=now,
     )
-    _run_git(
-        ["git", "worktree", "lock", str(wt_dir), "--reason", f"agenticore: job {job_id}"],
-        cwd=repo_dir,
-    )
-    return wt_dir, branch
+    _save_worktree(wt)
+
+    try:
+        rdir = ensure_clone(repo_url)
+        wt.repo_dir = str(rdir)
+
+        if not base_ref:
+            base_ref = get_default_branch(rdir)
+            wt.base_ref = base_ref
+
+        dirname = _worktree_dirname(repo_url, base_ref, wt_id)
+        branch = f"agenticore-{wt_id[:8]}"
+        wt_path = Path.home() / ".agenticore" / "worktrees" / dirname
+
+        wt.branch = branch
+        wt.path = str(wt_path)
+        _save_worktree(wt)
+
+        _run_git(
+            ["git", "worktree", "add", str(wt_path), "-b", branch, f"origin/{base_ref}"],
+            cwd=rdir,
+        )
+        _run_git(
+            ["git", "worktree", "lock", str(wt_path), "--reason", f"agenticore: worktree {wt_id}"],
+            cwd=rdir,
+        )
+
+        validate_worktree_ready(wt_path)
+
+        wt.status = "ready"
+        _save_worktree(wt)
+        logger.info("Worktree ready: %s at %s", wt_id, wt_path)
+        return wt
+
+    except Exception as e:
+        wt.status = "failed"
+        wt.error = str(e)
+        _save_worktree(wt)
+        logger.error("Worktree preparation failed: %s — %s", wt_id, e)
+        raise
 
 
 def _run_git(cmd: list, cwd: Path | None = None, extra_env: dict | None = None) -> subprocess.CompletedProcess:
@@ -469,23 +640,32 @@ def _worktree_info(wt_dir: Path, rdir: Path, repo_key: str, branch: str) -> Opti
 def remove_worktrees(worktree_paths: list[str]) -> list[dict]:
     """Remove specific worktrees by path. Unlocks before removing.
 
+    Also updates store metadata to status='removed'.
     Returns a list of {path, success, error} dicts.
     """
     root = _repos_root()
     results = []
+
+    # Build reverse map: path → store worktree ID for metadata updates
+    store_by_path: dict[str, str] = {}
+    for wt in list_worktrees_from_store():
+        if wt.path:
+            store_by_path[wt.path] = wt.id
+
     for wt_path in worktree_paths:
         wt_dir = Path(wt_path)
         removed = False
         error = None
-        # Find which repo this worktree belongs to
         for key_dir in root.iterdir():
             if not key_dir.is_dir():
                 continue
             rdir = key_dir / "repo"
-            if not str(wt_dir).startswith(str(key_dir)):
+            if not (rdir / ".git").is_dir():
+                continue
+            known_paths = {wt["path"] for wt in _git_worktree_list(rdir)}
+            if str(wt_dir) not in known_paths:
                 continue
             try:
-                # Unlock first (worktrees are locked by the watcher)
                 subprocess.run(
                     ["git", "worktree", "unlock", str(wt_dir)],
                     cwd=rdir,
@@ -510,5 +690,11 @@ def remove_worktrees(worktree_paths: list[str]) -> list[dict]:
             break
         if not removed and error is None:
             error = "Worktree not found"
+
+        # Update store metadata
+        wt_store_id = store_by_path.get(wt_path)
+        if wt_store_id and removed:
+            update_worktree(wt_store_id, status="removed")
+
         results.append({"path": wt_path, "success": removed, "error": error})
     return results
