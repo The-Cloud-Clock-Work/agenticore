@@ -504,9 +504,11 @@ async def prepare_worktree(repo_url: str, base_ref: str = "main") -> str:
         JSON with worktree_id, path, branch, status
     """
     try:
+        import asyncio
+
         from agenticore.repos import prepare_worktree as _prepare_worktree
 
-        wt = _prepare_worktree(repo_url=repo_url, base_ref=base_ref)
+        wt = await asyncio.to_thread(_prepare_worktree, repo_url=repo_url, base_ref=base_ref)
         return json.dumps({"success": True, "worktree": wt.to_dict()})
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
