@@ -166,7 +166,17 @@ def ensure_clone(repo_url: str) -> Path:
         with git_askpass_env(token) as extra_env:
             if rdir.exists() and (rdir / ".git").exists():
                 _run_git(["git", "fetch", "--all", "--prune"], cwd=rdir, extra_env=extra_env)
+                # Unlock all worktrees then prune stale refs from previous
+                # pod lifecycle (emptyDir wiped but .git/worktrees/ refs on NFS).
                 try:
+                    wt_list = _git_worktree_list(rdir)
+                    for wt_entry in wt_list:
+                        wt_p = wt_entry.get("path", "")
+                        if wt_p and wt_p != str(rdir) and not Path(wt_p).exists():
+                            try:
+                                _run_git(["git", "worktree", "unlock", wt_p], cwd=rdir)
+                            except Exception:
+                                pass
                     _run_git(["git", "worktree", "prune"], cwd=rdir)
                 except Exception:
                     pass
@@ -364,10 +374,6 @@ def prepare_worktree(repo_url: str, base_ref: str = "main") -> Worktree:
 
         _run_git(
             ["git", "worktree", "add", str(wt_path), "-b", branch, f"origin/{base_ref}"],
-            cwd=rdir,
-        )
-        _run_git(
-            ["git", "worktree", "lock", str(wt_path), "--reason", f"agenticore: worktree {wt_id}"],
             cwd=rdir,
         )
 
