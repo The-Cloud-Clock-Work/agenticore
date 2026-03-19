@@ -21,7 +21,15 @@ import logging
 from agenticore.config import get_config
 from agenticore.jobs import Job, create_job, get_job, update_job
 from agenticore.profiles import build_cli_args, get_profile, materialize_profile
-from agenticore.repos import ensure_clone, ensure_repo_exists, get_default_branch, resolve_github_token
+from agenticore.repos import (
+    ensure_clone,
+    ensure_repo_exists,
+    get_default_branch,
+    get_worktree,
+    prepare_worktree,
+    resolve_github_token,
+    update_worktree,
+)
 from agenticore.telemetry import end_job_trace, ship_transcript, start_job_trace
 
 logger = logging.getLogger(__name__)
@@ -171,6 +179,54 @@ def _prepare_job_repo(job: Job, create_repo: bool = False, private: bool = True)
     return cwd, base_ref
 
 
+def _resolve_cwd(
+    job: Job,
+    worktree_id: str = "",
+    create_repo: bool = False,
+    private: bool = True,
+) -> tuple[Optional[Path], str]:
+    """Resolve the working directory for a job. Returns (cwd, base_ref).
+
+    Priority:
+    1. worktree_id provided → load existing worktree, use its path
+    2. repo_url + profile.worktree=True → prepare_worktree() (Phase 1)
+    3. repo_url + profile.worktree=False → ensure_clone() only
+    4. No repo_url → None (run_job creates temp dir)
+    """
+    from agenticore.profiles import get_profile
+
+    if worktree_id:
+        wt = get_worktree(worktree_id)
+        if wt is None:
+            raise ValueError(f"Worktree not found: {worktree_id}")
+        if wt.status not in ("ready", "in_use"):
+            raise ValueError(f"Worktree {worktree_id} not usable (status: {wt.status})")
+        wt_path = Path(wt.path)
+        if not wt_path.is_dir():
+            update_worktree(worktree_id, status="failed", error="Worktree directory missing from disk")
+            raise ValueError(f"Worktree directory missing: {wt.path}")
+        update_worktree(worktree_id, status="in_use")
+        update_job(job.id, worktree_id=worktree_id, worktree_path=wt.path, branch=wt.branch)
+        return wt_path, wt.base_ref or job.base_ref
+
+    if not job.repo_url:
+        return None, job.base_ref
+
+    if create_repo:
+        ensure_repo_exists(job.repo_url, private=private)
+
+    profile = get_profile(job.profile)
+    if profile and profile.claude.worktree:
+        wt = prepare_worktree(job.repo_url, job.base_ref or "main")
+        update_worktree(wt.id, status="in_use")
+        update_job(job.id, worktree_id=wt.id, worktree_path=wt.path, branch=wt.branch)
+        return Path(wt.path), wt.base_ref
+
+    cwd = ensure_clone(job.repo_url)
+    base_ref = job.base_ref or get_default_branch(cwd)
+    return cwd, base_ref
+
+
 def _build_job_cmd(cfg, profile, job, base_ref, cwd):
     """Build the CLI command and environment for a job."""
     import copy
@@ -309,9 +365,17 @@ def _inject_mcp_configs(job: Job, cfg, mcp_cwd: Optional[Path]):
     return None
 
 
-async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> Job:
-    """Execute a job: clone repo, run Claude, handle result.
+async def run_job(
+    job: Job,
+    cwd: Optional[Path] = None,
+    base_ref: str = "",
+    create_repo: bool = False,
+    private: bool = True,
+    worktree_id: str = "",
+) -> Job:
+    """Execute a job in a pre-resolved working directory.
 
+    If cwd is not provided, resolves it via _resolve_cwd() (backward compat).
     Updates the job in-place and persists state changes.
     """
     cfg = get_config()
@@ -320,7 +384,6 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
     if profile is None:
         return update_job(job.id, status="failed", error=f"Profile not found: {job.profile}", ended_at=_now_iso())
 
-    # Record which pod is running this job
     pod_name = cfg.repos.pod_name or socket.gethostname()
     update_job(job.id, status="running", started_at=_now_iso(), pod_name=pod_name)
     trace = start_job_trace(job)
@@ -330,35 +393,20 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
     mgmt = get_mgmt_logger()
     mgmt.info("job-start id=%s profile=%s repo=%s pod=%s", job.id, job.profile, job.repo_url or "-", pod_name)
 
-    cwd = None
-    base_ref = job.base_ref
-
-    if job.repo_url:
+    # Resolve CWD if not provided by caller
+    if cwd is None:
         try:
-            cwd, base_ref = _prepare_job_repo(job, create_repo=create_repo, private=private)
+            cwd, base_ref = _resolve_cwd(job, worktree_id=worktree_id, create_repo=create_repo, private=private)
         except Exception as e:
-            return update_job(job.id, status="failed", error=f"Clone failed: {e}", ended_at=_now_iso())
+            return update_job(job.id, status="failed", error=f"CWD resolution failed: {e}", ended_at=_now_iso())
 
-        # Create bespoke worktree if profile wants one
-        if profile.claude.worktree:
-            try:
-                from agenticore.repos import create_worktree
-
-                worktree_path, branch = create_worktree(cwd, job.id, base_ref, repo_url=job.repo_url)
-                update_job(job.id, worktree_path=str(worktree_path), branch=branch)
-                cwd = worktree_path  # Claude runs in the worktree dir
-            except Exception as e:
-                return update_job(
-                    job.id,
-                    status="failed",
-                    error=f"Worktree creation failed: {e}",
-                    ended_at=_now_iso(),
-                )
+    if not base_ref:
+        base_ref = job.base_ref
 
     try:
         profile_dir = materialize_profile(profile, job_id=job.id)
         if profile_dir:
-            update_job(job.id, job_config_dir=str(profile_dir))  # informational
+            update_job(job.id, job_config_dir=str(profile_dir))
     except Exception as e:
         return update_job(
             job.id,
@@ -367,15 +415,14 @@ async def run_job(job: Job, create_repo: bool = False, private: bool = True) -> 
             ended_at=_now_iso(),
         )
 
-    # For no-repo jobs, create a temp CWD for .mcp.json injection
-    if not job.repo_url:
+    # For no-repo jobs without a pre-resolved cwd, create temp dir for MCP injection
+    if cwd is None:
         shared = cfg.repos.shared_fs_root or tempfile.gettempdir()
         no_repo_cwd = Path(shared) / "jobs" / job.id / "cwd"
         no_repo_cwd.mkdir(parents=True, exist_ok=True)
         cwd = no_repo_cwd
 
-    mcp_cwd = cwd
-    failed = _inject_mcp_configs(job, cfg, mcp_cwd)
+    failed = _inject_mcp_configs(job, cfg, cwd)
     if failed:
         return failed
 
@@ -646,6 +693,7 @@ async def submit_job(
     file_path: str = "",
     create_repo: bool = False,
     private: bool = True,
+    worktree_id: str = "",
 ) -> Job:
     """Submit a new job for execution.
 
@@ -659,6 +707,7 @@ async def submit_job(
         file_path: Path to .mcp.json to inject
         create_repo: Auto-create GitHub repo if it doesn't exist
         private: Create repo as private (default: True)
+        worktree_id: Reuse an existing pre-prepared worktree (two-phase workflow)
 
     Returns:
         The created Job (may still be running if wait=False)
@@ -678,12 +727,11 @@ async def submit_job(
     )
 
     if wait:
-        # Synchronous: run and return completed job
-        return await run_job(job, create_repo=create_repo, private=private)
+        return await run_job(job, create_repo=create_repo, private=private, worktree_id=worktree_id)
     else:
-        # Fire-and-forget: launch in background
-        _background_task = asyncio.create_task(run_job(job, create_repo=create_repo, private=private))
-        # Store reference to prevent GC of fire-and-forget task
+        _background_task = asyncio.create_task(
+            run_job(job, create_repo=create_repo, private=private, worktree_id=worktree_id)
+        )
         _background_tasks.add(_background_task)
         _background_task.add_done_callback(_task_done_callback)
         return job

@@ -50,6 +50,7 @@ async def run_task(
     file_path: str = "",
     create_repo: bool = False,
     private: bool = True,
+    worktree_id: str = "",
 ) -> str:
     """Submit a task for Claude Code execution.
 
@@ -66,6 +67,7 @@ async def run_task(
         file_path: Path to a .mcp.json on the shared FS to inject into the job config (optional)
         create_repo: Auto-create GitHub repo if it doesn't exist (default: false)
         private: Create repo as private (default: true)
+        worktree_id: Reuse a pre-prepared worktree (from prepare_worktree)
 
     Returns:
         JSON with job_id, status, and (if wait=true) output
@@ -86,6 +88,7 @@ async def run_task(
             file_path=file_path,
             create_repo=create_repo,
             private=private,
+            worktree_id=worktree_id,
         )
 
         return json.dumps({"success": True, "job": job.to_dict()})
@@ -487,6 +490,50 @@ async def list_profiles() -> str:
 
 
 @mcp.tool()
+async def prepare_worktree(repo_url: str, base_ref: str = "main") -> str:
+    """Clone repo, create worktree, validate readiness. Returns worktree_id.
+
+    Phase 1 of two-phase workflow. Use the returned worktree_id with run_task()
+    to execute jobs in a known-good worktree.
+
+    Args:
+        repo_url: GitHub repo URL to clone
+        base_ref: Base branch (default: main)
+
+    Returns:
+        JSON with worktree_id, path, branch, status
+    """
+    try:
+        from agenticore.repos import prepare_worktree as _prepare_worktree
+
+        wt = _prepare_worktree(repo_url=repo_url, base_ref=base_ref)
+        return json.dumps({"success": True, "worktree": wt.to_dict()})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
+async def get_worktree(worktree_id: str) -> str:
+    """Get worktree details by ID.
+
+    Args:
+        worktree_id: Worktree UUID from prepare_worktree
+
+    Returns:
+        JSON with worktree details including status, path, branch
+    """
+    try:
+        from agenticore.repos import get_worktree as _get_worktree
+
+        wt = _get_worktree(worktree_id)
+        if wt is None:
+            return json.dumps({"success": False, "error": f"Worktree not found: {worktree_id}"})
+        return json.dumps({"success": True, "worktree": wt.to_dict()})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@mcp.tool()
 async def list_worktrees() -> str:
     """List all worktrees across cached repos with age, size, and push status.
 
@@ -494,10 +541,20 @@ async def list_worktrees() -> str:
         JSON with worktrees list (job_id, repo_key, branch, age_hours, size_bytes, pushed)
     """
     try:
-        from agenticore.repos import list_all_worktrees
+        from agenticore.repos import list_all_worktrees, list_worktrees_from_store
 
-        worktrees = list_all_worktrees()
-        return json.dumps({"success": True, "count": len(worktrees), "worktrees": worktrees})
+        git_worktrees = list_all_worktrees()
+        store_worktrees = list_worktrees_from_store()
+
+        # Merge store metadata into git-level scan
+        store_by_path = {wt.path: wt.to_dict() for wt in store_worktrees}
+        for gwt in git_worktrees:
+            meta = store_by_path.get(gwt["path"])
+            if meta:
+                gwt["worktree_id"] = meta.get("id", "")
+                gwt["status"] = meta.get("status", "")
+
+        return json.dumps({"success": True, "count": len(git_worktrees), "worktrees": git_worktrees})
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
 
@@ -572,6 +629,7 @@ def _build_rest_app():
             file_path=body.get("file_path", ""),
             create_repo=body.get("create_repo", False),
             private=body.get("private", True),
+            worktree_id=body.get("worktree_id", ""),
         )
         data = json.loads(result)
         status_code = 200 if data.get("success") else 400
@@ -638,6 +696,40 @@ def _build_rest_app():
         data = json.loads(result)
         status_code = 200 if data.get("success") else 400
         return JSONResponse(data, status_code=status_code)
+
+    async def post_worktrees(request: Request):
+        body = await request.json()
+        result = await prepare_worktree(
+            repo_url=body.get("repo_url", ""),
+            base_ref=body.get("base_ref", "main"),
+        )
+        data = json.loads(result)
+        status_code = 200 if data.get("success") else 400
+        return JSONResponse(data, status_code=status_code)
+
+    async def get_worktrees_route(request: Request):
+        result = await list_worktrees()
+        return JSONResponse(json.loads(result))
+
+    async def get_worktree_route(request: Request):
+        worktree_id = request.path_params["worktree_id"]
+        result = await get_worktree(worktree_id)
+        data = json.loads(result)
+        status_code = 200 if data.get("success") else 404
+        return JSONResponse(data, status_code=status_code)
+
+    async def delete_worktree_route(request: Request):
+        worktree_id = request.path_params["worktree_id"]
+        try:
+            from agenticore.repos import get_worktree as _get_wt, remove_worktrees as _remove_wt
+
+            wt = _get_wt(worktree_id)
+            if wt is None:
+                return JSONResponse({"success": False, "error": f"Worktree not found: {worktree_id}"}, status_code=404)
+            results = _remove_wt([wt.path])
+            return JSONResponse({"success": True, "results": results})
+        except Exception as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     # Agent mode routes (conditional)
     cfg = get_config()
@@ -824,6 +916,10 @@ def _build_rest_app():
         Route("/plans", get_plans_route, methods=["GET"]),
         Route("/plans/{plan_id}", get_plan_route, methods=["GET"]),
         Route("/plans/{plan_id}/execute", post_execute_plan, methods=["POST"]),
+        Route("/worktrees", post_worktrees, methods=["POST"]),
+        Route("/worktrees", get_worktrees_route, methods=["GET"]),
+        Route("/worktrees/{worktree_id}", get_worktree_route, methods=["GET"]),
+        Route("/worktrees/{worktree_id}", delete_worktree_route, methods=["DELETE"]),
     ]
 
     if cfg.agent_mode.enabled:
