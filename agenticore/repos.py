@@ -337,7 +337,7 @@ def prepare_worktree(repo_url: str, base_ref: str = "main") -> Worktree:
             wt.base_ref = base_ref
 
         dirname = _worktree_dirname(repo_url, base_ref, wt_id)
-        branch = f"agenticore-{wt_id[:8]}"
+        branch = f"agenticore-{wt_id}"
         wt_path = Path.home() / ".agenticore" / "worktrees" / dirname
 
         wt.branch = branch
