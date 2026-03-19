@@ -75,6 +75,7 @@ RUN useradd -m -s /bin/bash agenticore && \
              /home/agenticore/agenticore-repos \
              /opt/agenticore \
              /app/logs \
+             /app/worktrees \
              /app/package \
              /app/evaluation \
              /shared && \

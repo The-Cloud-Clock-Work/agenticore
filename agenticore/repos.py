@@ -43,6 +43,18 @@ def _repos_root() -> Path:
     return Path(cfg.repos.root)
 
 
+def _worktrees_root() -> Path:
+    """Return the root directory for worktree checkouts.
+
+    Configurable via AGENTICORE_WORKTREE_ROOT. Defaults to
+    ``~/.agenticore/worktrees`` for backward compatibility.
+    """
+    cfg = get_config()
+    if cfg.repos.worktree_root:
+        return Path(cfg.repos.worktree_root)
+    return Path.home() / ".agenticore" / "worktrees"
+
+
 def repo_dir(repo_url: str) -> Path:
     """Return the path to the cloned repo directory."""
     return _repos_root() / _repo_key(repo_url) / "repo"
@@ -154,6 +166,10 @@ def ensure_clone(repo_url: str) -> Path:
         with git_askpass_env(token) as extra_env:
             if rdir.exists() and (rdir / ".git").exists():
                 _run_git(["git", "fetch", "--all", "--prune"], cwd=rdir, extra_env=extra_env)
+                try:
+                    _run_git(["git", "worktree", "prune"], cwd=rdir)
+                except Exception:
+                    pass
                 # Update local default branch to match origin so new worktrees
                 # branch off the latest code (not a stale local checkout).
                 try:
@@ -232,7 +248,7 @@ class WorktreeNotReady(Exception):
 
 
 def _worktrees_meta_dir() -> Path:
-    d = Path.home() / ".agenticore" / "worktrees-meta"
+    d = _worktrees_root() / ".meta"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -338,7 +354,9 @@ def prepare_worktree(repo_url: str, base_ref: str = "main") -> Worktree:
 
         dirname = _worktree_dirname(repo_url, base_ref, wt_id)
         branch = f"agenticore-{wt_id}"
-        wt_path = Path.home() / ".agenticore" / "worktrees" / dirname
+        wt_root = _worktrees_root()
+        wt_root.mkdir(parents=True, exist_ok=True)
+        wt_path = wt_root / dirname
 
         wt.branch = branch
         wt.path = str(wt_path)
