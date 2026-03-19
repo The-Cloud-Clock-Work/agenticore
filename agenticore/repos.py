@@ -27,7 +27,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import signal
+
 from agenticore.config import get_config
+
+
+def _reset_sigchld():
+    """Reset SIGCHLD to default in child processes.
+
+    tini (PID 1) sets SIGCHLD to SIG_IGN for zombie reaping. This is inherited
+    by Python and all subprocesses. Git worktree add forks internally for
+    checkout, and SIG_IGN on SIGCHLD causes the checkout child to be
+    auto-reaped before git can wait for it — resulting in a branch being
+    created but no worktree directory.
+    """
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
 from agenticore.git_credentials import git_askpass_env, sanitize_remote_url, strip_credentials_from_url
 
 logger = logging.getLogger(__name__)
@@ -41,6 +55,18 @@ def _repo_key(repo_url: str) -> str:
 def _repos_root() -> Path:
     cfg = get_config()
     return Path(cfg.repos.root)
+
+
+def _worktrees_root() -> Path:
+    """Return the root directory for worktree checkouts.
+
+    Configurable via AGENTICORE_WORKTREE_ROOT. Defaults to
+    ``~/.agenticore/worktrees`` for backward compatibility.
+    """
+    cfg = get_config()
+    if cfg.repos.worktree_root:
+        return Path(cfg.repos.worktree_root)
+    return Path.home() / ".agenticore" / "worktrees"
 
 
 def repo_dir(repo_url: str) -> Path:
@@ -154,6 +180,20 @@ def ensure_clone(repo_url: str) -> Path:
         with git_askpass_env(token) as extra_env:
             if rdir.exists() and (rdir / ".git").exists():
                 _run_git(["git", "fetch", "--all", "--prune"], cwd=rdir, extra_env=extra_env)
+                # Unlock all worktrees then prune stale refs from previous
+                # pod lifecycle (emptyDir wiped but .git/worktrees/ refs on NFS).
+                try:
+                    wt_list = _git_worktree_list(rdir)
+                    for wt_entry in wt_list:
+                        wt_p = wt_entry.get("path", "")
+                        if wt_p and wt_p != str(rdir) and not Path(wt_p).exists():
+                            try:
+                                _run_git(["git", "worktree", "unlock", wt_p], cwd=rdir)
+                            except Exception:
+                                pass
+                    _run_git(["git", "worktree", "prune"], cwd=rdir)
+                except Exception:
+                    pass
                 # Update local default branch to match origin so new worktrees
                 # branch off the latest code (not a stale local checkout).
                 try:
@@ -232,7 +272,7 @@ class WorktreeNotReady(Exception):
 
 
 def _worktrees_meta_dir() -> Path:
-    d = Path.home() / ".agenticore" / "worktrees-meta"
+    d = _worktrees_root() / ".meta"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -337,8 +377,10 @@ def prepare_worktree(repo_url: str, base_ref: str = "main") -> Worktree:
             wt.base_ref = base_ref
 
         dirname = _worktree_dirname(repo_url, base_ref, wt_id)
-        branch = f"agenticore-{wt_id[:8]}"
-        wt_path = Path.home() / ".agenticore" / "worktrees" / dirname
+        branch = f"agenticore-{wt_id}"
+        wt_root = _worktrees_root()
+        wt_root.mkdir(parents=True, exist_ok=True)
+        wt_path = wt_root / dirname
 
         wt.branch = branch
         wt.path = str(wt_path)
@@ -346,10 +388,6 @@ def prepare_worktree(repo_url: str, base_ref: str = "main") -> Worktree:
 
         _run_git(
             ["git", "worktree", "add", str(wt_path), "-b", branch, f"origin/{base_ref}"],
-            cwd=rdir,
-        )
-        _run_git(
-            ["git", "worktree", "lock", str(wt_path), "--reason", f"agenticore: worktree {wt_id}"],
             cwd=rdir,
         )
 
@@ -370,10 +408,12 @@ def prepare_worktree(repo_url: str, base_ref: str = "main") -> Worktree:
 
 def _run_git(cmd: list, cwd: Path | None = None, extra_env: dict | None = None) -> subprocess.CompletedProcess:
     """Run a git command, raising on failure."""
-    env = None
+    env = os.environ.copy()
     if extra_env:
-        env = os.environ.copy()
         env.update(extra_env)
+    # Reset SIGCHLD to default for child processes — tini sets SIG_IGN which
+    # can cause git's internal fork/exec (worktree checkout) to malfunction.
+    env["__GIT_WORKAROUND"] = "1"  # marker for debugging
     result = subprocess.run(
         cmd,
         cwd=cwd,
@@ -381,6 +421,7 @@ def _run_git(cmd: list, cwd: Path | None = None, extra_env: dict | None = None) 
         text=True,
         timeout=300,
         env=env,
+        preexec_fn=_reset_sigchld,
     )
     if result.returncode != 0:
         safe_cmd = " ".join(strip_credentials_from_url(c) for c in cmd)

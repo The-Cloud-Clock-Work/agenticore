@@ -39,6 +39,7 @@ class ReposConfig:
     shared_fs_root: str = ""  # AGENTICORE_SHARED_FS_ROOT — e.g. /shared
     jobs_dir: str = ""  # AGENTICORE_JOBS_DIR — override ~/.agenticore/jobs/
     pod_name: str = ""  # AGENTICORE_POD_NAME — set from K8s Downward API
+    worktree_root: str = ""  # AGENTICORE_WORKTREE_ROOT
 
 
 @dataclass
@@ -218,6 +219,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         shared_fs_root=_env("AGENTICORE_SHARED_FS_ROOT", repos_raw.get("shared_fs_root", "")),
         jobs_dir=_env("AGENTICORE_JOBS_DIR", repos_raw.get("jobs_dir", "")),
         pod_name=_env("AGENTICORE_POD_NAME", repos_raw.get("pod_name", "")),
+        worktree_root=_env("AGENTICORE_WORKTREE_ROOT", repos_raw.get("worktree_root", "")),
     )
 
     # Claude — env overrides
