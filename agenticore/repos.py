@@ -28,7 +28,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import signal
+
 from agenticore.config import get_config
+
+
+def _reset_sigchld():
+    """Reset SIGCHLD to default in child processes.
+
+    tini (PID 1) sets SIGCHLD to SIG_IGN for zombie reaping. This is inherited
+    by Python and all subprocesses. Git worktree add forks internally for
+    checkout, and SIG_IGN on SIGCHLD causes the checkout child to be
+    auto-reaped before git can wait for it — resulting in a branch being
+    created but no worktree directory.
+    """
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
 from agenticore.git_credentials import git_askpass_env, sanitize_remote_url, strip_credentials_from_url
 
 
