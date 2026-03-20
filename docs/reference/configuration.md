@@ -43,6 +43,7 @@ repos:
   shared_fs_root: ""
   jobs_dir: ""
   pod_name: ""
+  worktree_root: ""  # /app/worktrees in Kubernetes (emptyDir)
 
 redis:
   url: "redis://localhost:6379/0"
@@ -99,6 +100,7 @@ agentihooks_sync_interval: 300
 | `AGENTICORE_SHARED_FS_ROOT` | `repos.shared_fs_root` | (none) | Shared RWX filesystem root (Kubernetes). When set, enables K8s mode: profiles are materialised to `/shared/jobs/{job-id}/` instead of the repo working dir. |
 | `AGENTICORE_JOBS_DIR` | `repos.jobs_dir` | `~/.agenticore/jobs` | Override job JSON file directory. In K8s use `/shared/job-state`. |
 | `AGENTICORE_POD_NAME` | `repos.pod_name` | `hostname` | Pod identity recorded on each job. Set from K8s Downward API (`metadata.name`). |
+| `AGENTICORE_WORKTREE_ROOT` | `repos.worktree_root` | `~/.agenticore/worktrees` | Root directory for bespoke worktrees. In Kubernetes, use an emptyDir mount (e.g. `/app/worktrees`). Worktrees are ephemeral and live on local disk, NOT shared FS. |
 
 ### Redis
 
@@ -175,3 +177,4 @@ agentihooks_sync_interval: 300
 | `/shared/jobs/{job-id}/` | Per-job merge dir (extends profiles) / no-repo CWD |
 | `/shared/job-state/{id}.json` | Job data files (`AGENTICORE_JOBS_DIR=/shared/job-state`) |
 | `/shared/agentihooks/` | Cloned agentihooks repo (when `AGENTICORE_AGENTIHOOKS_URL` set) |
+| `/app/worktrees/{job-id}/` | Bespoke worktrees (emptyDir, local disk via `AGENTICORE_WORKTREE_ROOT`) |
