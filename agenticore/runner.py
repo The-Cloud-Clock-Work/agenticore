@@ -96,8 +96,6 @@ def _log_job_result(mgmt, job) -> None:
         pass  # never let mgmt logging break job flow
 
 
-
-
 def _build_env(_cwd: Optional[Path] = None) -> dict:
     """Build full environment for the Claude subprocess.
 

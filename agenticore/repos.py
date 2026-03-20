@@ -43,6 +43,7 @@ def _reset_sigchld():
     """
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
 
+
 logger = logging.getLogger(__name__)
 
 

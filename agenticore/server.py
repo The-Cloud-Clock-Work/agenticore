@@ -862,9 +862,16 @@ def _build_rest_app():
             raw_model = body.get("model", "")
             # Strip provider prefixes (e.g. "openai/publishing-agent") and
             # ignore model names that aren't valid Claude model aliases.
-            valid_models = {"sonnet", "opus", "haiku", "claude-sonnet-4-6",
-                            "claude-opus-4-6", "claude-haiku-4-5",
-                            "claude-sonnet-4-5", "claude-sonnet-4"}
+            valid_models = {
+                "sonnet",
+                "opus",
+                "haiku",
+                "claude-sonnet-4-6",
+                "claude-opus-4-6",
+                "claude-haiku-4-5",
+                "claude-sonnet-4-5",
+                "claude-sonnet-4",
+            }
             model_name = raw_model.split("/")[-1] if "/" in raw_model else raw_model
             if model_name not in valid_models:
                 model_name = ""  # fall back to AGENT_MODE_MODEL default

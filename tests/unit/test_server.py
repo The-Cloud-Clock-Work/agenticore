@@ -809,5 +809,3 @@ class TestAsyncConsistency:
 
         args = parser.parse_args(["run", "test"])
         assert args.wait is False
-
-
