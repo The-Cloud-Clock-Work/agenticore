@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -26,8 +27,6 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-
-import signal
 
 from agenticore.config import get_config
 from agenticore.git_credentials import git_askpass_env, sanitize_remote_url, strip_credentials_from_url
