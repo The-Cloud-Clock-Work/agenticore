@@ -30,6 +30,7 @@ from typing import Optional
 import signal
 
 from agenticore.config import get_config
+from agenticore.git_credentials import git_askpass_env, sanitize_remote_url, strip_credentials_from_url
 
 
 def _reset_sigchld():
@@ -42,7 +43,6 @@ def _reset_sigchld():
     created but no worktree directory.
     """
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
-from agenticore.git_credentials import git_askpass_env, sanitize_remote_url, strip_credentials_from_url
 
 logger = logging.getLogger(__name__)
 
