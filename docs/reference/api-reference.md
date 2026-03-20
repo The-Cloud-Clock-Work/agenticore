@@ -22,10 +22,13 @@ Submit a task for Claude Code execution.
 | `repo_url` | string | no | `""` | GitHub repo URL to clone |
 | `profile` | string | no | `""` | Execution profile (auto-routed if empty) |
 | `base_ref` | string | no | `"main"` | Base branch for PR |
-| `wait` | boolean | no | `false` | Wait for completion before returning |
 | `session_id` | string | no | `""` | Claude session ID to resume |
+| `file_path` | string | no | `""` | Path to a .mcp.json on the shared FS to inject into the job config |
+| `create_repo` | boolean | no | `false` | Auto-create GitHub repo if it doesn't exist |
+| `private` | boolean | no | `true` | Create repo as private |
+| `worktree_id` | string | no | `""` | Reuse a pre-prepared worktree (from `prepare_worktree`) |
 
-**Returns:** JSON with `success`, `job` (Job object)
+**Returns:** JSON with `success`, `job` (Job object). Always async (fire-and-forget) — poll with `get_job`.
 
 ```json
 {
@@ -99,6 +102,51 @@ List available execution profiles.
   ]
 }
 ```
+
+
+
+### prepare_worktree
+
+Clone repo, create worktree, validate readiness. Returns worktree_id.
+Phase 1 of two-phase workflow. Use the returned worktree_id with .
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+|  | string | yes | | GitHub repo URL to clone |
+|  | string | no |  | Base branch |
+
+**Returns:** JSON with , , , 
+
+### get_worktree
+
+Get worktree details by ID.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+|  | string | yes | Worktree UUID from  |
+
+**Returns:** JSON with worktree details including status, path, branch
+
+### list_worktrees
+
+List all worktrees across cached repos with age, size, and push status.
+
+**Parameters:** None
+
+**Returns:** JSON with worktrees list (worktree_id, repo_key, branch, age_hours, size_bytes, pushed)
+
+### cleanup_worktrees
+
+Remove worktrees by path or age threshold.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+|  | string | no |  | Comma-separated list of worktree paths to remove |
+|  | integer | no |  | Remove all worktrees older than N hours (0 = disabled) |
+
+At least one of  or  must be provided.
+
+**Returns:** JSON with removal results per worktree
 
 ## REST Endpoints
 
@@ -211,7 +259,7 @@ The full Job object returned by all endpoints:
 | `task` | string | Task description |
 | `profile` | string | Profile name used |
 | `status` | string | `queued`, `running`, `succeeded`, `failed`, `cancelled`, `expired` |
-| `mode` | string | `fire_and_forget` or `sync` |
+| `mode` | string | `fire_and_forget` (sync mode removed in v0.11.0) |
 | `exit_code` | int/null | Claude process exit code |
 | `session_id` | string/null | Claude session ID |
 | `pr_url` | string/null | Auto-created PR URL |
@@ -223,7 +271,7 @@ The full Job object returned by all endpoints:
 | `ttl_seconds` | int | Job TTL (default: 86400) |
 | `pid` | int/null | OS process ID |
 | `pod_name` | string | Pod that ran this job (Kubernetes) |
-| `worktree_path` | string | Absolute path to worktree on shared FS |
+| `worktree_path` | string | Absolute path to worktree (local disk, not shared FS) |
 | `job_config_dir` | string | Profile directory used for this job (informational) |
 
 ## Profile Schema

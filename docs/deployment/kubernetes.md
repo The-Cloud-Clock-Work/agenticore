@@ -36,7 +36,11 @@ Internet / Claude.ai ──► LoadBalancer :8200
                                      └────────────────────┘
 ```
 
-### Shared filesystem layout
+### Storage layout
+
+Agenticore uses two storage tiers: shared NFS for repos and state, local emptyDir for worktrees.
+
+**Shared FS (NFS PVC, RWX):**
 
 ```
 /shared/
@@ -49,6 +53,29 @@ Internet / Claude.ai ──► LoadBalancer :8200
 │   └── .mcp.json
 └── job-state/{id}.json         ← job file fallback (AGENTICORE_JOBS_DIR)
 ```
+
+**Local disk (emptyDir, per-pod):**
+
+```
+/app/worktrees/                   ← AGENTICORE_WORKTREE_ROOT
+├── {job_id_1}/                   ← bespoke worktree (ephemeral)
+├── {job_id_2}/                   ← bespoke worktree (ephemeral)
+└── ...
+```
+
+Worktrees are created on local disk (emptyDir) for I/O performance and to avoid NFS locking issues. They are ephemeral — pod restart clears them. Repos remain on shared FS so all pods share the clone cache.
+
+### Memory sizing
+
+Each Claude Code process uses ~320Mi memory. Size pod limits accordingly:
+
+| Concurrent jobs | CPU request | Memory limit | Notes |
+|----------------|-------------|-------------|-------|
+| 2 | 1 CPU | 2Gi | Conservative default |
+| 5 | 2 CPU | 3Gi | Light workloads |
+| 10+ | 4 CPU | 4Gi | Verified: peak 1018m CPU / 789Mi at 10 jobs |
+
+Set  to match your memory allocation.
 
 **Agentihooks** is cloned to `/shared/agentihooks/` at startup when `AGENTICORE_AGENTIHOOKS_URL`
 is set. All pods and job-init containers share a single clone on the RWX PVC.

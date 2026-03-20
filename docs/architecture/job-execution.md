@@ -56,7 +56,7 @@ completion and optional PR creation.
 | `task` | string | Task description |
 | `profile` | string | Profile name (default: `code`) |
 | `status` | string | Current status |
-| `mode` | string | `fire_and_forget` or `sync` |
+| `mode` | string | `fire_and_forget` (sync mode removed in v0.11.0) |
 | `exit_code` | int/null | Claude process exit code |
 | `session_id` | string/null | Claude session ID (for resume) |
 | `pr_url` | string/null | Auto-created PR URL |
@@ -90,7 +90,7 @@ The `run_job()` function in `runner.py` executes the following steps:
  6. Create bespoke worktree (if profile.claude.worktree: true)
     - create_worktree(repo_dir, job_id, base_ref)
     - Branch: agenticore-{job_id[:8]}
-    - Path: ~/.agenticore/worktrees/{job_id}
+    - Path: {AGENTICORE_WORKTREE_ROOT}/{job_id} (configurable, default ~/.agenticore/worktrees/)
     - Locked immediately with reason "agenticore: job {job_id}"
     - Record worktree_path on job
     - Set cwd = worktree_path (Claude runs here)
@@ -201,13 +201,33 @@ The one-job-one-PR model is intentional. Each PR is a clean-room result:
 ## Submission Flow
 
 ```python
-submit_job(task, profile, repo_url, wait=False)
+submit_job(task, profile, repo_url)
 ```
 
-| Parameter | Effect |
-|-----------|--------|
-| `wait=False` | Creates job, launches `run_job()` as background task, returns immediately |
-| `wait=True` | Creates job, awaits `run_job()`, returns completed job |
+All jobs are fire-and-forget. The function creates the job, launches `run_job()` as a
+background task, and returns immediately. Poll with `get_job(job_id)`.
+
+The `wait` parameter was removed in v0.11.0 — sync execution is no longer supported.
+
+### Two-Phase Worktree Workflow
+
+For latency-sensitive pipelines, use the two-phase workflow:
+
+1. `prepare_worktree(repo_url, base_ref)` — clone + create worktree, returns `worktree_id`
+2. `run_task(task, worktree_id=worktree_id)` — skips clone+worktree creation, runs immediately
+
+This decouples the slow git clone from the job submission.
+
+### SIGCHLD Fix
+
+All subprocess calls use `preexec_fn=_reset_sigchld` to prevent signal handler
+inheritance issues that caused zombie processes in high-concurrency scenarios.
+
+### Concurrency
+
+Verified at 10 concurrent jobs on a single pod (4 CPU / 4Gi). Each Claude process
+uses ~320Mi memory. Peak observed: 1018m CPU / 789Mi memory.
 
 See [Profile System](profile-system.md) for how profiles are resolved and
+converted to CLI arguments.
 converted to CLI arguments.
