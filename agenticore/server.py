@@ -45,7 +45,6 @@ async def run_task(
     repo_url: str = "",
     profile: str = "",
     base_ref: str = "main",
-    wait: bool = False,
     session_id: str = "",
     file_path: str = "",
     create_repo: bool = False,
@@ -55,14 +54,13 @@ async def run_task(
     """Submit a task for Claude Code execution.
 
     Async (fire and forget) by default — returns job ID immediately.
-    Pass wait=true to block until completion.
+    Use get_job(job_id) to poll for completion.
 
     Args:
         task: What Claude should do
         repo_url: GitHub repo URL to clone (optional — omit for local tasks)
         profile: Execution profile name (default: auto-routed)
         base_ref: Base branch (default: main)
-        wait: Block until completion (default: false)
         session_id: Claude session ID to resume (optional)
         file_path: Path to a .mcp.json on the shared FS to inject into the job config (optional)
         create_repo: Auto-create GitHub repo if it doesn't exist (default: false)
@@ -83,7 +81,7 @@ async def run_task(
             profile=resolved_profile,
             repo_url=repo_url,
             base_ref=base_ref,
-            wait=wait,
+            wait=False,
             session_id=session_id or None,
             file_path=file_path,
             create_repo=create_repo,
@@ -626,7 +624,6 @@ def _build_rest_app():
             repo_url=body.get("repo_url", ""),
             profile=body.get("profile", ""),
             base_ref=body.get("base_ref", "main"),
-            wait=body.get("wait", False),
             session_id=body.get("session_id", ""),
             file_path=body.get("file_path", ""),
             create_repo=body.get("create_repo", False),
@@ -865,9 +862,16 @@ def _build_rest_app():
             raw_model = body.get("model", "")
             # Strip provider prefixes (e.g. "openai/publishing-agent") and
             # ignore model names that aren't valid Claude model aliases.
-            valid_models = {"sonnet", "opus", "haiku", "claude-sonnet-4-6",
-                            "claude-opus-4-6", "claude-haiku-4-5",
-                            "claude-sonnet-4-5", "claude-sonnet-4"}
+            valid_models = {
+                "sonnet",
+                "opus",
+                "haiku",
+                "claude-sonnet-4-6",
+                "claude-opus-4-6",
+                "claude-haiku-4-5",
+                "claude-sonnet-4-5",
+                "claude-sonnet-4",
+            }
             model_name = raw_model.split("/")[-1] if "/" in raw_model else raw_model
             if model_name not in valid_models:
                 model_name = ""  # fall back to AGENT_MODE_MODEL default

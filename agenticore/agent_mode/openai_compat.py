@@ -102,11 +102,7 @@ def build_openai_stream_chunks(result: dict, model: str, request_uuid: str) -> s
         },
     }
 
-    return (
-        f"data: {json.dumps(chunk)}\n\n"
-        f"data: {json.dumps(stop_chunk)}\n\n"
-        "data: [DONE]\n\n"
-    )
+    return f"data: {json.dumps(chunk)}\n\ndata: {json.dumps(stop_chunk)}\n\ndata: [DONE]\n\n"
 
 
 def extract_request_id(headers: dict | None, body: dict) -> str:

@@ -50,30 +50,29 @@ class TestRunTask:
         assert data["job"]["id"] == "job-001"
 
     @pytest.mark.asyncio
-    async def test_wait_true_blocks(self):
-        """run_task with wait=True passes wait to submit_job."""
+    async def test_always_fire_and_forget(self):
+        """run_task always passes wait=False to submit_job (no sync mode via MCP)."""
         from agenticore.server import run_task
 
         mock_job = MagicMock()
         mock_job.to_dict.return_value = {
             "id": "job-002",
-            "status": "succeeded",
-            "output": "Done!",
+            "status": "queued",
         }
 
         with (
             patch("agenticore.router.route", return_value="code"),
             patch("agenticore.runner.submit_job", new_callable=AsyncMock, return_value=mock_job) as mock_submit,
         ):
-            result = await run_task(task="deploy", wait=True)
+            result = await run_task(task="deploy")
 
         mock_submit.assert_called_once()
         call_kwargs = mock_submit.call_args[1]
-        assert call_kwargs["wait"] is True
+        assert call_kwargs["wait"] is False
 
         data = json.loads(result)
         assert data["success"] is True
-        assert data["job"]["status"] == "succeeded"
+        assert data["job"]["status"] == "queued"
 
     @pytest.mark.asyncio
     async def test_with_all_params(self):
@@ -92,7 +91,6 @@ class TestRunTask:
                 repo_url="https://github.com/org/repo",
                 profile="review",
                 base_ref="develop",
-                wait=False,
                 session_id="sess-1",
             )
 
@@ -377,12 +375,12 @@ class TestRestApi:
         assert data["job"]["status"] == "queued"
 
     @pytest.mark.asyncio
-    async def test_post_jobs_wait(self, rest_app):
-        """POST /jobs with wait=true blocks until completion."""
+    async def test_post_jobs_ignores_wait(self, rest_app):
+        """POST /jobs ignores wait field — always fire-and-forget."""
         from starlette.testclient import TestClient
 
         mock_job = MagicMock()
-        mock_job.to_dict.return_value = {"id": "j1", "status": "succeeded", "output": "done"}
+        mock_job.to_dict.return_value = {"id": "j1", "status": "queued"}
 
         with (
             patch("agenticore.router.route", return_value="code"),
@@ -392,11 +390,10 @@ class TestRestApi:
             resp = client.post("/jobs", json={"task": "fix bug", "wait": True})
 
         call_kwargs = mock_submit.call_args[1]
-        assert call_kwargs["wait"] is True
+        assert call_kwargs["wait"] is False
 
         data = resp.json()
         assert data["success"] is True
-        assert data["job"]["status"] == "succeeded"
 
     @pytest.mark.asyncio
     async def test_post_jobs_all_fields(self, rest_app):
@@ -812,5 +809,3 @@ class TestAsyncConsistency:
 
         args = parser.parse_args(["run", "test"])
         assert args.wait is False
-
-
