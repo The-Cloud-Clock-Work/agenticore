@@ -48,13 +48,18 @@ def git_askpass_env(token: Optional[str]):
             # 1. Set username to x-access-token (GitHub App/PAT convention)
             # 2. Disable any credential.helper (e.g. gh auth git-credential)
             #    so GIT_ASKPASS is actually used
-            "GIT_CONFIG_COUNT": "3",
+            # Block url.*.insteadOf from .git/config — Claude Code writes
+            # stale tokens there which override GIT_ASKPASS.
+            # GIT_CONFIG_COUNT env vars override local config at runtime.
+            "GIT_CONFIG_COUNT": "4",
             "GIT_CONFIG_KEY_0": "credential.username",
             "GIT_CONFIG_VALUE_0": "x-access-token",
             "GIT_CONFIG_KEY_1": "credential.https://github.com.helper",
             "GIT_CONFIG_VALUE_1": "",
             "GIT_CONFIG_KEY_2": "credential.helper",
             "GIT_CONFIG_VALUE_2": "",
+            "GIT_CONFIG_KEY_3": "protocol.version",
+            "GIT_CONFIG_VALUE_3": "2",
         }
         yield env
     finally:
@@ -70,11 +75,18 @@ def strip_credentials_from_url(url: str) -> str:
 
 
 def sanitize_remote_url(repo_path: str) -> None:
-    """Detect and fix a ``.git/config`` remote URL with an embedded token.
+    """Strip all embedded credentials from a repo's git config.
 
-    One-time migration for repos cloned with the old token-in-URL approach.
+    Cleans two attack surfaces:
+    1. ``remote.origin.url`` with embedded ``x-access-token:TOKEN@`` (old clone style)
+    2. ``url.*.insteadOf`` entries with embedded tokens (written by Claude Code's
+       internal git operations — these override GIT_ASKPASS and cause stale token
+       failures on cached repos)
+
+    Called on every clone/fetch cycle to ensure repos stay clean.
     """
     try:
+        # 1. Clean remote URL
         result = subprocess.run(
             ["git", "config", "--get", "remote.origin.url"],
             cwd=repo_path,
@@ -82,18 +94,46 @@ def sanitize_remote_url(repo_path: str) -> None:
             text=True,
             timeout=10,
         )
-        if result.returncode != 0:
-            return
-        current_url = result.stdout.strip()
-        clean_url = strip_credentials_from_url(current_url)
-        if clean_url != current_url:
-            subprocess.run(
-                ["git", "remote", "set-url", "origin", clean_url],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            logger.info("Sanitized embedded token from remote URL in %s", repo_path)
+        if result.returncode == 0:
+            current_url = result.stdout.strip()
+            clean_url = strip_credentials_from_url(current_url)
+            if clean_url != current_url:
+                subprocess.run(
+                    ["git", "remote", "set-url", "origin", clean_url],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                logger.info("Sanitized embedded token from remote URL in %s", repo_path)
+
+        # 2. Remove url.*.insteadOf entries containing access tokens.
+        # Claude Code writes these during git push/branch operations:
+        #   [url "https://x-access-token:ghs_xxx@github.com/"]
+        #       insteadOf = https://github.com/
+        # These override GIT_ASKPASS and cause auth failures when the token expires.
+        result = subprocess.run(
+            ["git", "config", "--local", "--get-regexp", r"url\..*\.insteadof"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            for line in result.stdout.strip().splitlines():
+                # Each line: "url.https://x-access-token:TOKEN@github.com/.insteadof https://github.com/"
+                key = line.split()[0] if line.split() else ""
+                if "x-access-token" in key or "x-access-token" in line:
+                    # Extract the section name: url."https://x-access-token:...@github.com/"
+                    # key format: url.SECTION_URL.insteadof
+                    section_url = key.replace(".insteadof", "").replace("url.", "", 1)
+                    subprocess.run(
+                        ["git", "config", "--local", "--remove-section", f"url.{section_url}"],
+                        cwd=repo_path,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    logger.info("Removed stale url.insteadOf credential from %s", repo_path)
     except Exception as exc:
         logger.debug("sanitize_remote_url failed for %s: %s", repo_path, exc)
