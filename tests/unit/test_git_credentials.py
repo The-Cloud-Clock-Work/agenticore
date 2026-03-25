@@ -48,7 +48,7 @@ class TestGitAskpassEnv:
             assert "GIT_ASKPASS" in env
             assert env["_AGENTICORE_GIT_CREDENTIAL"] == "ghp_test123"
             assert env["GIT_TERMINAL_PROMPT"] == "0"
-            assert env["GIT_CONFIG_COUNT"] == "3"
+            assert env["GIT_CONFIG_COUNT"] == "4"
             assert env["GIT_CONFIG_KEY_0"] == "credential.username"
             assert env["GIT_CONFIG_VALUE_0"] == "x-access-token"
 
