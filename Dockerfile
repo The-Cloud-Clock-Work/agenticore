@@ -36,7 +36,7 @@ LABEL org.opencontainers.image.licenses="MIT"
 # Runtime packages — dev/debug tools + AWS CLI deps
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-      git curl wget jq vim less \
+      git openssh-client curl wget jq vim less \
       unzip groff \
       tini \
       netcat-openbsd iputils-ping dnsutils procps && \
