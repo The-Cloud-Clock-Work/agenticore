@@ -8,7 +8,7 @@ gc() { git add -A && git commit -m "$(claude -p 'Write a short conventional comm
 anton() { cd /app/package && unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"; }
 agentipull() {
   echo "Pulling agentihooks..."
-  agenticore hooks sync && agentihooks global
+  agenticore hooks sync && agentihooks init
   echo "Done — ref: $(git -C "${AGENTICORE_SHARED_FS_ROOT:-$HOME/.agenticore}/agentihooks" rev-parse --short HEAD 2>/dev/null || echo '?')"
 }
 
