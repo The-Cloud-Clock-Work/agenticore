@@ -125,6 +125,7 @@ class Config:
     agent_mode: AgentModeConfig = field(default_factory=AgentModeConfig)
     agentihooks_path: str = ""
     agentihooks_url: str = ""
+    agentihooks_bundle_url: str = ""
     agentihooks_sync_interval: int = 300  # seconds between background re-syncs; 0 to disable
     mcp_lib_url: str = ""
     mcp_lib_path: str = ""
@@ -313,6 +314,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
 
     agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
     agentihooks_url = _env("AGENTICORE_AGENTIHOOKS_URL", raw.get("agentihooks_url", ""))
+    agentihooks_bundle_url = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", raw.get("agentihooks_bundle_url", ""))
     agentihooks_sync_interval = _env_int(
         "AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL", str(raw.get("agentihooks_sync_interval", 300))
     )
@@ -333,6 +335,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         agent_mode=agent_mode,
         agentihooks_path=agentihooks_path,
         agentihooks_url=agentihooks_url,
+        agentihooks_bundle_url=agentihooks_bundle_url,
         agentihooks_sync_interval=agentihooks_sync_interval,
         mcp_lib_url=mcp_lib_url,
         mcp_lib_path=mcp_lib_path,

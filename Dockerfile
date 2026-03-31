@@ -82,10 +82,8 @@ RUN useradd -m -s /bin/bash agenticore && \
              /shared && \
     chown -R agenticore:agenticore /app /home/agenticore /opt/venv /opt/agenticore /shared
 
-# Pod-specific shell functions + entrypoint
+# Pod-specific shell functions
 COPY docker/bashrc /opt/agenticore/bashrc
-COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
 
 ENV AGENTICORE_TRANSPORT=sse \
     AGENTICORE_HOST=0.0.0.0 \
@@ -99,5 +97,5 @@ EXPOSE 8200
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf http://localhost:8200/health || exit 1
 
-ENTRYPOINT ["tini", "--", "/entrypoint.sh"]
+ENTRYPOINT ["tini", "--"]
 CMD ["python", "-m", "agenticore"]

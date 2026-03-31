@@ -14,7 +14,9 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
@@ -1079,13 +1081,15 @@ def run_sse_server() -> None:
 
 
 def _auto_sync_agentihooks(cfg):
-    """Auto-sync agentihooks if URL is configured and path not already set."""
+    """Auto-sync agentihooks, bundle, and run init."""
     if not cfg.agentihooks_url or os.getenv("AGENTICORE_AGENTIHOOKS_PATH"):
         return
     try:
-        from agenticore.hooks import sync_agentihooks, start_sync_watcher
+        from agenticore.hooks import sync_agentihooks, sync_bundle, run_agentihooks_init, start_sync_watcher
 
         install_path = sync_agentihooks()
+        bundle_path = sync_bundle()
+        run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
         if install_path and cfg.agentihooks_sync_interval > 0:
             start_sync_watcher(cfg.agentihooks_url, install_path, cfg.agentihooks_sync_interval)
     except Exception as e:
@@ -1130,6 +1134,26 @@ def main():
     cfg = get_config()
 
     print("Starting Agenticore...", file=sys.stderr)
+
+    # Purge stale git credential helpers (legacy from gh CLI)
+    subprocess.run(["git", "config", "--global", "--unset-all",
+                     "credential.https://github.com.helper"], capture_output=True)
+    subprocess.run(["git", "config", "--global", "--unset-all",
+                     "credential.https://gist.github.com.helper"], capture_output=True)
+
+    # Install bashrc for exec sessions
+    bashrc_src = Path("/opt/agenticore/bashrc")
+    bashrc_dst = Path.home() / ".bashrc"
+    if bashrc_src.exists():
+        try:
+            content = bashrc_dst.read_text() if bashrc_dst.exists() else ""
+            marker = "# agenticore-shell"
+            if marker in content:
+                content = content[:content.index(marker)]
+            content += f"{marker}\n{bashrc_src.read_text()}"
+            bashrc_dst.write_text(content)
+        except OSError:
+            pass
 
     _auto_sync_agentihooks(cfg)
     _auto_sync_agentihub(cfg)

@@ -268,6 +268,39 @@ def sync_agentihub(url: str = "") -> Optional[Path]:
     return dest
 
 
+def _bundle_dir() -> Path:
+    """Determine where the agentihooks bundle should be installed."""
+    shared = os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
+    if shared:
+        return Path(shared) / "agentihooks-bundle"
+    return Path.home() / ".agenticore" / "agentihooks-bundle"
+
+
+def _clone_or_fetch_bundle(url: str, dest: Path) -> None:
+    """Clone or update agentihooks bundle repo, with GitHub App auth."""
+    dest.mkdir(parents=True, exist_ok=True)
+    lock_path = dest.parent / ".agentihooks-bundle.lock"
+
+    def _do():
+        token = resolve_github_token()
+        with git_askpass_env(token) as extra_env:
+            if (dest / ".git").exists():
+                _run_git(["git", "-C", str(dest), "fetch", "--all", "--prune"], extra_env=extra_env)
+                _run_git(["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"], extra_env=extra_env)
+            else:
+                _run_git(["git", "clone", url, str(dest)], extra_env=extra_env)
+
+    if get_config().repos.shared_fs_root:
+        _with_redis_lock("agenticore:lock:agentihooks-bundle", _do)
+    else:
+        with open(lock_path, "w") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            try:
+                _do()
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+
+
 def sync_agentihooks(url: str = "") -> Optional[Path]:
     """Clone/fetch + build agentihooks. Sets AGENTICORE_AGENTIHOOKS_PATH in-process.
 
@@ -286,3 +319,48 @@ def sync_agentihooks(url: str = "") -> Optional[Path]:
     os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(dest)
     logger.info("AGENTICORE_AGENTIHOOKS_PATH → %s", dest)
     return dest
+
+
+def sync_bundle() -> Optional[Path]:
+    """Clone/fetch the agentihooks bundle repo.
+
+    Returns the bundle directory, or None if no bundle URL is configured.
+    """
+    cfg = get_config()
+    url = cfg.agentihooks_bundle_url
+    if not url:
+        return None
+    dest = _bundle_dir()
+    _clone_or_fetch_bundle(url, dest)
+    logger.info("agentihooks bundle synced → %s", dest)
+    return dest
+
+
+def run_agentihooks_init(hooks_path: Optional[Path] = None, bundle_path: Optional[Path] = None) -> None:
+    """Run ``agentihooks init`` with profile and optional bundle.
+
+    Also installs agentihooks via uv pip if hooks_path is provided.
+    This replaces the old entrypoint.sh logic.
+    """
+    if hooks_path and hooks_path.exists():
+        logger.info("Installing agentihooks from %s", hooks_path)
+        subprocess.run(
+            ["uv", "pip", "install", "--quiet", "-e", str(hooks_path)],
+            check=False,
+            capture_output=True,
+        )
+
+    profile = os.getenv("AGENTIHOOKS_PROFILE", "coding")
+    cmd = ["agentihooks", "init", "--profile", profile]
+    if bundle_path and bundle_path.exists():
+        cmd.extend(["--bundle", str(bundle_path)])
+
+    logger.info("Running: %s", " ".join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.stdout:
+        for line in result.stdout.strip().splitlines():
+            logger.info("agentihooks: %s", line)
+    if result.returncode != 0:
+        logger.error("agentihooks init failed (exit %d):\n%s", result.returncode, result.stderr)
+        raise RuntimeError(f"agentihooks init failed: {result.stderr}")
+    logger.info("agentihooks init complete (profile=%s, bundle=%s)", profile, bundle_path)
