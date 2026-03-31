@@ -29,8 +29,19 @@ fi
 
 # Wire hooks, skills, agents, CLAUDE.md into ~/.claude
 # HOME determines where: /home/agenticore (local) or /shared (K8s)
-# agentihooks reads AGENTIHOOKS_PROFILE and AGENTIHOOKS_MCP_FILE env vars directly
-agentihooks init
+# agentihooks reads AGENTIHOOKS_PROFILE env var for profile selection
+_init_args="--profile ${AGENTIHOOKS_PROFILE:-coding}"
+if [ -n "${AGENTICORE_AGENTIHOOKS_BUNDLE_URL:-}" ]; then
+  _bundle_dest="${AGENTICORE_SHARED_FS_ROOT:-$HOME/.agenticore}/agentihooks-bundle"
+  if [ ! -d "$_bundle_dest/.git" ]; then
+    git clone --quiet "$AGENTICORE_AGENTIHOOKS_BUNDLE_URL" "$_bundle_dest"
+  else
+    git -C "$_bundle_dest" fetch --all --prune --quiet
+    git -C "$_bundle_dest" reset --hard origin/HEAD --quiet
+  fi
+  _init_args="$_init_args --bundle $_bundle_dest"
+fi
+agentihooks init $_init_args
 
 # Install pod-specific shell functions into ~/.bashrc (for exec sessions)
 # Always replace the block so new builds update the PVC copy
