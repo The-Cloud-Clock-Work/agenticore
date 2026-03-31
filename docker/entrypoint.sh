@@ -30,7 +30,7 @@ fi
 # Wire hooks, skills, agents, CLAUDE.md into ~/.claude
 # HOME determines where: /home/agenticore (local) or /shared (K8s)
 # agentihooks reads AGENTIHOOKS_PROFILE and AGENTIHOOKS_MCP_FILE env vars directly
-agentihooks init
+agentihooks init --profile coding
 
 # Install pod-specific shell functions into ~/.bashrc (for exec sessions)
 # Always replace the block so new builds update the PVC copy
