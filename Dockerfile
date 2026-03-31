@@ -40,7 +40,8 @@ RUN apt-get update && \
       unzip groff \
       tini \
       netcat-openbsd iputils-ping dnsutils procps && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /etc/ssh && ssh-keyscan github.com >> /etc/ssh/ssh_known_hosts 2>/dev/null
 
 # uv — fast Python package installer (used by entrypoint for runtime installs)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
