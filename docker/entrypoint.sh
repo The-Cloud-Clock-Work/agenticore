@@ -30,6 +30,12 @@ fi
 # Wire hooks, skills, agents, CLAUDE.md into ~/.claude
 # HOME determines where: /home/agenticore (local) or /shared (K8s)
 # agentihooks reads AGENTIHOOKS_PROFILE env var for profile selection
+# Configure git HTTPS auth using GitHub token (for private repos)
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "git@github.com:"
+  git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+fi
+
 _init_args="--profile ${AGENTIHOOKS_PROFILE:-coding}"
 if [ -n "${AGENTICORE_AGENTIHOOKS_BUNDLE_URL:-}" ]; then
   _bundle_dest="${AGENTICORE_SHARED_FS_ROOT:-$HOME/.agenticore}/agentihooks-bundle"
