@@ -1085,13 +1085,15 @@ def _auto_sync_agentihooks(cfg):
     if not cfg.agentihooks_url or os.getenv("AGENTICORE_AGENTIHOOKS_PATH"):
         return
     try:
-        from agenticore.hooks import sync_agentihooks, sync_bundle, run_agentihooks_init, start_sync_watcher
+        from agenticore.hooks import sync_agentihooks, sync_bundle, run_agentihooks_init, start_sync_watcher, start_bundle_watcher
 
         install_path = sync_agentihooks()
         bundle_path = sync_bundle()
         run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
         if install_path and cfg.agentihooks_sync_interval > 0:
             start_sync_watcher(cfg.agentihooks_url, install_path, cfg.agentihooks_sync_interval)
+        if bundle_path and cfg.agentihooks_bundle_sync_interval > 0:
+            start_bundle_watcher(cfg.agentihooks_bundle_url, bundle_path, cfg.agentihooks_bundle_sync_interval)
     except Exception as e:
         logger.warning("agentihooks sync failed: %s — profiles may be unavailable", e)
 
@@ -1105,25 +1107,28 @@ def _auto_sync_agentihub(cfg):
     if not cfg.agentihub_url:
         return
     try:
-        from agenticore.hooks import sync_agentihub
+        from agenticore.hooks import sync_agentihub, start_agentihub_watcher
 
-        sync_agentihub()
+        hub_path = sync_agentihub()
+        if hub_path and cfg.agentihub_sync_interval > 0:
+            start_agentihub_watcher(cfg.agentihub_url, hub_path, cfg.agentihub_sync_interval)
     except Exception as e:
         logger.warning("agentihub sync failed: %s — non-fatal", e)
 
 
-def _auto_sync_mcp_lib(cfg):
-    """Auto-sync MCP lib if URL is configured and path not already set."""
-    if not cfg.mcp_lib_url or os.getenv("AGENTICORE_MCP_LIB_PATH"):
-        return
-    try:
-        from agenticore.hooks import sync_mcp_lib, start_mcp_lib_watcher
 
-        mcp_lib_path = sync_mcp_lib()
-        if mcp_lib_path and cfg.agentihooks_sync_interval > 0:
-            start_mcp_lib_watcher(cfg.mcp_lib_url, mcp_lib_path, cfg.agentihooks_sync_interval)
+def _ensure_claude_onboarding():
+    """Ensure .claude.json has hasCompletedOnboarding so interactive mode skips login prompt."""
+    claude_json = Path.home() / ".claude.json"
+    try:
+        data = json.loads(claude_json.read_text()) if claude_json.exists() else {}
+        if not data.get("hasCompletedOnboarding"):
+            data["hasCompletedOnboarding"] = True
+            data["installMethod"] = "native"
+            claude_json.write_text(json.dumps(data, indent=2))
+            logger.info("claude onboarding: set hasCompletedOnboarding=true")
     except Exception as e:
-        logger.warning("mcp-lib sync failed: %s — extra MCPs unavailable", e)
+        logger.warning("claude onboarding patch failed: %s — non-fatal", e)
 
 
 def main():
@@ -1155,9 +1160,11 @@ def main():
         except OSError:
             pass
 
+    # Ensure Claude Code skips onboarding/login prompt (uses CLAUDE_CODE_OAUTH_TOKEN)
+    _ensure_claude_onboarding()
+
     _auto_sync_agentihooks(cfg)
     _auto_sync_agentihub(cfg)
-    _auto_sync_mcp_lib(cfg)
 
     # Agent mode initialization
     if cfg.agent_mode.enabled:
