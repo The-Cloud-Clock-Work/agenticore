@@ -29,6 +29,7 @@ agenticore <command> [options]
 | `version` | | | No |
 | `agent` | | `--build`, `--run`, `--enter`, `--stop`, `--logs`, `--list`, `--compose-*` | No |
 | `push` | | `--main`, `--all`, `--tag`, `--build-only`, `--push-only`, `--no-cache` | No |
+| `agents` | | | No (needs kubectl) |
 | `hooks sync` | | `--target`, `--url` | No |
 
 ## serve
@@ -315,6 +316,39 @@ agenticore push --main --tag v1.2.3 --build-only
 # Push a previously built image
 agenticore push --main --push-only
 ```
+
+## agents
+
+Interactive TUI for discovering and managing agenticore pods in the current Kubernetes namespace.
+Requires `kubectl` configured with cluster access.
+
+```bash
+agenticore agents
+```
+
+Discovers pods by scanning env vars — any pod with `AGENTICORE_TRANSPORT` set is an agenticore pod.
+Pods with `AGENT_MODE=true` are classified as agents; others as orchestrators.
+
+**Actions per pod:**
+
+| Action | Agent Mode | Standard | What it does |
+|--------|-----------|----------|--------------|
+| Chat | Yes | — | `POST /completions` with interactive message input |
+| Submit job | — | Yes | `POST /jobs` with task + repo URL |
+| Sync repos | Yes | Yes | `agenticore hooks sync` inside the pod |
+| Exec shell | Yes | Yes | `kubectl exec -it` into bash |
+| Logs | Yes | Yes | `kubectl logs -f` |
+| Health | Yes | Yes | `GET /health` |
+
+**Keyboard:**
+
+| Key | Action |
+|-----|--------|
+| `1-N` | Select a pod |
+| `/word` | Filter by name |
+| `/` | Clear filter |
+| `r` | Refresh pod list |
+| `q` | Quit |
 
 ## hooks sync
 

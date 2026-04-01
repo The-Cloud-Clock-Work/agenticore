@@ -805,6 +805,13 @@ def _cmd_version(args):
     print(f"agenticore {__version__}")
 
 
+def _cmd_agents(args):  # noqa: ARG001
+    """Launch interactive agent manager TUI."""
+    from agenticore.agents_tui import main as agents_main
+
+    agents_main()
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="agenticore",
@@ -934,6 +941,10 @@ def main():
     p_push.add_argument("--push-only", action="store_true", help="Only push (assumes image built)")
     p_push.add_argument("--no-cache", action="store_true", help="Build without cache")
     p_push.set_defaults(func=_cmd_push)
+
+    # agents
+    p_agents = sub.add_parser("agents", help="Discover and manage running agenticore pods (K8s)")
+    p_agents.set_defaults(func=_cmd_agents)
 
     # hooks
     p_hooks = sub.add_parser("hooks", help="Manage agentihooks integration")
