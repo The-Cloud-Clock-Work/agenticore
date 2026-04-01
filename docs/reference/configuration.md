@@ -195,7 +195,7 @@ Server start
   ├─ AGENTICORE_AGENTIHOOKS_BUNDLE_URL set?
   │   └─ git clone → pass to agentihooks init --bundle → start watcher (BUNDLE_SYNC_INTERVAL)
   └─ AGENTICORE_AGENTIHUB_URL set?
-      └─ git clone → start watcher (AGENTIHUB_SYNC_INTERVAL)
+      └─ git clone → start watcher (AGENTICORE_AGENTIHUB_SYNC_INTERVAL)
           └─ agent_mode/initializer.py copies agents/{name}/package/ → /app/package/
 ```
 

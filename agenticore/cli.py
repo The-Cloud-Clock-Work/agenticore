@@ -306,24 +306,11 @@ def _cmd_hooks_sync(args):
     """Clone or update agentihooks, bundle, and agentihub repos."""
     import os
 
-    from agenticore.hooks import sync_agentihooks, sync_bundle, sync_agentihub, run_agentihooks_init
+    from agenticore.hooks import sync_agentihooks, sync_bundle, sync_agentihub, run_agentihooks_init, _bundle_dir
+    from agenticore.config import get_config
 
-    target = getattr(args, "target", "all")
+    target = args.target
     had_error = False
-
-    if target in ("all", "agentihooks"):
-        url = args.url or os.getenv("AGENTICORE_AGENTIHOOKS_URL", "")
-        try:
-            install_path = sync_agentihooks(url)
-            if install_path:
-                bundle_path = sync_bundle() if target in ("all", "agentihooks") else None
-                run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
-                print(f"agentihooks synced: {install_path}")
-            else:
-                print("agentihooks: skipped (no url configured)", file=sys.stderr)
-        except Exception as e:
-            print(f"agentihooks error: {e}", file=sys.stderr)
-            had_error = True
 
     if target in ("all", "bundle"):
         try:
@@ -334,6 +321,21 @@ def _cmd_hooks_sync(args):
                 print("bundle: skipped (no url configured)", file=sys.stderr)
         except Exception as e:
             print(f"bundle error: {e}", file=sys.stderr)
+            had_error = True
+
+    if target in ("all", "agentihooks"):
+        url = args.url or os.getenv("AGENTICORE_AGENTIHOOKS_URL", "")
+        try:
+            install_path = sync_agentihooks(url)
+            if install_path:
+                cfg = get_config()
+                bundle_path = _bundle_dir() if cfg.agentihooks_bundle_url else None
+                run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
+                print(f"agentihooks synced: {install_path}")
+            else:
+                print("agentihooks: skipped (no url configured)", file=sys.stderr)
+        except Exception as e:
+            print(f"agentihooks error: {e}", file=sys.stderr)
             had_error = True
 
     if target in ("all", "agentihub"):

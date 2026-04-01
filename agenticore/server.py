@@ -619,31 +619,11 @@ def _build_rest_app():
             info["default_model"] = cfg.agent_mode.model
         return JSONResponse(info)
 
-    async def post_admin_sync(request: Request):
-        target = request.query_params.get("target", "all")
-        valid_targets = {"all", "agentihooks", "bundle", "agentihub"}
-        if target not in valid_targets:
-            return JSONResponse(
-                {"error": f"Invalid target '{target}'. Must be one of: {', '.join(sorted(valid_targets))}"},
-                status_code=400,
-            )
-
-        from agenticore.hooks import sync_agentihooks, sync_bundle, sync_agentihub, run_agentihooks_init
+    def _do_sync(target: str) -> dict:
+        from agenticore.hooks import sync_agentihooks, sync_bundle, sync_agentihub, run_agentihooks_init, _bundle_dir
 
         cfg = get_config()
         results = {}
-
-        if target in ("all", "agentihooks"):
-            if cfg.agentihooks_url:
-                try:
-                    install_path = sync_agentihooks()
-                    bundle_path = sync_bundle() if target == "all" or target == "agentihooks" else None
-                    run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
-                    results["agentihooks"] = "ok"
-                except Exception as e:
-                    results["agentihooks"] = f"error: {e}"
-            else:
-                results["agentihooks"] = "skipped (no url)"
 
         if target in ("all", "bundle"):
             if cfg.agentihooks_bundle_url:
@@ -655,6 +635,18 @@ def _build_rest_app():
             else:
                 results["bundle"] = "skipped (no url)"
 
+        if target in ("all", "agentihooks"):
+            if cfg.agentihooks_url:
+                try:
+                    install_path = sync_agentihooks()
+                    bundle_path = _bundle_dir() if cfg.agentihooks_bundle_url else None
+                    run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
+                    results["agentihooks"] = "ok"
+                except Exception as e:
+                    results["agentihooks"] = f"error: {e}"
+            else:
+                results["agentihooks"] = "skipped (no url)"
+
         if target in ("all", "agentihub"):
             if cfg.agentihub_url:
                 try:
@@ -665,6 +657,20 @@ def _build_rest_app():
             else:
                 results["agentihub"] = "skipped (no url)"
 
+        return results
+
+    async def post_admin_sync(request: Request):
+        import asyncio
+
+        target = request.query_params.get("target", "all")
+        valid_targets = {"all", "agentihooks", "bundle", "agentihub"}
+        if target not in valid_targets:
+            return JSONResponse(
+                {"error": f"Invalid target '{target}'. Must be one of: {', '.join(sorted(valid_targets))}"},
+                status_code=400,
+            )
+
+        results = await asyncio.to_thread(_do_sync, target)
         return JSONResponse(results)
 
     async def post_jobs(request: Request):

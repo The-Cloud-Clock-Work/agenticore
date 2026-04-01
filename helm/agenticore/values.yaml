@@ -74,6 +74,13 @@ agentihooks:
   url: ""
   path: ""
   syncInterval: 300
+  bundleUrl: ""
+  bundleSyncInterval: 300
+
+agentihub:
+  url: ""
+  path: ""
+  syncInterval: 300
   # hooks-utils MCP server: which tool categories to load in Claude subprocesses.
   # Valid: github confluence aws email messaging storage database compute observability smith agent utilities
   # Coding-safe default: github (clone/PR/token) + utilities (validation/markdown) only.
