@@ -1,5 +1,6 @@
 """Unit tests for agenticore.hooks module."""
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -141,14 +142,10 @@ class TestSyncAgentihooks:
             mock_cfg.return_value.repos.shared_fs_root = ""
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
                 with patch("agenticore.hooks._install_dir", return_value=tmp_path):
-                    result = sync_agentihooks("https://github.com/example/agentihooks")
-
-        assert result == tmp_path
-        assert str(tmp_path) in (
-            monkeypatch.getfixturevalue("monkeypatch")._env_patches.get("AGENTICORE_AGENTIHOOKS_PATH", str(tmp_path))
-            if hasattr(monkeypatch, "_env_patches")
-            else str(tmp_path)
-        )
+                    with patch.dict(os.environ, {}, clear=False):
+                        result = sync_agentihooks("https://github.com/example/agentihooks")
+                        assert result == tmp_path
+                        assert os.environ.get("AGENTICORE_AGENTIHOOKS_PATH") == str(tmp_path)
         mock_clone.assert_called_once_with("https://github.com/example/agentihooks", tmp_path)
 
     def test_url_arg_overrides_config(self, monkeypatch, tmp_path):

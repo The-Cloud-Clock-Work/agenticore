@@ -121,6 +121,8 @@ def start_sync_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
 
     Returns the started Thread (daemon, so it dies with the process).
     """
+    if interval <= 0:
+        raise ValueError(f"interval must be > 0, got {interval}")
 
     mgmt = get_mgmt_logger()
 
@@ -146,6 +148,8 @@ def start_sync_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
 
 def start_bundle_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
     """Daemon thread that periodically re-fetches the agentihooks bundle repo."""
+    if interval <= 0:
+        raise ValueError(f"interval must be > 0, got {interval}")
 
     mgmt = get_mgmt_logger()
 
@@ -170,6 +174,8 @@ def start_bundle_watcher(url: str, dest: Path, interval: int) -> threading.Threa
 
 def start_agentihub_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
     """Daemon thread that periodically re-fetches the agentihub repo."""
+    if interval <= 0:
+        raise ValueError(f"interval must be > 0, got {interval}")
 
     mgmt = get_mgmt_logger()
 

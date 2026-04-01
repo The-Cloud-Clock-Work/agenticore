@@ -6,6 +6,7 @@ validates the package directory, and runs startup scripts.
 
 import logging
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -23,8 +24,6 @@ def _provision_from_agentihub(cfg) -> None:
     finds agents/{agent_name}/, then copies package/ → /app/package/ and
     evaluation/ → /app/evaluation/.
     """
-    import shutil
-
     from agenticore.repos import resolve_github_token
     from agenticore.git_credentials import git_askpass_env
 
@@ -76,6 +75,8 @@ def _provision_from_agentihub(cfg) -> None:
 
     agent_dir = clone_dir / "agents" / agent_name
     if not agent_dir.exists():
+        if clone_dir == Path("/tmp/agentihub-clone") and clone_dir.exists():
+            shutil.rmtree(clone_dir, ignore_errors=True)
         raise RuntimeError(f"Agent '{agent_name}' not found in agentihub at {agent_dir}")
 
     # Copy package/ → /app/package/
