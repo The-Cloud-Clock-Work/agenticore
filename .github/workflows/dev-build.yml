@@ -80,6 +80,6 @@ jobs:
           chmod +x kubectl
           echo "$KUBECONFIG_B64" | base64 -d > /tmp/kc
           trap 'rm -f /tmp/kc' EXIT
-          ./kubectl --kubeconfig=/tmp/kc rollout restart statefulset/agenticore -n agenticore-dev
-          ./kubectl --kubeconfig=/tmp/kc rollout status statefulset/agenticore -n agenticore-dev --timeout=180s
+          ./kubectl --kubeconfig=/tmp/kc rollout restart statefulset/agenticore -n anton-dev
+          ./kubectl --kubeconfig=/tmp/kc rollout status statefulset/agenticore -n anton-dev --timeout=180s
           rm -f kubectl
