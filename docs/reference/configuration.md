@@ -161,6 +161,7 @@ agentihub_sync_interval: 300
 | `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `agentihooks_sync_interval` | `300` | Hot-reload interval in seconds. `0` disables the watcher. |
 | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | `agentihooks_bundle_url` | (none) | Git URL to clone the agentihooks bundle repo. Passed as `--bundle` to `agentihooks init`. |
 | `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | `agentihooks_bundle_sync_interval` | `300` | Bundle hot-reload interval in seconds. `0` disables. |
+| `AGENTIHOOKS_PROFILE` | (env only) | `coding` | Profile name passed to `agentihooks init --profile`. |
 
 ### Agentihub
 

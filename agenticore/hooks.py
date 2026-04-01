@@ -15,7 +15,6 @@ import fcntl
 import logging
 import os
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -56,33 +55,6 @@ def _install_dir() -> Path:
     return Path.home() / ".agenticore" / "agentihooks"
 
 
-def _run_build(install_dir: Path) -> None:
-    """Invoke agentihooks' own build script.
-
-    Passes AGENTIHOOKS_HOME so agentihooks knows its install location
-    (replacing the old /app hard-coded assumption).
-    """
-    build_script = install_dir / "scripts" / "build_profiles.py"
-    if not build_script.exists():
-        logger.warning("agentihooks build script not found at %s — skipping", build_script)
-        return
-    env = os.environ.copy()
-    env["AGENTIHOOKS_HOME"] = str(install_dir)
-    result = subprocess.run(
-        [sys.executable, str(build_script)],
-        cwd=str(install_dir),
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        logger.warning(
-            "agentihooks build failed (profiles may lack settings.json):\n%s",
-            result.stderr,
-        )
-    else:
-        logger.info("agentihooks profiles built at %s", install_dir)
-
 
 def _clone_or_fetch(url: str, dest: Path) -> None:
     """Clone or update agentihooks repo, flock/Redis-protected."""
@@ -98,7 +70,6 @@ def _clone_or_fetch(url: str, dest: Path) -> None:
                 _run_git(["git", "-C", str(dest), "clean", "-fdx", "-e", "*.env"], extra_env=extra_env)
             else:
                 _run_git(["git", "clone", url, str(dest)], extra_env=extra_env)
-        _run_build(dest)
 
     if get_config().repos.shared_fs_root:
         _with_redis_lock("agenticore:lock:agentihooks", _do)

@@ -531,6 +531,7 @@ Full compose details: [Docker Compose](docs/deployment/docker-compose.md).
 | `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `300` | Agentihooks hot-reload interval in seconds (`0` disables) |
 | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | _(empty)_ | Git URL to clone the agentihooks bundle repo |
 | `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | `300` | Bundle hot-reload interval in seconds (`0` disables) |
+| `AGENTIHOOKS_PROFILE` | `coding` | Profile name for `agentihooks init` |
 | `AGENTICORE_AGENTIHUB_URL` | _(empty)_ | Git URL for agentihub repo (agent mode) |
 | `AGENTICORE_AGENTIHUB_PATH` | _(empty)_ | Explicit path to agentihub repo (skips cloning) |
 | `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | `300` | Agentihub hot-reload interval in seconds (`0` disables) |

@@ -1,7 +1,6 @@
 """Unit tests for agenticore.hooks module."""
 
 import os
-import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,7 +8,6 @@ import pytest
 
 from agenticore.hooks import (
     _install_dir,
-    _run_build,
     start_bundle_watcher,
     start_agentihub_watcher,
     start_sync_watcher,
@@ -46,65 +44,6 @@ class TestInstallDir:
         monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
         assert _install_dir() == Path.home() / ".agenticore" / "agentihooks"
 
-
-@pytest.mark.unit
-class TestRunBuild:
-    def test_missing_script_warns(self, tmp_path, caplog):
-        """No scripts/build_profiles.py → logs warning, no crash."""
-        import logging
-
-        with caplog.at_level(logging.WARNING, logger="agenticore.hooks"):
-            _run_build(tmp_path)
-
-        assert "build script not found" in caplog.text
-
-    def test_failure_warns(self, tmp_path, caplog):
-        """Non-zero build exit → logs warning, no crash."""
-        import logging
-
-        build_script = tmp_path / "scripts" / "build_profiles.py"
-        build_script.parent.mkdir(parents=True)
-        build_script.write_text("import sys; sys.exit(1)\n")
-
-        with caplog.at_level(logging.WARNING, logger="agenticore.hooks"):
-            _run_build(tmp_path)
-
-        assert "build failed" in caplog.text
-
-    def test_success_logs_info(self, tmp_path, caplog):
-        """Zero build exit → logs info message."""
-        import logging
-
-        build_script = tmp_path / "scripts" / "build_profiles.py"
-        build_script.parent.mkdir(parents=True)
-        build_script.write_text("# no-op\n")
-
-        with caplog.at_level(logging.INFO, logger="agenticore.hooks"):
-            _run_build(tmp_path)
-
-        assert "profiles built" in caplog.text
-
-    def test_passes_agentihooks_home_env(self, tmp_path):
-        """AGENTIHOOKS_HOME is set to install_dir when calling build script."""
-        build_script = tmp_path / "scripts" / "build_profiles.py"
-        build_script.parent.mkdir(parents=True)
-        # Write a script that prints the env var it received
-        build_script.write_text(
-            "import os, sys\nval = os.environ.get('AGENTIHOOKS_HOME', '')\nprint(val)\nsys.exit(0)\n"
-        )
-
-        captured_env = {}
-
-        original_run = subprocess.run
-
-        def fake_run(cmd, **kwargs):
-            captured_env.update(kwargs.get("env", {}))
-            return original_run(cmd, **kwargs)
-
-        with patch("agenticore.hooks.subprocess.run", side_effect=fake_run):
-            _run_build(tmp_path)
-
-        assert captured_env.get("AGENTIHOOKS_HOME") == str(tmp_path)
 
 
 @pytest.mark.unit
