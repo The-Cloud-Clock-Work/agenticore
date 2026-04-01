@@ -85,10 +85,6 @@ agentihooks:
   # to the Claude agent. All other github + utilities tools are safe for coding workflows.
   allowedTools: "github_get_token,github_clone_repo,github_create_pr,github_get_repo_info,git_summary,validate_mermaid,write_markdown,hooks_list_tools"
 
-mcpLib:
-  url: ""
-  path: ""
-
 # Deploy OTEL collector
 otelCollector:
   enabled: true

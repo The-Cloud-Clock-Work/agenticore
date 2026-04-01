@@ -556,6 +556,60 @@ class TestRestApi:
         assert call_kwargs["base_ref"] == "main"
 
 
+# ── Admin Sync ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestAdminSync:
+    @pytest.fixture
+    def rest_app(self):
+        from agenticore.server import _build_rest_app
+
+        return _build_rest_app()
+
+    def test_sync_all(self, rest_app):
+        """POST /admin/sync syncs all three repos."""
+        from starlette.testclient import TestClient
+
+        with (
+            patch("agenticore.hooks.sync_agentihooks", return_value=None),
+            patch("agenticore.hooks.sync_bundle", return_value=None),
+            patch("agenticore.hooks.sync_agentihub", return_value=None),
+            patch("agenticore.hooks.run_agentihooks_init"),
+        ):
+            client = TestClient(rest_app)
+            resp = client.post("/admin/sync")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "agentihooks" in data
+        assert "bundle" in data
+        assert "agentihub" in data
+
+    def test_sync_single_target(self, rest_app):
+        """POST /admin/sync?target=agentihub only syncs agentihub."""
+        from starlette.testclient import TestClient
+
+        with patch("agenticore.hooks.sync_agentihub", return_value=None):
+            client = TestClient(rest_app)
+            resp = client.post("/admin/sync?target=agentihub")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "agentihub" in data
+        assert "agentihooks" not in data
+
+    def test_sync_invalid_target(self, rest_app):
+        """POST /admin/sync?target=invalid returns 400."""
+        from starlette.testclient import TestClient
+
+        client = TestClient(rest_app)
+        resp = client.post("/admin/sync?target=invalid")
+
+        assert resp.status_code == 400
+        assert "Invalid target" in resp.json()["error"]
+
+
 # ── API Key Middleware ────────────────────────────────────────────────────
 
 

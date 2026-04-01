@@ -143,50 +143,9 @@ def start_sync_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
     return t
 
 
-def _mcp_lib_install_dir() -> Path:
-    """Determine where the MCP library repo should be installed.
 
-    3-tier resolution: explicit env → shared FS → local default.
-    """
-    explicit = os.getenv("AGENTICORE_MCP_LIB_PATH", "")
-    if explicit:
-        return Path(explicit)
-    shared = os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
-    if shared:
-        return Path(shared) / "mcp-lib"
-    return Path.home() / ".agenticore" / "mcp-lib"
-
-
-def sync_mcp_lib(url: str = "") -> Optional[Path]:
-    """Clone/fetch MCP library repo. Sets AGENTICORE_MCP_LIB_PATH in-process.
-
-    Returns the install directory, or None if no URL is configured.
-    If AGENTICORE_MCP_LIB_PATH is already set and no URL is provided,
-    returns the existing path without cloning.
-    """
-    url = url or get_config().mcp_lib_url
-    if not url:
-        explicit = os.getenv("AGENTICORE_MCP_LIB_PATH")
-        if explicit:
-            return Path(explicit)
-        return None
-    dest = _mcp_lib_install_dir()
-    _clone_or_fetch(url, dest)
-    os.environ["AGENTICORE_MCP_LIB_PATH"] = str(dest)
-    logger.info("AGENTICORE_MCP_LIB_PATH → %s", dest)
-    return dest
-
-
-def start_mcp_lib_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
-    """Background daemon thread that periodically re-fetches the MCP lib repo.
-
-    Args:
-        url:      MCP lib git URL.
-        dest:     Install directory (already cloned).
-        interval: Seconds between re-syncs. Must be > 0.
-
-    Returns the started Thread (daemon, so it dies with the process).
-    """
+def start_bundle_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
+    """Daemon thread that periodically re-fetches the agentihooks bundle repo."""
 
     mgmt = get_mgmt_logger()
 
@@ -194,18 +153,42 @@ def start_mcp_lib_watcher(url: str, dest: Path, interval: int) -> threading.Thre
         while True:
             time.sleep(interval)
             try:
-                _clone_or_fetch(url, dest)
+                _clone_or_fetch_bundle(url, dest)
                 ref = _get_head_ref(dest)
-                logger.info("mcp-lib hot-reload complete (%s)", dest)
-                mgmt.info("hot-reload mcp-lib OK ref=%s", ref)
+                logger.info("agentihooks-bundle hot-reload complete (%s)", dest)
+                mgmt.info("hot-reload agentihooks-bundle OK ref=%s", ref)
             except Exception as exc:
-                logger.warning("mcp-lib hot-reload failed: %s", exc)
-                mgmt.warning("hot-reload mcp-lib FAIL: %s", exc)
+                logger.warning("agentihooks-bundle hot-reload failed: %s", exc)
+                mgmt.warning("hot-reload agentihooks-bundle FAIL: %s", exc)
 
-    t = threading.Thread(target=_watch, name="mcp-lib-watcher", daemon=True)
+    t = threading.Thread(target=_watch, name="agentihooks-bundle-watcher", daemon=True)
     t.start()
-    logger.info("mcp-lib watcher started (interval=%ds, dest=%s)", interval, dest)
-    mgmt.info("watcher mcp-lib started interval=%ds dest=%s", interval, dest)
+    logger.info("agentihooks-bundle watcher started (interval=%ds, dest=%s)", interval, dest)
+    mgmt.info("watcher agentihooks-bundle started interval=%ds dest=%s", interval, dest)
+    return t
+
+
+def start_agentihub_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
+    """Daemon thread that periodically re-fetches the agentihub repo."""
+
+    mgmt = get_mgmt_logger()
+
+    def _watch():
+        while True:
+            time.sleep(interval)
+            try:
+                _clone_or_fetch_agentihub(url, dest)
+                ref = _get_head_ref(dest)
+                logger.info("agentihub hot-reload complete (%s)", dest)
+                mgmt.info("hot-reload agentihub OK ref=%s", ref)
+            except Exception as exc:
+                logger.warning("agentihub hot-reload failed: %s", exc)
+                mgmt.warning("hot-reload agentihub FAIL: %s", exc)
+
+    t = threading.Thread(target=_watch, name="agentihub-watcher", daemon=True)
+    t.start()
+    logger.info("agentihub watcher started (interval=%ds, dest=%s)", interval, dest)
+    mgmt.info("watcher agentihub started interval=%ds dest=%s", interval, dest)
     return t
 
 
@@ -214,7 +197,7 @@ def _agentihub_install_dir() -> Path:
 
     3-tier resolution: explicit env → shared FS → local default.
     """
-    explicit = os.getenv("AGENTIHUB_PATH", "")
+    explicit = os.getenv("AGENTICORE_AGENTIHUB_PATH", "")
     if explicit:
         return Path(explicit)
     shared = os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
@@ -252,19 +235,19 @@ def _clone_or_fetch_agentihub(url: str, dest: Path) -> None:
 def sync_agentihub(url: str = "") -> Optional[Path]:
     """Clone/fetch agentihub + run agent_hub + rebuild profiles.
 
-    Sets AGENTIHUB_PATH in-process. Returns the install directory,
+    Sets AGENTICORE_AGENTIHUB_PATH in-process. Returns the install directory,
     or None if no URL is configured.
     """
     url = url or get_config().agentihub_url
     if not url:
-        explicit = os.getenv("AGENTIHUB_PATH")
+        explicit = os.getenv("AGENTICORE_AGENTIHUB_PATH")
         if explicit:
             return Path(explicit)
         return None
     dest = _agentihub_install_dir()
     _clone_or_fetch_agentihub(url, dest)
-    os.environ["AGENTIHUB_PATH"] = str(dest)
-    logger.info("AGENTIHUB_PATH → %s", dest)
+    os.environ["AGENTICORE_AGENTIHUB_PATH"] = str(dest)
+    logger.info("AGENTICORE_AGENTIHUB_PATH → %s", dest)
     return dest
 
 

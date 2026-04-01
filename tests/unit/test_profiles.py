@@ -9,8 +9,6 @@ from agenticore.profiles import (
     Profile,
     ProfileClaude,
     _copy_profile_chain_to,
-    _find_mcp_json_files,
-    _merge_mcp_lib_into,
     build_cli_args,
     materialize_profile,
     profile_to_dict,
@@ -528,120 +526,6 @@ class TestMaterializeProfileSharedFs:
         assert result.is_dir()
         assert str(result).startswith(str(shared))
 
-
-@pytest.mark.unit
-class TestMcpLibMerging:
-    def test_find_mcp_json_files_returns_valid(self, tmp_path):
-        """_find_mcp_json_files returns only .json files with mcpServers key."""
-        valid = tmp_path / "a.json"
-        valid.write_text('{"mcpServers": {"srv": {}}}')
-        invalid = tmp_path / "b.json"
-        invalid.write_text('{"other": true}')
-        non_json = tmp_path / "c.txt"
-        non_json.write_text("text")
-
-        result = _find_mcp_json_files(tmp_path)
-        assert result == [valid]
-
-    def test_find_mcp_json_files_sorted(self, tmp_path):
-        """Results are sorted by filename."""
-        (tmp_path / "z.json").write_text('{"mcpServers": {"z": {}}}')
-        (tmp_path / "a.json").write_text('{"mcpServers": {"a": {}}}')
-        result = _find_mcp_json_files(tmp_path)
-        assert [f.name for f in result] == ["a.json", "z.json"]
-
-    def test_merge_mcp_lib_into_new_file(self, tmp_path):
-        """Merges servers into a fresh target dir (no existing .mcp.json)."""
-        lib_dir = tmp_path / "lib"
-        lib_dir.mkdir()
-        (lib_dir / "extra.json").write_text('{"mcpServers": {"extra-srv": {"command": "foo"}}}')
-
-        target = tmp_path / "target"
-        target.mkdir()
-
-        _merge_mcp_lib_into(lib_dir, target)
-
-        data = json.loads((target / ".mcp.json").read_text())
-        assert "extra-srv" in data["mcpServers"]
-
-    def test_merge_mcp_lib_into_existing(self, tmp_path):
-        """Merges servers into existing .mcp.json without losing existing servers."""
-        lib_dir = tmp_path / "lib"
-        lib_dir.mkdir()
-        (lib_dir / "extra.json").write_text('{"mcpServers": {"lib-srv": {}}}')
-
-        target = tmp_path / "target"
-        target.mkdir()
-        (target / ".mcp.json").write_text('{"mcpServers": {"profile-srv": {}}}')
-
-        _merge_mcp_lib_into(lib_dir, target)
-
-        data = json.loads((target / ".mcp.json").read_text())
-        assert "profile-srv" in data["mcpServers"]
-        assert "lib-srv" in data["mcpServers"]
-
-    def test_merge_mcp_lib_skips_non_mcp_json(self, tmp_path):
-        """.json files without mcpServers key are ignored."""
-        lib_dir = tmp_path / "lib"
-        lib_dir.mkdir()
-        (lib_dir / "readme.json").write_text('{"description": "no servers here"}')
-
-        target = tmp_path / "target"
-        target.mkdir()
-
-        _merge_mcp_lib_into(lib_dir, target)
-
-        # No .mcp.json should be created when no valid files found
-        assert not (target / ".mcp.json").exists()
-
-    def test_mcp_lib_not_set_fast_path(self, monkeypatch, minimal_profile):
-        """No AGENTICORE_MCP_LIB_PATH → simple profile returns own path (fast-path)."""
-        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
-        result = materialize_profile(minimal_profile)
-        assert result == minimal_profile.path
-
-    def test_mcp_lib_forces_materialization(self, monkeypatch, tmp_path, minimal_profile):
-        """AGENTICORE_MCP_LIB_PATH set → simple profile materializes into per-job dir."""
-        lib_dir = tmp_path / "mcp-lib"
-        lib_dir.mkdir()
-        (lib_dir / "extra.json").write_text('{"mcpServers": {"extra": {}}}')
-        monkeypatch.setenv("AGENTICORE_MCP_LIB_PATH", str(lib_dir))
-        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
-
-        result = materialize_profile(minimal_profile, job_id="test-mcp-lib")
-
-        assert result != minimal_profile.path
-        assert result is not None
-
-    def test_mcp_lib_merges_servers(self, monkeypatch, tmp_path, minimal_profile):
-        """MCP lib servers are merged into the materialized .mcp.json."""
-        lib_dir = tmp_path / "mcp-lib"
-        lib_dir.mkdir()
-        (lib_dir / "cluster.json").write_text('{"mcpServers": {"cluster-tool": {"command": "ct"}}}')
-        monkeypatch.setenv("AGENTICORE_MCP_LIB_PATH", str(lib_dir))
-        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
-
-        result = materialize_profile(minimal_profile, job_id="merge-lib-test")
-
-        assert result is not None
-        mcp_data = json.loads((result / ".mcp.json").read_text())
-        assert "cluster-tool" in mcp_data["mcpServers"]
-
-    def test_mcp_lib_multiple_files(self, monkeypatch, tmp_path, minimal_profile):
-        """Multiple lib files → all servers merged."""
-        lib_dir = tmp_path / "mcp-lib"
-        lib_dir.mkdir()
-        (lib_dir / "a.json").write_text('{"mcpServers": {"srv-a": {}}}')
-        (lib_dir / "b.json").write_text('{"mcpServers": {"srv-b": {}}}')
-        monkeypatch.setenv("AGENTICORE_MCP_LIB_PATH", str(lib_dir))
-        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
-
-        result = materialize_profile(minimal_profile, job_id="multi-lib-test")
-
-        assert result is not None
-        mcp_data = json.loads((result / ".mcp.json").read_text())
-        assert "srv-a" in mcp_data["mcpServers"]
-        assert "srv-b" in mcp_data["mcpServers"]
 
 
 @pytest.mark.unit

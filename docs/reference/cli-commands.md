@@ -29,6 +29,7 @@ agenticore <command> [options]
 | `version` | | | No |
 | `agent` | | `--build`, `--run`, `--enter`, `--stop`, `--logs`, `--list`, `--compose-*` | No |
 | `push` | | `--main`, `--all`, `--tag`, `--build-only`, `--push-only`, `--no-cache` | No |
+| `hooks sync` | | `--target`, `--url` | No |
 
 ## serve
 
@@ -314,6 +315,27 @@ agenticore push --main --tag v1.2.3 --build-only
 # Push a previously built image
 agenticore push --main --push-only
 ```
+
+## hooks sync
+
+Clone or update companion repos (agentihooks, bundle, agentihub) and rebuild profiles.
+Runs locally — does not require a running server.
+
+```bash
+# Sync all repos
+agenticore hooks sync
+
+# Sync a specific repo
+agenticore hooks sync --target agentihub
+
+# Override agentihooks URL
+agenticore hooks sync --target agentihooks --url https://github.com/org/agentihooks
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--target` | choice | `all` | Which repo: `all`, `agentihooks`, `bundle`, `agentihub` |
+| `--url` | str | env var | Git URL override (agentihooks target only) |
 
 ## Client Configuration
 

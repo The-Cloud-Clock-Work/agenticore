@@ -76,11 +76,20 @@ when `AGENTICORE_AGENTIHOOKS_URL` is set. All pods share a single clone on the R
 the correct install directory. A background watcher refreshes the clone every
 `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` seconds (default 300) — no restart needed.
 
+### Agentihooks Bundle
+
+The **agentihooks-bundle** repo (`AGENTICORE_AGENTIHOOKS_BUNDLE_URL`) provides
+companion configuration passed to `agentihooks init --bundle <path>`. It is cloned
+at startup alongside agentihooks and has its own background watcher controlled by
+`AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` (default 300s, `0` disables).
+
 ### Agentihub — direct provisioning
 
 In Agent Mode, agent packages come directly from **agentihub** — not from
 agentihooks profiles. Agenticore's `agent_mode/initializer.py` clones agentihub
-and copies `agents/{name}/package/` → `/app/package/`.
+and copies `agents/{name}/package/` → `/app/package/`. A background watcher
+refreshes the clone every `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` seconds
+(default 300, `0` disables).
 
 ```
 agenticore   = execution engine (this project)
@@ -90,7 +99,9 @@ agentihub    = agent identities (CLAUDE.md, prompts, evaluation)
 
 | Variable | Description |
 |----------|-------------|
-| `AGENTIHUB_URL` | Git URL for the agentihub repo |
+| `AGENTICORE_AGENTIHUB_URL` | Git URL for the agentihub repo |
+| `AGENTICORE_AGENTIHUB_PATH` | Explicit path override (skips cloning) |
+| `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | Hot-reload interval in seconds (`0` disables) |
 | `AGENTIHUB_AGENT` | Agent name to load (matches `agents/{name}/` directory) |
 
 ## Writing a Profile

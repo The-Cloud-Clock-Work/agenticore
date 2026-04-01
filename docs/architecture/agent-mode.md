@@ -42,10 +42,11 @@ lifecycle and purpose.
 Agent packages come from [agentihub](https://github.com/The-Cloud-Clock-Work/agentihub)
 — a separate repo holding agent identities (CLAUDE.md, prompts, evaluation).
 
-On startup, `agent_mode/initializer.py` clones agentihub (via `AGENTIHUB_URL`)
+On startup, `agent_mode/initializer.py` clones agentihub (via `AGENTICORE_AGENTIHUB_URL`)
 and copies `agents/{name}/package/` → `/app/package/`. The container then
 validates the package, runs startup scripts, caches the system prompt, and
-waits for requests.
+waits for requests. A background watcher re-fetches the agentihub repo every
+`AGENTICORE_AGENTIHUB_SYNC_INTERVAL` seconds (default 300, `0` disables).
 
 [Agentihooks](https://github.com/The-Cloud-Clock-Work/agentihooks) provides the
 Claude Code runner (hooks, MCP tools, guardrails) but is **not** involved in

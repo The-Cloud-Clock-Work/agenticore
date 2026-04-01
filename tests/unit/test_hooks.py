@@ -1,6 +1,5 @@
 """Unit tests for agenticore.hooks module."""
 
-import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -9,11 +8,11 @@ import pytest
 
 from agenticore.hooks import (
     _install_dir,
-    _mcp_lib_install_dir,
     _run_build,
+    start_bundle_watcher,
+    start_agentihub_watcher,
     start_sync_watcher,
     sync_agentihooks,
-    sync_mcp_lib,
 )
 
 
@@ -180,97 +179,6 @@ class TestSyncAgentihooks:
         mock_clone.assert_called_once_with("https://github.com/config/repo", tmp_path)
 
 
-@pytest.mark.unit
-class TestMcpLibInstallDir:
-    def test_explicit_path(self, monkeypatch, tmp_path):
-        """Explicit AGENTICORE_MCP_LIB_PATH env var wins."""
-        monkeypatch.setenv("AGENTICORE_MCP_LIB_PATH", str(tmp_path))
-        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
-        assert _mcp_lib_install_dir() == tmp_path
-
-    def test_shared_fs(self, monkeypatch, tmp_path):
-        """AGENTICORE_SHARED_FS_ROOT → {root}/mcp-lib."""
-        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
-        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(tmp_path))
-        assert _mcp_lib_install_dir() == tmp_path / "mcp-lib"
-
-    def test_local_default(self, monkeypatch):
-        """Falls back to ~/.agenticore/mcp-lib."""
-        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
-        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
-        assert _mcp_lib_install_dir() == Path.home() / ".agenticore" / "mcp-lib"
-
-
-@pytest.mark.unit
-class TestSyncMcpLib:
-    def test_no_url_returns_none(self, monkeypatch):
-        """No URL configured and no path set → returns None."""
-        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
-
-        with patch("agenticore.hooks.get_config") as mock_cfg:
-            mock_cfg.return_value.mcp_lib_url = ""
-            result = sync_mcp_lib()
-
-        assert result is None
-
-    def test_explicit_path_no_clone(self, monkeypatch, tmp_path):
-        """AGENTICORE_MCP_LIB_PATH already set, no URL → return path without cloning."""
-        monkeypatch.setenv("AGENTICORE_MCP_LIB_PATH", str(tmp_path))
-
-        with patch("agenticore.hooks.get_config") as mock_cfg:
-            mock_cfg.return_value.mcp_lib_url = ""
-            with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
-                result = sync_mcp_lib()
-
-        assert result == tmp_path
-        mock_clone.assert_not_called()
-
-    def test_sets_env_var(self, monkeypatch, tmp_path):
-        """After sync with URL, AGENTICORE_MCP_LIB_PATH is set in os.environ."""
-        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
-        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
-
-        # Use patch.dict to sandbox env changes made by sync_mcp_lib
-        with patch("agenticore.hooks.get_config") as mock_cfg:
-            mock_cfg.return_value.mcp_lib_url = ""
-            mock_cfg.return_value.repos.shared_fs_root = ""
-            with patch("agenticore.hooks._clone_or_fetch"):
-                with patch("agenticore.hooks._mcp_lib_install_dir", return_value=tmp_path):
-                    with patch.dict(os.environ, {}):
-                        result = sync_mcp_lib("https://github.com/example/mcp-lib")
-                        assert result == tmp_path
-                        assert os.environ.get("AGENTICORE_MCP_LIB_PATH") == str(tmp_path)
-        # patch.dict has exited — AGENTICORE_MCP_LIB_PATH is restored to pre-test state
-
-    def test_url_triggers_clone(self, monkeypatch, tmp_path):
-        """URL provided → _clone_or_fetch is called with that URL."""
-        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
-
-        with patch("agenticore.hooks.get_config") as mock_cfg:
-            mock_cfg.return_value.mcp_lib_url = ""
-            mock_cfg.return_value.repos.shared_fs_root = ""
-            with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
-                with patch("agenticore.hooks._mcp_lib_install_dir", return_value=tmp_path):
-                    with patch.dict(os.environ, {}):
-                        sync_mcp_lib("https://github.com/example/mcp-lib")
-
-        mock_clone.assert_called_once_with("https://github.com/example/mcp-lib", tmp_path)
-
-    def test_config_url_used_when_no_arg(self, monkeypatch, tmp_path):
-        """Config mcp_lib_url is used when no URL arg provided."""
-        monkeypatch.delenv("AGENTICORE_MCP_LIB_PATH", raising=False)
-
-        with patch("agenticore.hooks.get_config") as mock_cfg:
-            mock_cfg.return_value.mcp_lib_url = "https://github.com/config/mcp-lib"
-            mock_cfg.return_value.repos.shared_fs_root = ""
-            with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
-                with patch("agenticore.hooks._mcp_lib_install_dir", return_value=tmp_path):
-                    with patch.dict(os.environ, {}):
-                        result = sync_mcp_lib()
-
-        assert result == tmp_path
-        mock_clone.assert_called_once_with("https://github.com/config/mcp-lib", tmp_path)
-
 
 @pytest.mark.unit
 class TestSyncWatcher:
@@ -325,3 +233,113 @@ class TestSyncWatcher:
                     t.join(timeout=2)
 
         assert "hot-reload failed" in caplog.text
+
+
+@pytest.mark.unit
+class TestBundleWatcher:
+    def test_returns_daemon_thread(self, tmp_path):
+        """start_bundle_watcher returns a started daemon thread."""
+        with patch("agenticore.hooks._clone_or_fetch_bundle"):
+            t = start_bundle_watcher("https://example.com/bundle", tmp_path, interval=9999)
+        assert t.daemon is True
+        assert t.is_alive()
+        t.join(timeout=0)
+
+    def test_calls_clone_or_fetch_bundle_after_interval(self, tmp_path):
+        """Watcher thread calls _clone_or_fetch_bundle after each sleep interval."""
+        import agenticore.hooks as hooks_mod
+
+        calls = []
+
+        def fake_clone(url, dest):
+            calls.append((url, dest))
+
+        call_count = [0]
+
+        def stop_after_one(n):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise SystemExit
+
+        with patch("agenticore.hooks._clone_or_fetch_bundle", side_effect=fake_clone):
+            with patch.object(hooks_mod.time, "sleep", side_effect=stop_after_one):
+                t = start_bundle_watcher("https://example.com/bundle", tmp_path, interval=1)
+                t.join(timeout=2)
+
+        assert len(calls) >= 1
+
+    def test_handles_exception_without_crashing(self, tmp_path, caplog):
+        """Exception in _clone_or_fetch_bundle is caught and logged; thread keeps running."""
+        import logging
+
+        import agenticore.hooks as hooks_mod
+
+        call_count = [0]
+
+        def fail_then_stop(n):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise SystemExit
+
+        with patch("agenticore.hooks._clone_or_fetch_bundle", side_effect=Exception("network error")):
+            with patch.object(hooks_mod.time, "sleep", side_effect=fail_then_stop):
+                with caplog.at_level(logging.WARNING, logger="agenticore.hooks"):
+                    t = start_bundle_watcher("https://example.com/bundle", tmp_path, interval=1)
+                    t.join(timeout=2)
+
+        assert "agentihooks-bundle hot-reload failed" in caplog.text
+
+
+@pytest.mark.unit
+class TestAgentihubWatcher:
+    def test_returns_daemon_thread(self, tmp_path):
+        """start_agentihub_watcher returns a started daemon thread."""
+        with patch("agenticore.hooks._clone_or_fetch_agentihub"):
+            t = start_agentihub_watcher("https://example.com/agentihub", tmp_path, interval=9999)
+        assert t.daemon is True
+        assert t.is_alive()
+        t.join(timeout=0)
+
+    def test_calls_clone_or_fetch_agentihub_after_interval(self, tmp_path):
+        """Watcher thread calls _clone_or_fetch_agentihub after each sleep interval."""
+        import agenticore.hooks as hooks_mod
+
+        calls = []
+
+        def fake_clone(url, dest):
+            calls.append((url, dest))
+
+        call_count = [0]
+
+        def stop_after_one(n):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise SystemExit
+
+        with patch("agenticore.hooks._clone_or_fetch_agentihub", side_effect=fake_clone):
+            with patch.object(hooks_mod.time, "sleep", side_effect=stop_after_one):
+                t = start_agentihub_watcher("https://example.com/agentihub", tmp_path, interval=1)
+                t.join(timeout=2)
+
+        assert len(calls) >= 1
+
+    def test_handles_exception_without_crashing(self, tmp_path, caplog):
+        """Exception in _clone_or_fetch_agentihub is caught and logged; thread keeps running."""
+        import logging
+
+        import agenticore.hooks as hooks_mod
+
+        call_count = [0]
+
+        def fail_then_stop(n):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                raise SystemExit
+
+        with patch("agenticore.hooks._clone_or_fetch_agentihub", side_effect=Exception("network error")):
+            with patch.object(hooks_mod.time, "sleep", side_effect=fail_then_stop):
+                with caplog.at_level(logging.WARNING, logger="agenticore.hooks"):
+                    t = start_agentihub_watcher("https://example.com/agentihub", tmp_path, interval=1)
+                    t.join(timeout=2)
+
+        assert "agentihub hot-reload failed" in caplog.text

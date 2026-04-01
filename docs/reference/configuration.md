@@ -67,6 +67,11 @@ langfuse:
 agentihooks_path: ""
 agentihooks_url: ""
 agentihooks_sync_interval: 300
+agentihooks_bundle_url: ""
+agentihooks_bundle_sync_interval: 300
+agentihub_url: ""
+agentihub_path: ""
+agentihub_sync_interval: 300
 ```
 
 ## Environment Variables
@@ -154,6 +159,92 @@ agentihooks_sync_interval: 300
 | `AGENTICORE_AGENTIHOOKS_PATH` | `agentihooks_path` | (none) | Explicit path override. Skips cloning. |
 | `AGENTICORE_AGENTIHOOKS_URL` | `agentihooks_url` | (none) | Git URL to clone agentihooks from. Supports private repos via `GITHUB_TOKEN`. |
 | `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `agentihooks_sync_interval` | `300` | Hot-reload interval in seconds. `0` disables the watcher. |
+| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | `agentihooks_bundle_url` | (none) | Git URL to clone the agentihooks bundle repo. Passed as `--bundle` to `agentihooks init`. |
+| `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | `agentihooks_bundle_sync_interval` | `300` | Bundle hot-reload interval in seconds. `0` disables. |
+
+### Agentihub
+
+| Variable | YAML Key | Default | Description |
+|----------|----------|---------|-------------|
+| `AGENTICORE_AGENTIHUB_URL` | `agentihub_url` | (none) | Git URL for the agentihub repo (agent packages). Used in agent mode. |
+| `AGENTICORE_AGENTIHUB_PATH` | `agentihub_path` | (none) | Explicit path override. Skips cloning. |
+| `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | `agentihub_sync_interval` | `300` | Agentihub hot-reload interval in seconds. `0` disables. |
+| `AGENTIHUB_AGENT` | (env only) | (none) | Agent name to load (matches `agents/{name}/` directory). |
+
+## Repository Sync
+
+Agenticore clones up to three companion repos at startup and keeps them
+up-to-date via background watcher threads. Each repo has a URL (triggers
+cloning), a PATH override (skips cloning), and a SYNC_INTERVAL (controls
+hot-reload frequency).
+
+### Which repos to configure
+
+| Deployment | Repos needed | Key variables |
+|------------|-------------|---------------|
+| **Standard mode** (job orchestrator) | agentihooks + bundle | `AGENTICORE_AGENTIHOOKS_URL`, `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` |
+| **Agent mode** (purpose-built container) | agentihooks + bundle + agentihub | All three `*_URL` vars + `AGENTIHUB_AGENT` |
+| **Local dev** (pre-cloned repos) | none — use PATH overrides | `AGENTICORE_AGENTIHOOKS_PATH`, `AGENTICORE_AGENTIHUB_PATH` |
+
+### Startup flow
+
+```
+Server start
+  ├─ AGENTICORE_AGENTIHOOKS_URL set?
+  │   └─ git clone → build profiles → start watcher (SYNC_INTERVAL)
+  ├─ AGENTICORE_AGENTIHOOKS_BUNDLE_URL set?
+  │   └─ git clone → pass to agentihooks init --bundle → start watcher (BUNDLE_SYNC_INTERVAL)
+  └─ AGENTICORE_AGENTIHUB_URL set?
+      └─ git clone → start watcher (AGENTIHUB_SYNC_INTERVAL)
+          └─ agent_mode/initializer.py copies agents/{name}/package/ → /app/package/
+```
+
+### Hot-reload behavior
+
+All three repos use the same pattern: a daemon thread periodically runs
+`git fetch --all && git reset --hard origin/HEAD`. Each has an independent
+interval defaulting to 300 seconds. Set any `*_SYNC_INTERVAL` to `0` to
+disable its watcher.
+
+| Repo | Watcher thread | Interval variable | Default |
+|------|---------------|-------------------|---------|
+| agentihooks | `agentihooks-watcher` | `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | 300s |
+| agentihooks-bundle | `agentihooks-bundle-watcher` | `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | 300s |
+| agentihub | `agentihub-watcher` | `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | 300s |
+
+### On-demand sync
+
+In addition to the background watchers, you can trigger a sync manually:
+
+**REST API:**
+
+```bash
+# Sync all repos
+curl -X POST http://localhost:8200/admin/sync
+
+# Sync a specific repo
+curl -X POST "http://localhost:8200/admin/sync?target=agentihub"
+```
+
+Valid targets: `all` (default), `agentihooks`, `bundle`, `agentihub`.
+
+**CLI (from inside the container):**
+
+```bash
+# Sync all repos
+agenticore hooks sync
+
+# Sync a specific repo
+agenticore hooks sync --target bundle
+```
+
+### PATH vs URL
+
+Setting a `*_PATH` variable tells agenticore to use that directory as-is —
+no cloning, no watcher, no git operations. This is useful for local
+development where you have the repos already checked out. When both `*_PATH`
+and `*_URL` are set, `*_PATH` takes precedence (agentihooks only; agentihub
+always clones when `*_URL` is set).
 
 ## File Paths
 
@@ -177,4 +268,6 @@ agentihooks_sync_interval: 300
 | `/shared/jobs/{job-id}/` | Per-job merge dir (extends profiles) / no-repo CWD |
 | `/shared/job-state/{id}.json` | Job data files (`AGENTICORE_JOBS_DIR=/shared/job-state`) |
 | `/shared/agentihooks/` | Cloned agentihooks repo (when `AGENTICORE_AGENTIHOOKS_URL` set) |
+| `/shared/agentihooks-bundle/` | Cloned bundle repo (when `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` set) |
+| `/shared/agentihub/` | Cloned agentihub repo (when `AGENTICORE_AGENTIHUB_URL` set) |
 | `/app/worktrees/{job-id}/` | Bespoke worktrees (emptyDir, local disk via `AGENTICORE_WORKTREE_ROOT`) |

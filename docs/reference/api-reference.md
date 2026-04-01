@@ -247,6 +247,31 @@ curl http://localhost:8200/health
 |--------|-----------|
 | `200` | Server is running |
 
+### POST /admin/sync
+
+Trigger an on-demand sync of companion repos. Requires auth when API keys are configured.
+
+```bash
+# Sync all repos
+curl -X POST http://localhost:8200/admin/sync
+
+# Sync a specific repo
+curl -X POST "http://localhost:8200/admin/sync?target=agentihub"
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `target` | query | `all` | Which repo to sync: `all`, `agentihooks`, `bundle`, `agentihub` |
+
+```json
+{"agentihooks": "ok", "bundle": "ok", "agentihub": "skipped (no url)"}
+```
+
+| Status | Condition |
+|--------|-----------|
+| `200` | Sync completed (check per-repo status in response) |
+| `400` | Invalid target parameter |
+
 ## Job Schema
 
 The full Job object returned by all endpoints:

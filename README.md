@@ -92,7 +92,7 @@ agenticore run "fix the null pointer in auth.py" \
 | `agenticore update` | Update to latest version |
 | `agenticore init-shared-fs` | Initialise shared filesystem (Kubernetes) |
 | `agenticore drain` | Drain pod before shutdown (Kubernetes) |
-| `agenticore hooks sync [--url URL]` | Clone/fetch agentihooks and rebuild profiles |
+| `agenticore hooks sync [--target T]` | Clone/fetch repos and rebuild profiles (`all`, `agentihooks`, `bundle`, `agentihub`) |
 | `agenticore agent <flags>` | Build, run, and manage the local container / dev compose stack |
 | `agenticore push --main` | Build and push Docker image to a registry |
 
@@ -160,6 +160,12 @@ curl http://localhost:8200/profiles
 
 # Health check (no auth required)
 curl http://localhost:8200/health
+
+# Trigger repo sync on demand (all repos)
+curl -X POST http://localhost:8200/admin/sync
+
+# Sync a specific repo
+curl -X POST "http://localhost:8200/admin/sync?target=agentihub"
 ```
 
 ---
@@ -522,7 +528,13 @@ Full compose details: [Docker Compose](docs/deployment/docker-compose.md).
 | `AGENTICORE_CLAUDE_TIMEOUT` | `3600` | Max job runtime in seconds |
 | `AGENTICORE_AGENTIHOOKS_PATH` | _(empty)_ | Explicit path to agentihooks repo (skips cloning) |
 | `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Git URL to clone agentihooks from (supports `GITHUB_TOKEN`) |
-| `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `300` | Hot-reload interval in seconds (`0` disables) |
+| `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `300` | Agentihooks hot-reload interval in seconds (`0` disables) |
+| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | _(empty)_ | Git URL to clone the agentihooks bundle repo |
+| `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | `300` | Bundle hot-reload interval in seconds (`0` disables) |
+| `AGENTICORE_AGENTIHUB_URL` | _(empty)_ | Git URL for agentihub repo (agent mode) |
+| `AGENTICORE_AGENTIHUB_PATH` | _(empty)_ | Explicit path to agentihub repo (skips cloning) |
+| `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | `300` | Agentihub hot-reload interval in seconds (`0` disables) |
+| `AGENTIHUB_AGENT` | _(empty)_ | Agent name to load in agent mode (matches `agents/{name}/`) |
 | `AGENTICORE_SHARED_FS_ROOT` | _(empty)_ | Shared FS root (Kubernetes mode) |
 | `CLAUDE_CODE_HOME_DIR` | `$HOME` | Home dir root — Claude uses `$CLAUDE_CODE_HOME_DIR/.claude/` |
 

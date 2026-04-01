@@ -19,7 +19,7 @@ _log = logging.getLogger(__name__)
 def _provision_from_agentihub(cfg) -> None:
     """Clone agentihub and copy agent's package/ and evaluation/ to /app/.
 
-    Requires AGENTIHUB_URL and AGENTIHUB_AGENT to be set. Clones the repo,
+    Requires AGENTICORE_AGENTIHUB_URL and AGENTIHUB_AGENT to be set. Clones the repo,
     finds agents/{agent_name}/, then copies package/ → /app/package/ and
     evaluation/ → /app/evaluation/.
     """
@@ -28,16 +28,16 @@ def _provision_from_agentihub(cfg) -> None:
     from agenticore.repos import resolve_github_token
     from agenticore.git_credentials import git_askpass_env
 
-    hub_url = os.getenv("AGENTIHUB_URL", "")
+    hub_url = os.getenv("AGENTICORE_AGENTIHUB_URL", "")
     agent_name = cfg.agent_mode.agent
     if not hub_url or not agent_name:
-        _log.debug("No AGENTIHUB_URL or AGENTIHUB_AGENT — skipping agentihub provision")
+        _log.debug("No AGENTICORE_AGENTIHUB_URL or AGENTIHUB_AGENT — skipping agentihub provision")
         return
 
     _log.info("Provisioning from agentihub: agent=%s url=%s", agent_name, hub_url)
 
-    # Use AGENTIHUB_PATH if hooks.sync_agentihub already cloned it
-    hub_path = os.getenv("AGENTIHUB_PATH", "")
+    # Use AGENTICORE_AGENTIHUB_PATH if hooks.sync_agentihub already cloned it
+    hub_path = os.getenv("AGENTICORE_AGENTIHUB_PATH", "")
     if hub_path and (Path(hub_path) / "agents" / agent_name).exists():
         _log.info("Using pre-cloned agentihub at %s", hub_path)
         clone_dir = Path(hub_path)

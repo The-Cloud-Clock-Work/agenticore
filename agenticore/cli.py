@@ -303,25 +303,51 @@ def _cmd_init_shared_fs(args):
 
 
 def _cmd_hooks_sync(args):
-    """Clone or update agentihooks repo."""
+    """Clone or update agentihooks, bundle, and agentihub repos."""
     import os
 
-    from agenticore.hooks import sync_agentihooks
+    from agenticore.hooks import sync_agentihooks, sync_bundle, sync_agentihub, run_agentihooks_init
 
-    url = args.url or os.getenv("AGENTICORE_AGENTIHOOKS_URL", "")
-    try:
-        install_path = sync_agentihooks(url)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    target = getattr(args, "target", "all")
+    had_error = False
 
-    if install_path:
-        print(f"agentihooks installed at: {install_path}")
-    else:
-        print(
-            "No agentihooks URL configured. Set AGENTICORE_AGENTIHOOKS_URL or pass --url.",
-            file=sys.stderr,
-        )
+    if target in ("all", "agentihooks"):
+        url = args.url or os.getenv("AGENTICORE_AGENTIHOOKS_URL", "")
+        try:
+            install_path = sync_agentihooks(url)
+            if install_path:
+                bundle_path = sync_bundle() if target in ("all", "agentihooks") else None
+                run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
+                print(f"agentihooks synced: {install_path}")
+            else:
+                print("agentihooks: skipped (no url configured)", file=sys.stderr)
+        except Exception as e:
+            print(f"agentihooks error: {e}", file=sys.stderr)
+            had_error = True
+
+    if target in ("all", "bundle"):
+        try:
+            bundle_path = sync_bundle()
+            if bundle_path:
+                print(f"bundle synced: {bundle_path}")
+            else:
+                print("bundle: skipped (no url configured)", file=sys.stderr)
+        except Exception as e:
+            print(f"bundle error: {e}", file=sys.stderr)
+            had_error = True
+
+    if target in ("all", "agentihub"):
+        try:
+            hub_path = sync_agentihub()
+            if hub_path:
+                print(f"agentihub synced: {hub_path}")
+            else:
+                print("agentihub: skipped (no url configured)", file=sys.stderr)
+        except Exception as e:
+            print(f"agentihub error: {e}", file=sys.stderr)
+            had_error = True
+
+    if had_error:
         sys.exit(1)
 
 
@@ -910,10 +936,16 @@ def main():
     # hooks
     p_hooks = sub.add_parser("hooks", help="Manage agentihooks integration")
     hooks_sub = p_hooks.add_subparsers(dest="hooks_command")
-    p_hooks_sync = hooks_sub.add_parser("sync", help="Clone or update agentihooks repo")
+    p_hooks_sync = hooks_sub.add_parser("sync", help="Clone or update agentihooks, bundle, and agentihub repos")
     p_hooks_sync.add_argument(
         "--url",
-        help="Git URL to clone (overrides AGENTICORE_AGENTIHOOKS_URL)",
+        help="Git URL to clone (overrides AGENTICORE_AGENTIHOOKS_URL, only for agentihooks target)",
+    )
+    p_hooks_sync.add_argument(
+        "--target",
+        choices=["all", "agentihooks", "bundle", "agentihub"],
+        default="all",
+        help="Which repo to sync (default: all)",
     )
     p_hooks_sync.set_defaults(func=_cmd_hooks_sync)
 
