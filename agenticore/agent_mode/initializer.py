@@ -36,37 +36,43 @@ def _provision_from_agentihub(cfg) -> None:
 
     _log.info("Provisioning from agentihub: agent=%s url=%s", agent_name, hub_url)
 
-    clone_dir = Path("/tmp/agentihub-clone")
-    if clone_dir.exists():
-        shutil.rmtree(clone_dir)
-
-    # Try unauthenticated clone first (works for public repos like agentihub)
-    env = os.environ.copy()
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    result = subprocess.run(
-        ["git", "clone", "--depth", "1", hub_url, str(clone_dir)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=env,
-    )
-    if result.returncode != 0:
-        # Fall back to authenticated clone for private repos
-        _log.info("Unauthenticated clone failed, trying with GitHub App token")
+    # Use AGENTIHUB_PATH if hooks.sync_agentihub already cloned it
+    hub_path = os.getenv("AGENTIHUB_PATH", "")
+    if hub_path and (Path(hub_path) / "agents" / agent_name).exists():
+        _log.info("Using pre-cloned agentihub at %s", hub_path)
+        clone_dir = Path(hub_path)
+    else:
+        clone_dir = Path("/tmp/agentihub-clone")
         if clone_dir.exists():
             shutil.rmtree(clone_dir)
-        token = resolve_github_token()
-        with git_askpass_env(token) as extra_env:
-            env.update(extra_env)
-            result = subprocess.run(
-                ["git", "clone", "--depth", "1", hub_url, str(clone_dir)],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                env=env,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"Agentihub clone failed: {result.stderr.strip()}")
+
+        # Try unauthenticated clone first (works for public repos like agentihub)
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", hub_url, str(clone_dir)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+        if result.returncode != 0:
+            # Fall back to authenticated clone for private repos
+            _log.info("Unauthenticated clone failed, trying with GitHub App token")
+            if clone_dir.exists():
+                shutil.rmtree(clone_dir)
+            token = resolve_github_token()
+            with git_askpass_env(token) as extra_env:
+                env.update(extra_env)
+                result = subprocess.run(
+                    ["git", "clone", "--depth", "1", hub_url, str(clone_dir)],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=env,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"Agentihub clone failed: {result.stderr.strip()}")
 
     agent_dir = clone_dir / "agents" / agent_name
     if not agent_dir.exists():
