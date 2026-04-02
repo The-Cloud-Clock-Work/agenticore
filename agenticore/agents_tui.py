@@ -192,6 +192,16 @@ def _get_namespace() -> str:
         return "default"
 
 
+def _read_state() -> dict:
+    state_path = Path.home() / ".agenticore" / "state.json"
+    if state_path.exists():
+        try:
+            return json.loads(state_path.read_text())
+        except Exception:
+            pass
+    return {}
+
+
 def _resolve_agentihub_dir(agentihub_dir: str = "") -> Optional[Path]:
     if agentihub_dir:
         p = Path(agentihub_dir)
@@ -202,9 +212,13 @@ def _resolve_agentihub_dir(agentihub_dir: str = "") -> Optional[Path]:
         p = Path(env)
         if p.is_dir():
             return p
-    default = Path("/home/iamroot/dev/tccw-ecosystem/agentihub")
-    if default.is_dir():
-        return default
+    # Read from state.json
+    state = _read_state()
+    state_hub = state.get("agentihub", {}).get("path", "")
+    if state_hub:
+        p = Path(state_hub)
+        if p.is_dir():
+            return p
     return None
 
 
