@@ -45,7 +45,6 @@ class TestInstallDir:
         assert _install_dir() == Path.home() / ".agenticore" / "agentihooks"
 
 
-
 @pytest.mark.unit
 class TestSyncAgentihooks:
     def test_no_url_returns_none(self, monkeypatch):
@@ -113,7 +112,6 @@ class TestSyncAgentihooks:
 
         assert result == tmp_path
         mock_clone.assert_called_once_with("https://github.com/config/repo", tmp_path)
-
 
 
 @pytest.mark.unit

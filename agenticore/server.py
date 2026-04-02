@@ -1140,7 +1140,13 @@ def _auto_sync_agentihooks(cfg):
     if not cfg.agentihooks_url or os.getenv("AGENTICORE_AGENTIHOOKS_PATH"):
         return
     try:
-        from agenticore.hooks import sync_agentihooks, sync_bundle, run_agentihooks_init, start_sync_watcher, start_bundle_watcher
+        from agenticore.hooks import (
+            sync_agentihooks,
+            sync_bundle,
+            run_agentihooks_init,
+            start_sync_watcher,
+            start_bundle_watcher,
+        )
 
         install_path = sync_agentihooks()
         bundle_path = sync_bundle()
@@ -1171,7 +1177,6 @@ def _auto_sync_agentihub(cfg):
         logger.warning("agentihub sync failed: %s — non-fatal", e)
 
 
-
 def _ensure_claude_onboarding():
     """Ensure .claude.json has hasCompletedOnboarding so interactive mode skips login prompt."""
     claude_json = Path.home() / ".claude.json"
@@ -1196,10 +1201,12 @@ def main():
     print("Starting Agenticore...", file=sys.stderr)
 
     # Purge stale git credential helpers (legacy from gh CLI)
-    subprocess.run(["git", "config", "--global", "--unset-all",
-                     "credential.https://github.com.helper"], capture_output=True)
-    subprocess.run(["git", "config", "--global", "--unset-all",
-                     "credential.https://gist.github.com.helper"], capture_output=True)
+    subprocess.run(
+        ["git", "config", "--global", "--unset-all", "credential.https://github.com.helper"], capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "--global", "--unset-all", "credential.https://gist.github.com.helper"], capture_output=True
+    )
 
     # Install bashrc for exec sessions
     bashrc_src = Path("/opt/agenticore/bashrc")
@@ -1209,7 +1216,7 @@ def main():
             content = bashrc_dst.read_text() if bashrc_dst.exists() else ""
             marker = "# agenticore-shell"
             if marker in content:
-                content = content[:content.index(marker)]
+                content = content[: content.index(marker)]
             content += f"{marker}\n{bashrc_src.read_text()}"
             bashrc_dst.write_text(content)
         except OSError:

@@ -55,7 +55,6 @@ def _install_dir() -> Path:
     return Path.home() / ".agenticore" / "agentihooks"
 
 
-
 def _clone_or_fetch(url: str, dest: Path) -> None:
     """Clone or update agentihooks repo, flock/Redis-protected."""
     dest.mkdir(parents=True, exist_ok=True)
@@ -114,7 +113,6 @@ def start_sync_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
     logger.info("agentihooks watcher started (interval=%ds, dest=%s)", interval, dest)
     mgmt.info("watcher agentihooks started interval=%ds dest=%s", interval, dest)
     return t
-
 
 
 def start_bundle_watcher(url: str, dest: Path, interval: int) -> threading.Thread:

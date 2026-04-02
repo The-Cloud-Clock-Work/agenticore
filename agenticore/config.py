@@ -322,7 +322,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
     agentihooks_bundle_sync_interval = _env_int(
         "AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL", str(raw.get("agentihooks_bundle_sync_interval", 300))
     )
-    agentihub_sync_interval = _env_int("AGENTICORE_AGENTIHUB_SYNC_INTERVAL", str(raw.get("agentihub_sync_interval", 300)))
+    agentihub_sync_interval = _env_int(
+        "AGENTICORE_AGENTIHUB_SYNC_INTERVAL", str(raw.get("agentihub_sync_interval", 300))
+    )
 
     return Config(
         repos=repos,

@@ -527,7 +527,6 @@ class TestMaterializeProfileSharedFs:
         assert str(result).startswith(str(shared))
 
 
-
 @pytest.mark.unit
 class TestCopyProfileChainTo:
     def test_copies_claude_dir(self, tmp_path, minimal_profile):

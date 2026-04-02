@@ -85,8 +85,6 @@ def _agentihooks_profiles_dir() -> Optional[Path]:
     return None
 
 
-
-
 # ── Loading ───────────────────────────────────────────────────────────────
 
 
