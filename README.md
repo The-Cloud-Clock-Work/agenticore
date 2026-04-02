@@ -92,8 +92,9 @@ agenticore run "fix the null pointer in auth.py" \
 | `agenticore update` | Update to latest version |
 | `agenticore init-shared-fs` | Initialise shared filesystem (Kubernetes) |
 | `agenticore drain` | Drain pod before shutdown (Kubernetes) |
-| `agenticore agents` | Interactive TUI to discover and manage running agenticore pods (K8s) |
-| `agenticore agents --headless <action>` | Headless mode: `list`, `chat`, `job`, `sync`, `health` (JSON output) |
+| `agenticore agents` | Interactive TUI — K8S pods + local agent packages from agentihub |
+| `agenticore agents --headless <action>` | Headless mode: `list`, `chat`, `job`, `sync`, `health`, `local` (JSON output) |
+| `agenticore agents --agentihub-dir <path>` | Override agentihub directory for local agent discovery |
 | `agenticore hooks sync [--target T]` | Clone/fetch repos and rebuild profiles (`all`, `agentihooks`, `bundle`, `agentihub`) |
 | `agenticore agent <flags>` | Build, run, and manage the local container / dev compose stack |
 | `agenticore push --main` | Build and push Docker image to a registry |

@@ -319,26 +319,40 @@ agenticore push --main --push-only
 
 ## agents
 
-Interactive TUI for discovering and managing agenticore pods in the current Kubernetes namespace.
-Requires `kubectl` configured with cluster access.
+Interactive TUI for discovering and managing agenticore pods (K8S) and local agent packages (LOCAL).
+Requires `kubectl` for remote pods. Local agents are discovered from agentihub.
 
 ```bash
-agenticore agents
+agenticore agents                          # interactive TUI
+agenticore agents --agentihub-dir /path    # custom agentihub location
 ```
 
-Discovers pods by scanning env vars — any pod with `AGENTICORE_TRANSPORT` set is an agenticore pod.
-Pods with `AGENT_MODE=true` are classified as agents; others as orchestrators.
+**Two agent types:**
 
-**Actions per pod:**
+- **K8S** (yellow tag) — remote pods discovered via `kubectl get pods`. Any pod with `AGENTICORE_TRANSPORT` env var. Pods with `AGENT_MODE=true` are agents; others are orchestrators.
+- **LOCAL** (green tag) — Claude Code agent packages from `agentihub/agents/*/package/`. Discovered via `AGENTIHUB_DIR` env var or ecosystem default path.
+
+**Actions — K8S pods:**
 
 | Action | Agent Mode | Standard | What it does |
 |--------|-----------|----------|--------------|
-| Chat | Yes | — | `POST /completions` with interactive message input |
+| Remote Chat | Yes | — | `POST /completions` with interactive message input |
+| Live Chat | Yes (with local match) | — | `kubectl exec -it -- bash -ic anton` into the container |
 | Submit job | — | Yes | `POST /jobs` with task + repo URL |
 | Sync repos | Yes | Yes | `agenticore hooks sync` inside the pod |
 | Exec shell | Yes | Yes | `kubectl exec -it` into bash |
 | Logs | Yes | Yes | `kubectl logs -f` |
 | Health | Yes | Yes | `GET /health` |
+
+Live Chat appears when a K8S pod's `AGENTIHUB_AGENT` name matches a local agent package.
+
+**Actions — LOCAL agents:**
+
+| Action | What it does |
+|--------|--------------|
+| Open Chat | `cd` to package dir + launch `claude` with flags from `agent.yml` |
+| Open in VS Code | `code <package_path>` |
+| View Config | Display `agent.yml` contents |
 
 **Keyboard (interactive):**
 
@@ -355,7 +369,7 @@ Pods with `AGENT_MODE=true` are classified as agents; others as orchestrators.
 For AI agents and scripts. All output is JSON to stdout, errors to stderr.
 
 ```bash
-# List all agenticore pods
+# List all agents (K8S pods + local packages)
 agenticore agents --headless list
 
 # Chat with an agent-mode pod
@@ -369,12 +383,17 @@ agenticore agents --headless sync --pod agenticore-0
 
 # Health check a pod
 agenticore agents --headless health --pod publishing-agent-0
+
+# Get local agent info
+agenticore agents --headless local --agent finops
 ```
 
 | Flag | Type | Required | Description |
 |------|------|----------|-------------|
 | `--headless` | flag | yes | Enable headless mode |
-| `--pod` | string | for actions | Target pod name |
+| `--pod` | string | for K8S actions | Target pod name |
+| `--agent` | string | for local | Local agent name |
+| `--agentihub-dir` | string | no | Override agentihub directory path |
 | `--message` | string | for chat | Message to send |
 | `--task` | string | for job | Task description |
 | `--repo` | string | for job | Repository URL |
