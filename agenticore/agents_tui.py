@@ -1,12 +1,21 @@
-"""Interactive TUI for discovering and managing agenticore pods in Kubernetes."""
+"""Interactive TUI + headless CLI for discovering and managing agenticore pods in Kubernetes.
+
+Interactive (default):  agenticore agents
+Headless (AI/scripts):  agenticore agents --headless list
+                        agenticore agents --headless chat --pod NAME --message "task"
+                        agenticore agents --headless job --pod NAME --task "fix bug" --repo URL
+                        agenticore agents --headless sync --pod NAME
+                        agenticore agents --headless health --pod NAME
+"""
 
 import json
 import os
 import subprocess
+import sys
 import termios
 import tty
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Optional
 
 # ── ANSI ──────────────────────────────────────────────────────────────────────
@@ -35,7 +44,7 @@ class AgenticorePod:
     container: str
 
 
-# ── TTY helpers ───────────────────────────────────────────────────────────────
+# ── TTY helpers (interactive only) ────────────────────────────────────────────
 
 def _write(t, *args, end="\n"):
     t.write("".join(str(a) for a in args) + end)
@@ -91,7 +100,6 @@ def _prompt(t, msg="") -> str:
 
 
 def _prompt_multiline(t, msg="") -> str:
-    """Prompt for multi-line input. Empty line submits."""
     _write(t, f"  {LG}{msg}{R}")
     _write(t, f"  {LG}(empty line to submit, Ctrl-C to cancel){R}")
     lines = []
@@ -168,7 +176,15 @@ def _get_namespace() -> str:
         return "default"
 
 
-# ── Pod actions ───────────────────────────────────────────────────────────────
+def _resolve_pod(pod_name: str) -> Optional[AgenticorePod]:
+    pods = discover_pods()
+    for p in pods:
+        if p.name == pod_name:
+            return p
+    return None
+
+
+# ── Pod actions (shared by both modes) ────────────────────────────────────────
 
 def _kubectl_exec_curl(pod: AgenticorePod, method: str, path: str, body: Optional[dict] = None) -> dict:
     cmd = [
@@ -192,6 +208,93 @@ def _kubectl_exec_curl(pod: AgenticorePod, method: str, path: str, body: Optiona
     except Exception as e:
         return {"error": str(e)}
 
+
+def _kubectl_exec_sync(pod: AgenticorePod) -> dict:
+    try:
+        result = subprocess.run(
+            ["kubectl", "exec", pod.name, "-c", pod.container, "--",
+             "agenticore", "hooks", "sync"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return {
+            "success": result.returncode == 0,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip(),
+        }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "timeout"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ── Headless mode ─────────────────────────────────────────────────────────────
+
+def _headless_output(data, exit_code: int = 0):
+    print(json.dumps(data, indent=2, default=str))
+    sys.exit(exit_code)
+
+
+def _headless_error(msg: str, exit_code: int = 1):
+    print(json.dumps({"error": msg}), file=sys.stderr)
+    sys.exit(exit_code)
+
+
+def _headless_require_pod(pod_name: Optional[str]) -> AgenticorePod:
+    if not pod_name:
+        _headless_error("--pod is required", exit_code=2)
+    pod = _resolve_pod(pod_name)
+    if not pod:
+        _headless_error(f"Pod '{pod_name}' not found or not an agenticore pod")
+    return pod
+
+
+def headless_list():
+    pods = discover_pods()
+    _headless_output({
+        "namespace": _get_namespace(),
+        "pods": [asdict(p) for p in pods],
+    })
+
+
+def headless_chat(pod_name: str, message: str, wait: bool = True):
+    pod = _headless_require_pod(pod_name)
+    if not pod.agent_mode:
+        _headless_error(f"Pod '{pod_name}' is not in agent mode — use 'job' instead")
+
+    resp = _kubectl_exec_curl(pod, "POST", "/completions", {
+        "message": message,
+        "uuid": str(uuid.uuid4()),
+        "wait": wait,
+    })
+    _headless_output(resp, exit_code=1 if "error" in resp else 0)
+
+
+def headless_job(pod_name: str, task: str, repo: str = ""):
+    pod = _headless_require_pod(pod_name)
+
+    body: dict = {"task": task, "wait": False}
+    if repo:
+        body["repo_url"] = repo
+
+    resp = _kubectl_exec_curl(pod, "POST", "/jobs", body)
+    _headless_output(resp, exit_code=1 if "error" in resp else 0)
+
+
+def headless_sync(pod_name: str):
+    pod = _headless_require_pod(pod_name)
+    resp = _kubectl_exec_sync(pod)
+    _headless_output(resp, exit_code=0 if resp.get("success") else 1)
+
+
+def headless_health(pod_name: str):
+    pod = _headless_require_pod(pod_name)
+    resp = _kubectl_exec_curl(pod, "GET", "/health")
+    _headless_output(resp, exit_code=1 if "error" in resp else 0)
+
+
+# ── Interactive actions ───────────────────────────────────────────────────────
 
 def _action_chat(t, pod: AgenticorePod):
     _write(t, "")
@@ -235,7 +338,7 @@ def _action_job(t, pod: AgenticorePod):
     _write(t, f"\n  {YL}Submitting job to {pod.name}...{R}")
     t.flush()
 
-    body = {"task": task, "wait": False}
+    body: dict = {"task": task, "wait": False}
     if repo:
         body["repo_url"] = repo
 
@@ -258,24 +361,17 @@ def _action_sync(t, pod: AgenticorePod):
     _write(t, f"\n  {YL}Syncing repos on {pod.name}...{R}")
     t.flush()
 
-    try:
-        result = subprocess.run(
-            ["kubectl", "exec", pod.name, "-c", pod.container, "--",
-             "agenticore", "hooks", "sync"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        _write(t, "")
-        for line in result.stdout.strip().splitlines():
+    resp = _kubectl_exec_sync(pod)
+
+    _write(t, "")
+    if resp.get("success"):
+        for line in resp.get("stdout", "").splitlines():
             _write(t, f"  {GR}{line}{R}")
-        if result.stderr.strip():
-            for line in result.stderr.strip().splitlines():
-                _write(t, f"  {YL}{line}{R}")
-    except subprocess.TimeoutExpired:
-        _write(t, f"  {RDB}Timeout{R}")
-    except Exception as e:
-        _write(t, f"  {RDB}Error:{R} {e}")
+    if resp.get("stderr"):
+        for line in resp["stderr"].splitlines():
+            _write(t, f"  {YL}{line}{R}")
+    if resp.get("error"):
+        _write(t, f"  {RDB}Error:{R} {resp['error']}")
 
     _write(t, f"\n  {LG}(press Enter){R}", end="")
     t.flush()
@@ -351,7 +447,6 @@ def _render_footer(t, filter_str: str = ""):
 
 
 def _action_menu(t, pod: AgenticorePod) -> bool:
-    """Show action submenu. Returns True to quit, False to go back."""
     while True:
         _clear(t)
         W = 50
@@ -396,9 +491,9 @@ def _action_menu(t, pod: AgenticorePod) -> bool:
             _action_health(t, pod)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main entrypoints ─────────────────────────────────────────────────────────
 
-def main():
+def main_interactive():
     namespace = _get_namespace()
     pods = discover_pods()
     filter_str = ""
@@ -438,3 +533,34 @@ def main():
             pods = discover_pods()
 
     t.close()
+
+
+def main(headless: bool = False, action: str = "", **kwargs):
+    if not headless:
+        main_interactive()
+        return
+
+    if not action or action == "list":
+        headless_list()
+    elif action == "chat":
+        if not kwargs.get("message"):
+            _headless_error("--message is required for chat", exit_code=2)
+        headless_chat(
+            pod_name=kwargs.get("pod", ""),
+            message=kwargs["message"],
+            wait=kwargs.get("wait", True),
+        )
+    elif action == "job":
+        if not kwargs.get("task"):
+            _headless_error("--task is required for job", exit_code=2)
+        headless_job(
+            pod_name=kwargs.get("pod", ""),
+            task=kwargs["task"],
+            repo=kwargs.get("repo", ""),
+        )
+    elif action == "sync":
+        headless_sync(pod_name=kwargs.get("pod", ""))
+    elif action == "health":
+        headless_health(pod_name=kwargs.get("pod", ""))
+    else:
+        _headless_error(f"Unknown action '{action}'. Valid: list, chat, job, sync, health", exit_code=2)

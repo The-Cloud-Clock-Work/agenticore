@@ -805,11 +805,19 @@ def _cmd_version(args):
     print(f"agenticore {__version__}")
 
 
-def _cmd_agents(args):  # noqa: ARG001
-    """Launch interactive agent manager TUI."""
+def _cmd_agents(args):
+    """Launch interactive agent manager TUI, or headless mode with --headless."""
     from agenticore.agents_tui import main as agents_main
 
-    agents_main()
+    agents_main(
+        headless=getattr(args, "headless", False),
+        action=getattr(args, "action", ""),
+        pod=getattr(args, "pod", ""),
+        message=getattr(args, "message", ""),
+        task=getattr(args, "task", ""),
+        repo=getattr(args, "repo", ""),
+        wait=getattr(args, "wait", True),
+    )
 
 
 def main():
@@ -944,6 +952,14 @@ def main():
 
     # agents
     p_agents = sub.add_parser("agents", help="Discover and manage running agenticore pods (K8s)")
+    p_agents.add_argument("--headless", action="store_true", help="Non-interactive mode. JSON output, all inputs via flags.")
+    p_agents.add_argument("action", nargs="?", default="", help="Headless action: list, chat, job, sync, health")
+    p_agents.add_argument("--pod", default="", help="Pod name (required for chat, job, sync, health)")
+    p_agents.add_argument("--message", default="", help="Message for chat action")
+    p_agents.add_argument("--task", default="", help="Task description for job action")
+    p_agents.add_argument("--repo", default="", help="Repo URL for job action")
+    p_agents.add_argument("--wait", action="store_true", default=True, help="Wait for chat response (default: true)")
+    p_agents.add_argument("--no-wait", dest="wait", action="store_false", help="Don't wait for chat response")
     p_agents.set_defaults(func=_cmd_agents)
 
     # hooks

@@ -340,7 +340,7 @@ Pods with `AGENT_MODE=true` are classified as agents; others as orchestrators.
 | Logs | Yes | Yes | `kubectl logs -f` |
 | Health | Yes | Yes | `GET /health` |
 
-**Keyboard:**
+**Keyboard (interactive):**
 
 | Key | Action |
 |-----|--------|
@@ -349,6 +349,38 @@ Pods with `AGENT_MODE=true` are classified as agents; others as orchestrators.
 | `/` | Clear filter |
 | `r` | Refresh pod list |
 | `q` | Quit |
+
+### Headless mode (`--headless`)
+
+For AI agents and scripts. All output is JSON to stdout, errors to stderr.
+
+```bash
+# List all agenticore pods
+agenticore agents --headless list
+
+# Chat with an agent-mode pod
+agenticore agents --headless chat --pod publishing-agent-0 --message "analyze the auth module"
+
+# Submit a job to an orchestrator pod
+agenticore agents --headless job --pod agenticore-0 --task "fix the bug" --repo https://github.com/org/repo
+
+# Sync repos on a pod
+agenticore agents --headless sync --pod agenticore-0
+
+# Health check a pod
+agenticore agents --headless health --pod publishing-agent-0
+```
+
+| Flag | Type | Required | Description |
+|------|------|----------|-------------|
+| `--headless` | flag | yes | Enable headless mode |
+| `--pod` | string | for actions | Target pod name |
+| `--message` | string | for chat | Message to send |
+| `--task` | string | for job | Task description |
+| `--repo` | string | for job | Repository URL |
+| `--no-wait` | flag | no | Don't wait for chat response |
+
+Exit codes: `0` = success, `1` = failure, `2` = invalid input.
 
 ## hooks sync
 
