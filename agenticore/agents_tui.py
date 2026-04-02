@@ -58,6 +58,7 @@ class LocalAgent:
 
 # ── TTY helpers (interactive only) ────────────────────────────────────────────
 
+
 def _write(t, *args, end="\n"):
     t.write("".join(str(a) for a in args) + end)
     t.flush()
@@ -127,6 +128,7 @@ def _prompt_multiline(t, msg="") -> str:
 
 # ── K8s discovery ─────────────────────────────────────────────────────────────
 
+
 def discover_pods() -> list[AgenticorePod]:
     try:
         result = subprocess.run(
@@ -162,14 +164,16 @@ def discover_pods() -> list[AgenticorePod]:
             if "AGENTICORE_TRANSPORT" not in envs:
                 continue
 
-            pods.append(AgenticorePod(
-                name=name,
-                phase=phase,
-                agent_mode=envs.get("AGENT_MODE", "").lower() == "true",
-                agent_name=envs.get("AGENTIHUB_AGENT", ""),
-                port=envs.get("AGENTICORE_PORT", "8200"),
-                container=container.get("name", "agenticore"),
-            ))
+            pods.append(
+                AgenticorePod(
+                    name=name,
+                    phase=phase,
+                    agent_mode=envs.get("AGENT_MODE", "").lower() == "true",
+                    agent_name=envs.get("AGENTIHUB_AGENT", ""),
+                    port=envs.get("AGENTICORE_PORT", "8200"),
+                    container=container.get("name", "agenticore"),
+                )
+            )
             break
 
     return pods
@@ -225,13 +229,15 @@ def discover_local_agents(agentihub_dir: str = "") -> list[LocalAgent]:
         if not package_path.is_dir():
             continue
 
-        agents.append(LocalAgent(
-            name=data.get("name", agent_yml.parent.name),
-            description=data.get("description", ""),
-            model=claude.get("model", ""),
-            effort=claude.get("effort", ""),
-            package_path=str(package_path),
-        ))
+        agents.append(
+            LocalAgent(
+                name=data.get("name", agent_yml.parent.name),
+                description=data.get("description", ""),
+                model=claude.get("model", ""),
+                effort=claude.get("effort", ""),
+                package_path=str(package_path),
+            )
+        )
 
     return agents
 
@@ -253,12 +259,22 @@ def _resolve_pod(pod_name: str) -> Optional[AgenticorePod]:
 
 # ── Pod actions (shared by both modes) ────────────────────────────────────────
 
+
 def _kubectl_exec_curl(pod: AgenticorePod, method: str, path: str, body: Optional[dict] = None) -> dict:
     cmd = [
-        "kubectl", "exec", pod.name, "-c", pod.container, "--",
-        "curl", "-s", "-X", method,
+        "kubectl",
+        "exec",
+        pod.name,
+        "-c",
+        pod.container,
+        "--",
+        "curl",
+        "-s",
+        "-X",
+        method,
         f"http://localhost:{pod.port}{path}",
-        "-H", "Content-Type: application/json",
+        "-H",
+        "Content-Type: application/json",
     ]
     if body:
         cmd.extend(["-d", json.dumps(body)])
@@ -279,8 +295,7 @@ def _kubectl_exec_curl(pod: AgenticorePod, method: str, path: str, body: Optiona
 def _kubectl_exec_sync(pod: AgenticorePod) -> dict:
     try:
         result = subprocess.run(
-            ["kubectl", "exec", pod.name, "-c", pod.container, "--",
-             "agenticore", "hooks", "sync"],
+            ["kubectl", "exec", pod.name, "-c", pod.container, "--", "agenticore", "hooks", "sync"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -297,6 +312,7 @@ def _kubectl_exec_sync(pod: AgenticorePod) -> dict:
 
 
 # ── Headless mode ─────────────────────────────────────────────────────────────
+
 
 def _headless_output(data, exit_code: int = 0):
     print(json.dumps(data, indent=2, default=str))
@@ -320,11 +336,13 @@ def _headless_require_pod(pod_name: Optional[str]) -> AgenticorePod:
 def headless_list(agentihub_dir: str = ""):
     pods = discover_pods()
     local_agents = discover_local_agents(agentihub_dir)
-    _headless_output({
-        "namespace": _get_namespace(),
-        "pods": [asdict(p) for p in pods],
-        "local_agents": [asdict(a) for a in local_agents],
-    })
+    _headless_output(
+        {
+            "namespace": _get_namespace(),
+            "pods": [asdict(p) for p in pods],
+            "local_agents": [asdict(a) for a in local_agents],
+        }
+    )
 
 
 def headless_chat(pod_name: str, message: str, wait: bool = True):
@@ -332,11 +350,16 @@ def headless_chat(pod_name: str, message: str, wait: bool = True):
     if not pod.agent_mode:
         _headless_error(f"Pod '{pod_name}' is not in agent mode — use 'job' instead")
 
-    resp = _kubectl_exec_curl(pod, "POST", "/completions", {
-        "message": message,
-        "uuid": str(uuid.uuid4()),
-        "wait": wait,
-    })
+    resp = _kubectl_exec_curl(
+        pod,
+        "POST",
+        "/completions",
+        {
+            "message": message,
+            "uuid": str(uuid.uuid4()),
+            "wait": wait,
+        },
+    )
     _headless_output(resp, exit_code=1 if "error" in resp else 0)
 
 
@@ -365,6 +388,7 @@ def headless_health(pod_name: str):
 
 # ── Interactive actions ───────────────────────────────────────────────────────
 
+
 def _action_chat(t, pod: AgenticorePod):
     _write(t, "")
     message = _prompt_multiline(t, "Enter message for the agent:")
@@ -374,11 +398,16 @@ def _action_chat(t, pod: AgenticorePod):
     _write(t, f"\n  {YL}Sending to {pod.name}...{R}")
     t.flush()
 
-    resp = _kubectl_exec_curl(pod, "POST", "/completions", {
-        "message": message,
-        "uuid": str(uuid.uuid4()),
-        "wait": True,
-    })
+    resp = _kubectl_exec_curl(
+        pod,
+        "POST",
+        "/completions",
+        {
+            "message": message,
+            "uuid": str(uuid.uuid4()),
+            "wait": True,
+        },
+    )
 
     _write(t, "")
     if "error" in resp:
@@ -475,6 +504,7 @@ def _action_logs(pod: AgenticorePod):
 
 # ── TUI screens ──────────────────────────────────────────────────────────────
 
+
 def _render_header(t, namespace: str):
     W = 50
     _write(t, f"  {GRB}{'━' * W}{R}")
@@ -484,19 +514,22 @@ def _render_header(t, namespace: str):
     _write(t, "")
 
 
-def _render_list(t, pods: list[AgenticorePod], local_agents: list[LocalAgent], filter_str: str = "") -> tuple[list, list]:
+def _render_list(
+    t, pods: list[AgenticorePod], local_agents: list[LocalAgent], filter_str: str = ""
+) -> tuple[list, list]:
     filtered_pods = (
         [p for p in pods if filter_str.lower() in p.name.lower() or filter_str.lower() in p.agent_name.lower()]
-        if filter_str else pods
+        if filter_str
+        else pods
     )
     filtered_local = (
         [a for a in local_agents if filter_str.lower() in a.name.lower() or filter_str.lower() in a.description.lower()]
-        if filter_str else local_agents
+        if filter_str
+        else local_agents
     )
 
     if not filtered_pods and not filtered_local:
-        _write(t, f"  {RDB}No agents found{R}" if not filter_str
-               else f"  {RDB}No matches for '{filter_str}'{R}")
+        _write(t, f"  {RDB}No agents found{R}" if not filter_str else f"  {RDB}No matches for '{filter_str}'{R}")
     else:
         idx = 1
         for p in filtered_pods:
@@ -525,7 +558,9 @@ def _render_footer(t, filter_str: str = ""):
     _write(t, f"  {LG}{'─' * W}{R}")
     if filter_str:
         _write(t, f"  {YL}filter: {GRB}'{filter_str}'{R}  {LG}│  clear: /{R}")
-    _write(t, f"  {LG}filter: {LGB}/word{R}  {LG}│  select: {LGB}1-N{R}  {LG}│  refresh: {LGB}r{R}  {LG}│  quit: {RDB}q{R}")
+    _write(
+        t, f"  {LG}filter: {LGB}/word{R}  {LG}│  select: {LGB}1-N{R}  {LG}│  refresh: {LGB}r{R}  {LG}│  quit: {RDB}q{R}"
+    )
     _write(t, "")
 
 
@@ -584,10 +619,21 @@ def _action_menu(t, pod: AgenticorePod, local_agents: list[LocalAgent] = None) -
                 _action_job(t, pod)
         elif num == 2 and local_match:
             t.close()
-            os.execvp("kubectl", [
-                "kubectl", "exec", "-it", pod.name, "-c", pod.container, "--",
-                "bash", "-ic", "anton",
-            ])
+            os.execvp(
+                "kubectl",
+                [
+                    "kubectl",
+                    "exec",
+                    "-it",
+                    pod.name,
+                    "-c",
+                    pod.container,
+                    "--",
+                    "bash",
+                    "-ic",
+                    "anton",
+                ],
+            )
         else:
             # Adjust for optional Live Chat slot
             adjusted = num - (1 if local_match else 0)
@@ -604,6 +650,7 @@ def _action_menu(t, pod: AgenticorePod, local_agents: list[LocalAgent] = None) -
 
 
 # ── Main entrypoints ─────────────────────────────────────────────────────────
+
 
 def _build_claude_cmd(agent: LocalAgent) -> list[str]:
     config_path = Path(agent.package_path).parent / "agent.yml"

@@ -954,7 +954,9 @@ def main():
 
     # agents
     p_agents = sub.add_parser("agents", help="Discover and manage running agenticore pods (K8s)")
-    p_agents.add_argument("--headless", action="store_true", help="Non-interactive mode. JSON output, all inputs via flags.")
+    p_agents.add_argument(
+        "--headless", action="store_true", help="Non-interactive mode. JSON output, all inputs via flags."
+    )
     p_agents.add_argument("action", nargs="?", default="", help="Headless action: list, chat, job, sync, health, local")
     p_agents.add_argument("--pod", default="", help="Pod name (required for chat, job, sync, health)")
     p_agents.add_argument("--message", default="", help="Message for chat action")
