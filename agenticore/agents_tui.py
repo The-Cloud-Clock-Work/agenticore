@@ -16,7 +16,10 @@ import termios
 import tty
 import uuid
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Optional
+
+import yaml
 
 # ── ANSI ──────────────────────────────────────────────────────────────────────
 R = "\033[0m"
@@ -42,6 +45,15 @@ class AgenticorePod:
     agent_name: str
     port: str
     container: str
+
+
+@dataclass
+class LocalAgent:
+    name: str
+    description: str
+    model: str
+    effort: str
+    package_path: str
 
 
 # ── TTY helpers (interactive only) ────────────────────────────────────────────
@@ -176,6 +188,61 @@ def _get_namespace() -> str:
         return "default"
 
 
+def _resolve_agentihub_dir(agentihub_dir: str = "") -> Optional[Path]:
+    if agentihub_dir:
+        p = Path(agentihub_dir)
+        if p.is_dir():
+            return p
+    env = os.environ.get("AGENTIHUB_DIR", "")
+    if env:
+        p = Path(env)
+        if p.is_dir():
+            return p
+    default = Path("/home/iamroot/dev/tccw-ecosystem/agentihub")
+    if default.is_dir():
+        return default
+    return None
+
+
+def discover_local_agents(agentihub_dir: str = "") -> list[LocalAgent]:
+    hub = _resolve_agentihub_dir(agentihub_dir)
+    if not hub:
+        return []
+
+    agents_dir = hub / "agents"
+    if not agents_dir.is_dir():
+        return []
+
+    agents = []
+    for agent_yml in sorted(agents_dir.glob("*/agent.yml")):
+        try:
+            data = yaml.safe_load(agent_yml.read_text())
+        except Exception:
+            continue
+
+        claude = data.get("claude", {})
+        package_path = agent_yml.parent / "package"
+        if not package_path.is_dir():
+            continue
+
+        agents.append(LocalAgent(
+            name=data.get("name", agent_yml.parent.name),
+            description=data.get("description", ""),
+            model=claude.get("model", ""),
+            effort=claude.get("effort", ""),
+            package_path=str(package_path),
+        ))
+
+    return agents
+
+
+def _resolve_local_agent(name: str, agentihub_dir: str = "") -> Optional[LocalAgent]:
+    for a in discover_local_agents(agentihub_dir):
+        if a.name == name:
+            return a
+    return None
+
+
 def _resolve_pod(pod_name: str) -> Optional[AgenticorePod]:
     pods = discover_pods()
     for p in pods:
@@ -250,11 +317,13 @@ def _headless_require_pod(pod_name: Optional[str]) -> AgenticorePod:
     return pod
 
 
-def headless_list():
+def headless_list(agentihub_dir: str = ""):
     pods = discover_pods()
+    local_agents = discover_local_agents(agentihub_dir)
     _headless_output({
         "namespace": _get_namespace(),
         "pods": [asdict(p) for p in pods],
+        "local_agents": [asdict(a) for a in local_agents],
     })
 
 
@@ -409,32 +478,46 @@ def _action_logs(pod: AgenticorePod):
 def _render_header(t, namespace: str):
     W = 50
     _write(t, f"  {GRB}{'━' * W}{R}")
-    _write(t, f"  {GRB}  ◆ Agenticore Agents{R}")
+    _write(t, f"  {GRB}  ◆ Agenticore Agents{R}  {YL}K8S{R}")
     _write(t, f"  {LG}  namespace: {namespace}{R}")
     _write(t, f"  {GRB}{'━' * W}{R}")
     _write(t, "")
 
 
-def _render_list(t, pods: list[AgenticorePod], filter_str: str = "") -> list[AgenticorePod]:
-    filtered = (
+def _render_list(t, pods: list[AgenticorePod], local_agents: list[LocalAgent], filter_str: str = "") -> tuple[list, list]:
+    filtered_pods = (
         [p for p in pods if filter_str.lower() in p.name.lower() or filter_str.lower() in p.agent_name.lower()]
         if filter_str else pods
     )
+    filtered_local = (
+        [a for a in local_agents if filter_str.lower() in a.name.lower() or filter_str.lower() in a.description.lower()]
+        if filter_str else local_agents
+    )
 
-    if not filtered:
-        _write(t, f"  {RDB}No agenticore pods found{R}" if not filter_str
+    if not filtered_pods and not filtered_local:
+        _write(t, f"  {RDB}No agents found{R}" if not filter_str
                else f"  {RDB}No matches for '{filter_str}'{R}")
     else:
-        for i, p in enumerate(filtered, 1):
+        idx = 1
+        for p in filtered_pods:
             if p.agent_mode:
                 kind = f"{CY}agent:{p.agent_name}{R}"
             else:
                 kind = f"{BL}orchestrator{R}"
             phase_color = GR if p.phase == "Running" else YL if p.phase == "Pending" else RD
-            _write(t, f"  {GRB}[{i}]{R}  {LGB}{p.name:<30}{R} {kind:<30} {phase_color}{p.phase}{R}")
+            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{p.name:<30}{R} {kind:<30} {phase_color}{p.phase:<12}{R} {YL}K8S{R}")
+            idx += 1
+
+        if filtered_pods and filtered_local:
+            _write(t, "")
+
+        for a in filtered_local:
+            model_str = f"{CY}{a.model}{R}" if a.model else f"{LG}—{R}"
+            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{a.name:<30}{R} {model_str:<30} {LG}{'local':<12}{R} {GR}LOCAL{R}")
+            idx += 1
 
     _write(t, "")
-    return filtered
+    return filtered_pods, filtered_local
 
 
 def _render_footer(t, filter_str: str = ""):
@@ -446,24 +529,125 @@ def _render_footer(t, filter_str: str = ""):
     _write(t, "")
 
 
-def _action_menu(t, pod: AgenticorePod) -> bool:
+def _action_menu(t, pod: AgenticorePod, local_agents: list[LocalAgent] = None) -> bool:
+    # Find matching local agent package for Live Chat
+    local_match = None
+    if pod.agent_name and local_agents:
+        for a in local_agents:
+            if a.name == pod.agent_name:
+                local_match = a
+                break
+
     while True:
         _clear(t)
         W = 50
         _write(t, f"  {GRB}{'━' * W}{R}")
         kind = f"agent: {pod.agent_name}" if pod.agent_mode else "orchestrator"
-        _write(t, f"  {LG}Selected  {GRB}▶{R}  {LGB}{pod.name}{R}  {LG}({kind}){R}")
+        _write(t, f"  {LG}Selected  {GRB}▶{R}  {LGB}{pod.name}{R}  {LG}({kind}){R}  {YL}K8S{R}")
         _write(t, f"  {GRB}{'━' * W}{R}")
         _write(t, "")
 
         if pod.agent_mode:
-            _write(t, f"  {GRB}[1]{R}  {LGB}Chat{R}  {LG}← POST /completions{R}")
+            _write(t, f"  {GRB}[1]{R}  {LGB}Remote Chat{R}  {LG}← POST /completions{R}")
         else:
             _write(t, f"  {GRB}[1]{R}  {LGB}Submit job{R}  {LG}← POST /jobs{R}")
-        _write(t, f"  {GRB}[2]{R}  {LGB}Sync repos{R}  {LG}← agenticore hooks sync{R}")
-        _write(t, f"  {GRB}[3]{R}  {LGB}Exec shell{R}  {LG}← kubectl exec -it{R}")
-        _write(t, f"  {GRB}[4]{R}  {LGB}Logs{R}  {LG}← kubectl logs -f{R}")
-        _write(t, f"  {GRB}[5]{R}  {LGB}Health{R}  {LG}← GET /health{R}")
+
+        next_idx = 2
+        if local_match:
+            _write(t, f"  {GRB}[{next_idx}]{R}  {LGB}Live Chat{R}  {LG}← --model {local_match.model}{R}")
+            next_idx += 1
+
+        _write(t, f"  {GRB}[{next_idx}]{R}  {LGB}Sync repos{R}  {LG}← agenticore hooks sync{R}")
+        _write(t, f"  {GRB}[{next_idx + 1}]{R}  {LGB}Exec shell{R}  {LG}← kubectl exec -it{R}")
+        _write(t, f"  {GRB}[{next_idx + 2}]{R}  {LGB}Logs{R}  {LG}← kubectl logs -f{R}")
+        _write(t, f"  {GRB}[{next_idx + 3}]{R}  {LGB}Health{R}  {LG}← GET /health{R}")
+        _write(t, "")
+        _write(t, f"  {LG}[b]{R}  {LG}Back{R}   {RDB}[q]{R}  {RD}Quit{R}")
+        _write(t, "")
+
+        choice = _prompt(t).strip().lower()
+
+        if choice == "q":
+            return True
+        if choice == "b":
+            return False
+
+        try:
+            num = int(choice)
+        except ValueError:
+            continue
+
+        if num == 1:
+            if pod.agent_mode:
+                _action_chat(t, pod)
+            else:
+                _action_job(t, pod)
+        elif num == 2 and local_match:
+            t.close()
+            os.execvp("kubectl", [
+                "kubectl", "exec", "-it", pod.name, "-c", pod.container, "--",
+                "bash", "-ic", "anton",
+            ])
+        else:
+            # Adjust for optional Live Chat slot
+            adjusted = num - (1 if local_match else 0)
+            if adjusted == 2:
+                _action_sync(t, pod)
+            elif adjusted == 3:
+                t.close()
+                _action_exec(pod)
+            elif adjusted == 4:
+                t.close()
+                _action_logs(pod)
+            elif adjusted == 5:
+                _action_health(t, pod)
+
+
+# ── Main entrypoints ─────────────────────────────────────────────────────────
+
+def _build_claude_cmd(agent: LocalAgent) -> list[str]:
+    config_path = Path(agent.package_path).parent / "agent.yml"
+    cmd = ["claude"]
+    if not config_path.exists():
+        return cmd
+
+    try:
+        data = yaml.safe_load(config_path.read_text())
+    except Exception:
+        return cmd
+
+    claude = data.get("claude", {})
+    flag_map = {
+        "model": "--model",
+        "permission_mode": "--permission-mode",
+        "max_turns": "--max-turns",
+        "output_format": "--output-format",
+    }
+    for key, flag in flag_map.items():
+        val = claude.get(key)
+        if val is not None:
+            cmd.extend([flag, str(val)])
+
+    # no_session_persistence requires --print mode, skip for interactive use
+
+    return cmd
+
+
+def _local_action_menu(t, agent: LocalAgent) -> bool:
+    claude_cmd = _build_claude_cmd(agent)
+
+    while True:
+        _clear(t)
+        W = 50
+        _write(t, f"  {GRB}{'━' * W}{R}")
+        _write(t, f"  {LG}Selected  {GRB}▶{R}  {LGB}{agent.name}{R}  {GR}LOCAL{R}")
+        if agent.description:
+            _write(t, f"  {LG}  {agent.description}{R}")
+        _write(t, f"  {GRB}{'━' * W}{R}")
+        _write(t, "")
+        _write(t, f"  {GRB}[1]{R}  {LGB}Open Chat{R}  {LG}← --model {agent.model}{R}")
+        _write(t, f"  {GRB}[2]{R}  {LGB}Open in VS Code{R}  {LG}← code <package>{R}")
+        _write(t, f"  {GRB}[3]{R}  {LGB}View Config{R}  {LG}← agent.yml{R}")
         _write(t, "")
         _write(t, f"  {LG}[b]{R}  {LG}Back{R}   {RDB}[q]{R}  {RD}Quit{R}")
         _write(t, "")
@@ -475,27 +659,36 @@ def _action_menu(t, pod: AgenticorePod) -> bool:
         if choice == "b":
             return False
         if choice == "1":
-            if pod.agent_mode:
-                _action_chat(t, pod)
-            else:
-                _action_job(t, pod)
+            t.close()
+            os.chdir(agent.package_path)
+            os.execvp(claude_cmd[0], claude_cmd)
         elif choice == "2":
-            _action_sync(t, pod)
+            subprocess.Popen(
+                ["code", agent.package_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            _write(t, f"\n  {GRB}✔  VS Code opening:{R}  {LGB}{agent.name}{R}")
+            _write(t, f"  {LG}(press Enter){R}", end="")
+            t.flush()
+            _prompt(t)
         elif choice == "3":
-            t.close()
-            _action_exec(pod)
-        elif choice == "4":
-            t.close()
-            _action_logs(pod)
-        elif choice == "5":
-            _action_health(t, pod)
+            config_path = Path(agent.package_path).parent / "agent.yml"
+            _write(t, "")
+            if config_path.exists():
+                for line in config_path.read_text().splitlines():
+                    _write(t, f"  {LG}{line}{R}")
+            else:
+                _write(t, f"  {RDB}agent.yml not found{R}")
+            _write(t, f"\n  {LG}(press Enter){R}", end="")
+            t.flush()
+            _prompt(t)
 
 
-# ── Main entrypoints ─────────────────────────────────────────────────────────
-
-def main_interactive():
+def main_interactive(agentihub_dir: str = ""):
     namespace = _get_namespace()
     pods = discover_pods()
+    local_agents = discover_local_agents(agentihub_dir)
     filter_str = ""
 
     t = open("/dev/tty", "w")
@@ -503,7 +696,7 @@ def main_interactive():
     while True:
         _clear(t)
         _render_header(t, namespace)
-        filtered = _render_list(t, pods, filter_str)
+        filtered_pods, filtered_local = _render_list(t, pods, local_agents, filter_str)
         _render_footer(t, filter_str)
 
         raw = _prompt(t).strip()
@@ -515,6 +708,7 @@ def main_interactive():
             _write(t, f"\n  {YL}Refreshing...{R}")
             t.flush()
             pods = discover_pods()
+            local_agents = discover_local_agents(agentihub_dir)
             continue
 
         if raw.startswith("/"):
@@ -526,22 +720,38 @@ def main_interactive():
         except ValueError:
             continue
 
-        if 1 <= num <= len(filtered):
-            should_quit = _action_menu(t, filtered[num - 1])
+        total_pods = len(filtered_pods)
+        total = total_pods + len(filtered_local)
+
+        if 1 <= num <= total:
+            if num <= total_pods:
+                should_quit = _action_menu(t, filtered_pods[num - 1], local_agents)
+            else:
+                should_quit = _local_action_menu(t, filtered_local[num - 1 - total_pods])
             if should_quit:
                 break
             pods = discover_pods()
+            local_agents = discover_local_agents(agentihub_dir)
 
     t.close()
 
 
+def headless_local(agent_name: str, agentihub_dir: str = ""):
+    agent = _resolve_local_agent(agent_name, agentihub_dir)
+    if not agent:
+        _headless_error(f"Local agent '{agent_name}' not found")
+    _headless_output(asdict(agent))
+
+
 def main(headless: bool = False, action: str = "", **kwargs):
+    agentihub_dir = kwargs.get("agentihub_dir", "")
+
     if not headless:
-        main_interactive()
+        main_interactive(agentihub_dir)
         return
 
     if not action or action == "list":
-        headless_list()
+        headless_list(agentihub_dir)
     elif action == "chat":
         if not kwargs.get("message"):
             _headless_error("--message is required for chat", exit_code=2)
@@ -562,5 +772,9 @@ def main(headless: bool = False, action: str = "", **kwargs):
         headless_sync(pod_name=kwargs.get("pod", ""))
     elif action == "health":
         headless_health(pod_name=kwargs.get("pod", ""))
+    elif action == "local":
+        if not kwargs.get("agent"):
+            _headless_error("--agent is required for local", exit_code=2)
+        headless_local(agent_name=kwargs["agent"], agentihub_dir=agentihub_dir)
     else:
-        _headless_error(f"Unknown action '{action}'. Valid: list, chat, job, sync, health", exit_code=2)
+        _headless_error(f"Unknown action '{action}'. Valid: list, chat, job, sync, health, local", exit_code=2)

@@ -817,6 +817,8 @@ def _cmd_agents(args):
         task=getattr(args, "task", ""),
         repo=getattr(args, "repo", ""),
         wait=getattr(args, "wait", True),
+        agent=getattr(args, "agent", ""),
+        agentihub_dir=getattr(args, "agentihub_dir", ""),
     )
 
 
@@ -953,13 +955,15 @@ def main():
     # agents
     p_agents = sub.add_parser("agents", help="Discover and manage running agenticore pods (K8s)")
     p_agents.add_argument("--headless", action="store_true", help="Non-interactive mode. JSON output, all inputs via flags.")
-    p_agents.add_argument("action", nargs="?", default="", help="Headless action: list, chat, job, sync, health")
+    p_agents.add_argument("action", nargs="?", default="", help="Headless action: list, chat, job, sync, health, local")
     p_agents.add_argument("--pod", default="", help="Pod name (required for chat, job, sync, health)")
     p_agents.add_argument("--message", default="", help="Message for chat action")
     p_agents.add_argument("--task", default="", help="Task description for job action")
     p_agents.add_argument("--repo", default="", help="Repo URL for job action")
     p_agents.add_argument("--wait", action="store_true", default=True, help="Wait for chat response (default: true)")
     p_agents.add_argument("--no-wait", dest="wait", action="store_false", help="Don't wait for chat response")
+    p_agents.add_argument("--agent", default="", help="Local agent name (required for local action)")
+    p_agents.add_argument("--agentihub-dir", default="", help="Path to agentihub directory (default: auto-detect)")
     p_agents.set_defaults(func=_cmd_agents)
 
     # hooks
