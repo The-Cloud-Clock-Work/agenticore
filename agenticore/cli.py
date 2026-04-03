@@ -244,6 +244,7 @@ def _cmd_update(args):
             new_version = _get_installed_version()
             if new_version and new_version != __version__:
                 print(f"Updated: {__version__} -> {new_version}")
+                _update_state_version(new_version)
             else:
                 print("Already up to date.")
         else:
@@ -268,6 +269,25 @@ def _get_installed_version() -> str:
         return mod.__version__
     except Exception:
         return ""
+
+
+def _update_state_version(version: str):
+    """Write updated version to ~/.agenticore/state.json."""
+    import json
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    state_file = Path.home() / ".agenticore" / "state.json"
+    state = {}
+    if state_file.exists():
+        try:
+            state = json.loads(state_file.read_text())
+        except Exception:
+            pass
+    state["version"] = version
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps(state, indent=2))
 
 
 def _cmd_init_shared_fs(args):
@@ -822,6 +842,44 @@ def _cmd_agents(args):
     )
 
 
+def _cmd_uninstall(args):
+    """Remove agenticore: stop daemon, remove state dir, pip uninstall."""
+    import shutil
+    from pathlib import Path
+
+    from agenticore.daemon import stop as daemon_stop, STATE_DIR
+
+    # Stop daemon
+    if daemon_stop():
+        print("Daemon stopped")
+
+    # Remove state dir
+    if STATE_DIR.exists():
+        if not args.keep_state:
+            shutil.rmtree(STATE_DIR)
+            print(f"Removed: {STATE_DIR}")
+        else:
+            print(f"Kept: {STATE_DIR} (--keep-state)")
+
+    # Pip uninstall
+    if not args.keep_package:
+        import subprocess
+
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "uninstall", "-y", "agenticore"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            print("Package uninstalled")
+        else:
+            print(f"Uninstall failed: {result.stderr}", file=sys.stderr)
+    else:
+        print("Kept package (--keep-package)")
+
+    print("Done.")
+
+
 def _cmd_init(args):
     """Initialize ~/.agenticore/ state directory and start daemon."""
     import json
@@ -1034,6 +1092,12 @@ def main():
     # init
     p_init_local = sub.add_parser("init", help="Initialize ~/.agenticore/ and start daemon")
     p_init_local.set_defaults(func=_cmd_init)
+
+    # uninstall
+    p_uninstall = sub.add_parser("uninstall", help="Remove agenticore: stop daemon, remove state, pip uninstall")
+    p_uninstall.add_argument("--keep-state", action="store_true", help="Keep ~/.agenticore/ directory")
+    p_uninstall.add_argument("--keep-package", action="store_true", help="Keep pip package, only remove state + daemon")
+    p_uninstall.set_defaults(func=_cmd_uninstall)
 
     # daemon
     p_daemon = sub.add_parser("daemon", help="Manage the background daemon")
