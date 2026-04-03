@@ -822,6 +822,69 @@ def _cmd_agents(args):
     )
 
 
+def _cmd_init(args):
+    """Initialize ~/.agenticore/ state directory and start daemon."""
+    import json
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from agenticore import __version__
+    from agenticore.daemon import start as daemon_start, _read_pid, STATE_DIR, STATE_FILE
+
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Write/update state.json
+    state = {}
+    if STATE_FILE.exists():
+        try:
+            state = json.loads(STATE_FILE.read_text())
+        except Exception:
+            pass
+
+    state["version"] = __version__
+    state["installed_at"] = datetime.now(timezone.utc).isoformat()
+    if "source" not in state:
+        state["source"] = str(Path(__file__).resolve().parent.parent)
+
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+    print(f"State directory: {STATE_DIR}")
+    print(f"Version: {__version__}")
+
+    # Start daemon
+    pid = daemon_start()
+    if pid:
+        print(f"Daemon started (PID {pid})")
+    else:
+        existing = _read_pid()
+        print(f"Daemon already running (PID {existing})")
+
+
+def _cmd_daemon(args):
+    """Manage the background daemon."""
+    from agenticore.daemon import start as daemon_start, stop as daemon_stop, status as daemon_status, _read_pid
+
+    action = getattr(args, "daemon_action", "status")
+    if action == "start":
+        pid = daemon_start()
+        if pid:
+            print(f"Daemon started (PID {pid})")
+        else:
+            print(f"Daemon already running (PID {_read_pid()})")
+    elif action == "stop":
+        if daemon_stop():
+            print("Daemon stopped")
+        else:
+            print("Daemon not running")
+    elif action == "status" or not action:
+        s = daemon_status()
+        if s["running"]:
+            print(f"Running (PID {s['pid']})")
+        else:
+            print("Not running")
+    else:
+        print(f"Unknown daemon action: {action}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="agenticore",
@@ -967,6 +1030,18 @@ def main():
     p_agents.add_argument("--agent", default="", help="Local agent name (required for local action)")
     p_agents.add_argument("--agentihub-dir", default="", help="Path to agentihub directory (default: auto-detect)")
     p_agents.set_defaults(func=_cmd_agents)
+
+    # init
+    p_init_local = sub.add_parser("init", help="Initialize ~/.agenticore/ and start daemon")
+    p_init_local.set_defaults(func=_cmd_init)
+
+    # daemon
+    p_daemon = sub.add_parser("daemon", help="Manage the background daemon")
+    daemon_sub = p_daemon.add_subparsers(dest="daemon_action")
+    daemon_sub.add_parser("start", help="Start the daemon")
+    daemon_sub.add_parser("stop", help="Stop the daemon")
+    daemon_sub.add_parser("status", help="Check daemon status")
+    p_daemon.set_defaults(func=_cmd_daemon)
 
     # hooks
     p_hooks = sub.add_parser("hooks", help="Manage agentihooks integration")
