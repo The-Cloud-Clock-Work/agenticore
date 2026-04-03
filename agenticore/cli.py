@@ -843,14 +843,37 @@ def _cmd_agents(args):
 
 
 def _cmd_uninstall(args):
-    """Remove agenticore: stop daemon, remove state dir, pip uninstall."""
+    """Remove agenticore: stop daemon, remove shim, remove state dir, pip uninstall."""
     import shutil
+    from pathlib import Path
 
-    from agenticore.daemon import stop as daemon_stop, STATE_DIR
+    from agenticore.daemon import stop as daemon_stop, STATE_DIR, STATE_FILE
 
     # Stop daemon
     if daemon_stop():
         print("Daemon stopped")
+
+    # Read state before removing dir — need shim_path
+    shim_path = None
+    if STATE_FILE.exists():
+        try:
+            state = json.loads(STATE_FILE.read_text())
+            shim_path = state.get("shim_path")
+        except Exception:
+            pass
+
+    # Remove shim
+    if shim_path:
+        p = Path(shim_path)
+        if p.exists():
+            p.unlink()
+            print(f"Shim removed: {shim_path}")
+    else:
+        # Fallback: check default location
+        default_shim = Path.home() / ".local" / "bin" / "agenticore"
+        if default_shim.exists():
+            default_shim.unlink()
+            print(f"Shim removed: {default_shim}")
 
     # Remove state dir
     if STATE_DIR.exists():
@@ -879,8 +902,46 @@ def _cmd_uninstall(args):
     print("Done.")
 
 
+def _install_shim(python_path: str) -> str | None:
+    """Write a bash shim to ~/.local/bin/agenticore that invokes the correct Python."""
+    import stat
+    from pathlib import Path
+
+    bin_dir = Path.home() / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    shim_path = bin_dir / "agenticore"
+
+    shim_content = (
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f'exec "{python_path}" -m agenticore "$@"\n'
+    )
+
+    shim_path.write_text(shim_content)
+    shim_path.chmod(shim_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return str(shim_path)
+
+
+def _query_bridge() -> dict | None:
+    """Best-effort health check against the local agentibridge."""
+    import os
+    import urllib.request
+    import urllib.error
+
+    bridge_url = os.environ.get("AGENTIBRIDGE_URL", "http://localhost:8100")
+    try:
+        req = urllib.request.Request(f"{bridge_url}/health", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+            if data.get("status") == "ok":
+                return {"url": bridge_url, "service": data.get("service", "agentibridge")}
+    except Exception:
+        pass
+    return None
+
+
 def _cmd_init(args):
-    """Initialize ~/.agenticore/ state directory and start daemon."""
+    """Initialize ~/.agenticore/ state directory, install shim, query bridge, start daemon."""
     import json
     from datetime import datetime, timezone
     from pathlib import Path
@@ -909,6 +970,25 @@ def _cmd_init(args):
         candidate = source.parent / "agentihub"
         if candidate.is_dir() and (candidate / "agents").is_dir():
             state["agentihub"] = {"path": str(candidate)}
+
+    # Install global shim to ~/.local/bin/
+    shim_path = _install_shim(sys.executable)
+    if shim_path:
+        state["shim_path"] = shim_path
+        print(f"Shim installed: {shim_path}")
+    else:
+        print("Warning: could not install shim to ~/.local/bin/")
+
+    # Query agentibridge for context
+    bridge_info = _query_bridge()
+    if bridge_info:
+        state["bridge"] = {
+            "url": bridge_info["url"],
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+        }
+        print(f"Bridge connected: {bridge_info['url']} ({bridge_info['service']})")
+    else:
+        print("Bridge: not reachable (agentibridge not running or not on localhost:8100)")
 
     STATE_FILE.write_text(json.dumps(state, indent=2))
     print(f"State directory: {STATE_DIR}")

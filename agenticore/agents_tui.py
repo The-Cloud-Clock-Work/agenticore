@@ -706,6 +706,7 @@ def _local_action_menu(t, agent: LocalAgent) -> bool:
             _write(t, f"  {LG}  {agent.description}{R}")
         _write(t, f"  {GRB}{'━' * W}{R}")
         _write(t, "")
+        _write(t, f"  {GRB}[Enter]{R} {LGB}Enter Agent Dir{R}  {LG}← cd {agent.package_path}{R}")
         _write(t, f"  {GRB}[1]{R}  {LGB}Open Chat{R}  {LG}← --model {agent.model}{R}")
         _write(t, f"  {GRB}[2]{R}  {LGB}Open in VS Code{R}  {LG}← code <package>{R}")
         _write(t, f"  {GRB}[3]{R}  {LGB}View Config{R}  {LG}← agent.yml{R}")
@@ -719,7 +720,11 @@ def _local_action_menu(t, agent: LocalAgent) -> bool:
             return True
         if choice == "b":
             return False
-        if choice == "1":
+        if choice == "":
+            t.close()
+            os.chdir(agent.package_path)
+            os.execlp("bash", "bash")
+        elif choice == "1":
             t.close()
             os.chdir(agent.package_path)
             os.execvp(claude_cmd[0], claude_cmd)
