@@ -904,6 +904,13 @@ def _cmd_init(args):
     if "source" not in state:
         state["source"] = str(Path(__file__).resolve().parent.parent)
 
+    # Auto-detect agentihub if not set
+    if "agentihub" not in state:
+        source = Path(state.get("source", ""))
+        candidate = source.parent / "agentihub"
+        if candidate.is_dir() and (candidate / "agents").is_dir():
+            state["agentihub"] = {"path": str(candidate)}
+
     STATE_FILE.write_text(json.dumps(state, indent=2))
     print(f"State directory: {STATE_DIR}")
     print(f"Version: {__version__}")
