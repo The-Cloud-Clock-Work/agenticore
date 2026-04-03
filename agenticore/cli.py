@@ -845,7 +845,6 @@ def _cmd_agents(args):
 def _cmd_uninstall(args):
     """Remove agenticore: stop daemon, remove state dir, pip uninstall."""
     import shutil
-    from pathlib import Path
 
     from agenticore.daemon import stop as daemon_stop, STATE_DIR
 
