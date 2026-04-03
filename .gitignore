@@ -42,3 +42,4 @@ _site/
 Gemfile.lock
 coverage.xml
 .coverage
+.claude/settings.local.json
