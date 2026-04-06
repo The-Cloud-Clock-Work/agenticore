@@ -41,12 +41,17 @@ def _derive_endpoint(cfg: Config) -> str:
     return f"http://{host}:{cfg.server.port}"
 
 
+def _get_mcp_tool_names() -> list:
+    """Read actual registered MCP tools from the server instance."""
+    try:
+        from agenticore.server import mcp
+        return sorted(t.name for t in mcp._tool_manager.list_tools())
+    except Exception:
+        return []
+
+
 def _build_capabilities(cfg: Config, profiles: dict) -> list:
-    base = [
-        "run_task", "plan_task", "execute_plan",
-        "get_job", "list_jobs", "cancel_job",
-        "prepare_worktree", "list_profiles",
-    ]
+    base = _get_mcp_tool_names()
     profile_caps = [f"profile:{name}" for name in sorted(profiles.keys())]
     agent_cap = ["agent_mode"] if cfg.agent_mode.enabled else []
     hub_cap = [f"agent:{cfg.agent_mode.agent}"] if cfg.agent_mode.agent else []
