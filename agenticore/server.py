@@ -1180,6 +1180,22 @@ def _auto_sync_agentihub(cfg):
         logger.warning("agentihub sync failed: %s — non-fatal", e)
 
 
+def _auto_register_with_bridge(cfg):
+    """Register with AgentiBridge for A2A discovery. Best-effort — never blocks startup."""
+    if not cfg.agentibridge.url or not cfg.agentibridge.registration_enabled:
+        return
+    try:
+        from agenticore.bridge_client import register_with_bridge, start_heartbeat_thread
+        from agenticore.profiles import load_profiles
+
+        profiles = load_profiles()
+        agent_id = register_with_bridge(cfg, profiles)
+        if agent_id and cfg.agentibridge.heartbeat_interval > 0:
+            start_heartbeat_thread(cfg, agent_id)
+    except Exception as e:
+        logger.warning("AgentiBridge registration failed: %s — A2A discovery unavailable", e)
+
+
 def _ensure_claude_onboarding():
     """Ensure .claude.json has hasCompletedOnboarding so interactive mode skips login prompt."""
     claude_json = Path.home() / ".claude.json"
@@ -1230,6 +1246,7 @@ def main():
 
     _auto_sync_agentihooks(cfg)
     _auto_sync_agentihub(cfg)
+    _auto_register_with_bridge(cfg)
 
     # Agent mode initialization
     if cfg.agent_mode.enabled:

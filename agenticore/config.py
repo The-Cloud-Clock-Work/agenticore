@@ -107,6 +107,15 @@ class AgentModeConfig:
 
 
 @dataclass
+class AgentiBridgeConfig:
+    url: str = ""  # AGENTIBRIDGE_URL — base URL; empty = feature disabled
+    api_key: str = ""  # AGENTIBRIDGE_API_KEY — auth token
+    heartbeat_interval: int = 60  # AGENTIBRIDGE_HEARTBEAT_INTERVAL — seconds
+    registration_enabled: bool = True  # AGENTIBRIDGE_REGISTRATION_ENABLED
+    agent_id: str = ""  # AGENTIBRIDGE_AGENT_ID — override derived agent ID
+
+
+@dataclass
 class LangfuseConfig:
     host: str = "https://cloud.langfuse.com"
     public_key: str = ""
@@ -123,6 +132,7 @@ class Config:
     github: GithubConfig = field(default_factory=GithubConfig)
     langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
     agent_mode: AgentModeConfig = field(default_factory=AgentModeConfig)
+    agentibridge: AgentiBridgeConfig = field(default_factory=AgentiBridgeConfig)
     agentihooks_path: str = ""
     agentihooks_url: str = ""
     agentihooks_bundle_url: str = ""
@@ -311,6 +321,21 @@ def load_config(config_path: Optional[str] = None) -> Config:
         default_notifications=_env("AGENT_MODE_DEFAULT_NOTIFICATIONS", "status"),
     )
 
+    # AgentiBridge — env overrides
+    agentibridge_raw = raw.get("agentibridge", {})
+    agentibridge = AgentiBridgeConfig(
+        url=_env("AGENTIBRIDGE_URL", agentibridge_raw.get("url", "")),
+        api_key=_env("AGENTIBRIDGE_API_KEY", agentibridge_raw.get("api_key", "")),
+        heartbeat_interval=_env_int(
+            "AGENTIBRIDGE_HEARTBEAT_INTERVAL", str(agentibridge_raw.get("heartbeat_interval", 60))
+        ),
+        registration_enabled=_env_bool(
+            "AGENTIBRIDGE_REGISTRATION_ENABLED",
+            str(agentibridge_raw.get("registration_enabled", True)).lower(),
+        ),
+        agent_id=_env("AGENTIBRIDGE_AGENT_ID", agentibridge_raw.get("agent_id", "")),
+    )
+
     agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
     agentihooks_url = _env("AGENTICORE_AGENTIHOOKS_URL", raw.get("agentihooks_url", ""))
     agentihooks_bundle_url = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", raw.get("agentihooks_bundle_url", ""))
@@ -335,6 +360,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         github=github,
         langfuse=langfuse,
         agent_mode=agent_mode,
+        agentibridge=agentibridge,
         agentihooks_path=agentihooks_path,
         agentihooks_url=agentihooks_url,
         agentihooks_bundle_url=agentihooks_bundle_url,
