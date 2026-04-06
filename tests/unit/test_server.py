@@ -375,12 +375,12 @@ class TestRestApi:
         assert data["job"]["status"] == "queued"
 
     @pytest.mark.asyncio
-    async def test_post_jobs_ignores_wait(self, rest_app):
-        """POST /jobs ignores wait field — always fire-and-forget."""
+    async def test_post_jobs_forwards_wait(self, rest_app):
+        """POST /jobs forwards wait field to submit_job."""
         from starlette.testclient import TestClient
 
         mock_job = MagicMock()
-        mock_job.to_dict.return_value = {"id": "j1", "status": "queued"}
+        mock_job.to_dict.return_value = {"id": "j1", "status": "succeeded"}
 
         with (
             patch("agenticore.router.route", return_value="code"),
@@ -390,7 +390,7 @@ class TestRestApi:
             resp = client.post("/jobs", json={"task": "fix bug", "wait": True})
 
         call_kwargs = mock_submit.call_args[1]
-        assert call_kwargs["wait"] is False
+        assert call_kwargs["wait"] is True
 
         data = resp.json()
         assert data["success"] is True
