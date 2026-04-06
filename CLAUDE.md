@@ -68,6 +68,21 @@ Request → Router → Clone repo → claude --worktree -p "task" → OTEL → P
 Profiles are directory-based packages with `profile.yml` + `.claude/` config.
 Profiles are discovered from `AGENTICORE_AGENTIHOOKS_PATH` (set to agentihooks repo) and `~/.agenticore/profiles/`.
 
+## A2A Agent Discovery (AgentiBridge)
+
+Agenticore self-registers with AgentiBridge on boot for Agent-to-Agent discovery.
+
+**Module:** `agenticore/bridge_client.py`
+
+**Config vars (all optional):**
+- `AGENTIBRIDGE_URL` — base URL; empty = disabled
+- `AGENTIBRIDGE_API_KEY` — auth token
+- `AGENTIBRIDGE_HEARTBEAT_INTERVAL` — seconds between heartbeats (default 60)
+- `AGENTIBRIDGE_REGISTRATION_ENABLED` — kill switch (default true)
+- `AGENTIBRIDGE_AGENT_ID` — override derived agent ID (default: pod name)
+
+**Startup flow:** after agentihooks + agentihub sync, `_auto_register_with_bridge()` builds an agent card (id, capabilities from profiles + agent_mode, endpoint) and POSTs to `{AGENTIBRIDGE_URL}/agents/register`. A daemon thread heartbeats every 60s. If AgentiBridge restarts and loses registry, heartbeat detects `success: false` and auto-re-registers. All ops are best-effort — never blocks startup.
+
 ## Redis + File Fallback
 
 Jobs stored as Redis hashes (`agenticore:job:{id}`) or `~/.agenticore/jobs/{id}.json`.
