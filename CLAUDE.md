@@ -66,12 +66,19 @@ Request → Router → Clone repo → claude --worktree -p "task" → OTEL → P
 ## Profile System
 
 Profiles are directory-based packages with `profile.yml` + `.claude/` config.
-Profiles are discovered from `AGENTICORE_AGENTIHOOKS_PATH` (set to agentihooks repo) and `~/.agenticore/profiles/`.
+Profile search dirs are derived from `resolve_repo_paths()` in `hooks.py`:
+1. `{agentihooks}/profiles/` — base execution profiles (coding, admin, default)
+2. `{agentihooks-bundle}/profiles/` — operator/agent profiles (agenticore, colt, patch-mode)
+3. `~/.agenticore/profiles/` — user overrides
 
-**Profile Ownership:** `AGENTICORE_DEFAULT_PROFILE` was removed. Profiles belong to agentihooks, not agenticore.
-The source of truth is `AGENTIHOOKS_PROFILE` env var, read into `cfg.agentihooks_profile`.
-Router and runner fall back to this value when no profile is specified per-request.
-`hooks.py` uses it for `agentihooks init --profile`.
+Paths are deterministic from `AGENTICORE_SHARED_FS_ROOT` (prod) or explicit env vars (dev mode).
+
+**Dev Mode:** Set `AGENTICORE_DEV_MODE=true` + mount paths via `AGENTICORE_AGENTIHOOKS_PATH`, `AGENTICORE_AGENTIHOOKS_BUNDLE_PATH`, `AGENTICORE_AGENTIHUB_PATH`. Skips cloning and watchers.
+
+**Profile Ownership:** Profiles belong to agentihooks, not agenticore.
+`AGENTIHOOKS_PROFILE` → `cfg.agentihooks_profile`. Router/runner fall back to this when no profile specified.
+
+**Agent packages:** `_provision_from_agentihub()` points `package_dir` directly at `{agentihub}/agents/{name}/package/` — no copy to `/app/package/`.
 
 ## Concurrency Gate
 
