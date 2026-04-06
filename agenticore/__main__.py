@@ -1,5 +1,5 @@
 """Enable ``python -m agenticore`` execution."""
 
-from agenticore.server import main
+from agenticore.cli import main
 
 main()
