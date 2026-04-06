@@ -911,11 +911,7 @@ def _install_shim(python_path: str) -> str | None:
     bin_dir.mkdir(parents=True, exist_ok=True)
     shim_path = bin_dir / "agenticore"
 
-    shim_content = (
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        f'exec "{python_path}" -m agenticore "$@"\n'
-    )
+    shim_content = f'#!/usr/bin/env bash\nset -euo pipefail\nexec "{python_path}" -m agenticore "$@"\n'
 
     shim_path.write_text(shim_content)
     shim_path.chmod(shim_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
