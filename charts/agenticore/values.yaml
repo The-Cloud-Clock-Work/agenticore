@@ -38,7 +38,7 @@ config:
   port: 8200
 
   # Default execution profile when none is specified by the client
-  defaultProfile: code
+  agentihooksProfile: coding
 
   # Max Claude Code subprocesses per pod
   maxParallelJobs: 3

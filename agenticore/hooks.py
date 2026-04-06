@@ -308,7 +308,7 @@ def run_agentihooks_init(hooks_path: Optional[Path] = None, bundle_path: Optiona
             capture_output=True,
         )
 
-    profile = os.getenv("AGENTIHOOKS_PROFILE", "coding")
+    profile = get_config().agentihooks_profile
     cmd = ["agentihooks", "init", "--profile", profile]
     if bundle_path and bundle_path.exists():
         cmd.extend(["--bundle", str(bundle_path)])

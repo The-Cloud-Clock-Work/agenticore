@@ -664,7 +664,7 @@ async def execute_plan_job(
         raise ValueError(f"Plan {plan_id} not ready (status: {plan.status})")
 
     cfg = get_config()
-    resolved_profile = profile or cfg.claude.default_profile
+    resolved_profile = profile or cfg.agentihooks_profile
     task = (
         f"Execute the following implementation plan:\n\n"
         f"---\n{plan.content}\n---\n\n"

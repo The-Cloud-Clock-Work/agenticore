@@ -59,8 +59,8 @@ spec:
               value: "0.0.0.0"
             - name: AGENTICORE_PORT
               value: {{ .Values.config.port | quote }}
-            - name: AGENTICORE_DEFAULT_PROFILE
-              value: {{ .Values.config.defaultProfile | quote }}
+            - name: AGENTIHOOKS_PROFILE
+              value: {{ .Values.config.agentihooksProfile | quote }}
             - name: AGENTICORE_MAX_PARALLEL_JOBS
               value: {{ .Values.config.maxParallelJobs | quote }}
             - name: AGENTICORE_JOB_TTL

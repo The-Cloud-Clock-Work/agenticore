@@ -50,12 +50,12 @@ def _get_mcp_tool_names() -> list:
         return []
 
 
-def _build_capabilities(cfg: Config, profiles: dict) -> list:
+def _build_capabilities(cfg: Config) -> list:
     base = _get_mcp_tool_names()
-    profile_caps = [f"profile:{name}" for name in sorted(profiles.keys())]
+    active_profile = [f"profile:{cfg.agentihooks_profile}"]
     agent_cap = ["agent_mode"] if cfg.agent_mode.enabled else []
     hub_cap = [f"agent:{cfg.agent_mode.agent}"] if cfg.agent_mode.agent else []
-    return base + profile_caps + agent_cap + hub_cap
+    return base + active_profile + agent_cap + hub_cap
 
 
 def build_agent_card(cfg: Config, profiles: dict) -> dict:
@@ -65,13 +65,14 @@ def build_agent_card(cfg: Config, profiles: dict) -> dict:
         "agent_id": agent_id,
         "agent_name": agent_id,
         "agent_type": "executor",
-        "capabilities": _build_capabilities(cfg, profiles),
+        "capabilities": _build_capabilities(cfg),
         "endpoint": endpoint,
         "metadata": {
             "version": _VERSION,
             "pod_name": cfg.repos.pod_name,
             "max_parallel_jobs": cfg.repos.max_parallel_jobs,
-            "default_profile": cfg.claude.default_profile,
+            "active_profile": cfg.agentihooks_profile,
+            "available_profiles": sorted(profiles.keys()),
             "agent_mode_enabled": cfg.agent_mode.enabled,
             "agentihub_agent": cfg.agent_mode.agent,
             "mcp_url": f"{endpoint}/mcp",

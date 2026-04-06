@@ -253,7 +253,7 @@ specified?    specified
    │             │
    ▼             ▼
 validate      use default
-exists?       (claude.default_profile)
+exists?       (agentihooks_profile)
    │             │
    └──────┬──────┘
           │
@@ -262,7 +262,7 @@ exists?       (claude.default_profile)
 ```
 
 If the requested profile doesn't exist, the router falls back to
-`claude.default_profile` (default: `code`).
+`agentihooks_profile` (default: `coding`, set via `AGENTIHOOKS_PROFILE`).
 
 ## Template Variables
 

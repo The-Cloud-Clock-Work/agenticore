@@ -91,7 +91,7 @@ The compose file passes these to the `agenticore` service:
 | `REDIS_URL` | `redis://redis:6379/0` | Redis connection |
 | `REDIS_KEY_PREFIX` | `agenticore` | Redis key namespace |
 | `AGENTICORE_REPOS_ROOT` | `/root/agenticore-repos` | Repos volume |
-| `AGENTICORE_DEFAULT_PROFILE` | from `.env` | Default profile |
+| `AGENTIHOOKS_PROFILE` | from `.env` | Active profile (set by agentihooks) |
 | `AGENTICORE_CLAUDE_BINARY` | from `.env` | Claude binary path |
 | `AGENTICORE_OTEL_ENABLED` | from `.env` | Enable OTEL |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-collector:4317` | Collector endpoint |
@@ -224,7 +224,7 @@ secret values should appear in docs):
 | GitHub | `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_SECRET_ID`, `GITHUB_TOKEN`, `GIT_USER_NAME`, `GIT_USER_EMAIL` |
 | Database | `DATABASE_URL`, `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_NAME`, `POSTGRES_USERNAME`, `POSTGRES_PASSWORD` |
 | Logging | `LOG_LEVEL`, `CLAUDE_LOGS`, `FASTMCP_LOG_LEVEL`, `LOG_USE_COLORS` |
-| Agentihooks | `AGENTICORE_DEFAULT_PROFILE`, `AGENTIHOOKS_MCP_FILE`, `LITELLM_MCP_GATEWAY_KEY`, `LITELLM_MCP_GATEWAY_URL` |
+| Agentihooks | `AGENTIHOOKS_PROFILE`, `AGENTIHOOKS_MCP_FILE`, `LITELLM_MCP_GATEWAY_KEY`, `LITELLM_MCP_GATEWAY_URL` |
 | MCP Gateway | `LITELLM_URL`, `LITELLM_MASTER_KEY`, `LANGFUSE_*`, `GRAFANA_*`, `MATRIX_*` |
 
 ### CLI aliases

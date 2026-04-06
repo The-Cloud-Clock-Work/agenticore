@@ -46,7 +46,6 @@ class ReposConfig:
 class ClaudeConfig:
     binary: str = "claude"
     timeout: int = 3600
-    default_profile: str = "coding"
     config_dir: str = ""  # DEPRECATED — kept for backward compat warning only
     default_mcp_file: str = ""  # AGENTICORE_DEFAULT_MCP_FILE — injected into every job
     claude_home_dir: str = ""  # CLAUDE_CODE_HOME_DIR — home dir root (e.g. /shared)
@@ -133,6 +132,7 @@ class Config:
     langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
     agent_mode: AgentModeConfig = field(default_factory=AgentModeConfig)
     agentibridge: AgentiBridgeConfig = field(default_factory=AgentiBridgeConfig)
+    agentihooks_profile: str = "coding"  # AGENTIHOOKS_PROFILE — active profile for this agent
     agentihooks_path: str = ""
     agentihooks_url: str = ""
     agentihooks_bundle_url: str = ""
@@ -245,7 +245,6 @@ def load_config(config_path: Optional[str] = None) -> Config:
     claude = ClaudeConfig(
         binary=_env("AGENTICORE_CLAUDE_BINARY", claude_raw.get("binary", "claude")),
         timeout=_env_int("AGENTICORE_CLAUDE_TIMEOUT", str(claude_raw.get("timeout", 3600))),
-        default_profile=_env("AGENTICORE_DEFAULT_PROFILE", claude_raw.get("default_profile", "coding")),
         config_dir=config_dir,
         default_mcp_file=_env("AGENTICORE_DEFAULT_MCP_FILE", claude_raw.get("default_mcp_file", "")),
         claude_home_dir=claude_home_dir,
@@ -336,6 +335,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         agent_id=_env("AGENTIBRIDGE_AGENT_ID", agentibridge_raw.get("agent_id", "")),
     )
 
+    agentihooks_profile = _env("AGENTIHOOKS_PROFILE", raw.get("agentihooks_profile", "coding"))
     agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
     agentihooks_url = _env("AGENTICORE_AGENTIHOOKS_URL", raw.get("agentihooks_url", ""))
     agentihooks_bundle_url = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", raw.get("agentihooks_bundle_url", ""))
@@ -361,6 +361,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         langfuse=langfuse,
         agent_mode=agent_mode,
         agentibridge=agentibridge,
+        agentihooks_profile=agentihooks_profile,
         agentihooks_path=agentihooks_path,
         agentihooks_url=agentihooks_url,
         agentihooks_bundle_url=agentihooks_bundle_url,

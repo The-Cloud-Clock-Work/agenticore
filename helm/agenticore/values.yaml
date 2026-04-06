@@ -20,7 +20,7 @@ server:
 claude:
   binary: claude
   timeout: 3600
-  defaultProfile: coding
+  profile: coding
   configDir: ""  # DEPRECATED — Claude Code uses ~/.claude/ by default
 
 redis:

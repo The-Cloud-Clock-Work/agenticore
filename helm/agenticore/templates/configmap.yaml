@@ -13,7 +13,7 @@ data:
   AGENTICORE_JOB_TTL: {{ .Values.repos.jobTtlSeconds | quote }}
   AGENTICORE_CLAUDE_BINARY: {{ .Values.claude.binary | quote }}
   AGENTICORE_CLAUDE_TIMEOUT: {{ .Values.claude.timeout | quote }}
-  AGENTICORE_DEFAULT_PROFILE: {{ .Values.claude.defaultProfile | quote }}
+  AGENTIHOOKS_PROFILE: {{ .Values.agentihooks.profile | quote }}
   AGENTICORE_OTEL_ENABLED: {{ .Values.otel.enabled | quote }}
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.otel.endpoint | quote }}
   OTEL_EXPORTER_OTLP_PROTOCOL: {{ .Values.otel.protocol | quote }}
