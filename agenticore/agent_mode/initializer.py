@@ -18,89 +18,43 @@ _log = logging.getLogger(__name__)
 
 
 def _provision_from_agentihub(cfg) -> None:
-    """Clone agentihub and copy agent's package/ and evaluation/ to /app/.
+    """Resolve agent package/evaluation dirs from agentihub — reference in place, no copy.
 
-    Requires AGENTICORE_AGENTIHUB_URL and AGENTIHUB_AGENT to be set. Clones the repo,
-    finds agents/{agent_name}/, then copies package/ → /app/package/ and
-    evaluation/ → /app/evaluation/.
+    The hub is already cloned to a deterministic path by sync_agentihub() at startup.
+    This function points package_dir and evaluation_dir at the hub checkout directly.
     """
-    from agenticore.repos import resolve_github_token
-    from agenticore.git_credentials import git_askpass_env
-
-    hub_url = os.getenv("AGENTICORE_AGENTIHUB_URL", "")
     agent_name = cfg.agent_mode.agent
-    if not hub_url or not agent_name:
-        _log.debug("No AGENTICORE_AGENTIHUB_URL or AGENTIHUB_AGENT — skipping agentihub provision")
+    if not agent_name:
+        _log.debug("AGENTIHUB_AGENT not set — skipping agentihub provision")
         return
 
-    _log.info("Provisioning from agentihub: agent=%s url=%s", agent_name, hub_url)
+    hub_path_str = os.getenv("AGENTICORE_AGENTIHUB_PATH", "")
+    if not hub_path_str:
+        _log.warning("AGENTICORE_AGENTIHUB_PATH not set — hub not available for agent provision")
+        return
 
-    # Use AGENTICORE_AGENTIHUB_PATH if hooks.sync_agentihub already cloned it
-    hub_path = os.getenv("AGENTICORE_AGENTIHUB_PATH", "")
-    if hub_path and (Path(hub_path) / "agents" / agent_name).exists():
-        _log.info("Using pre-cloned agentihub at %s", hub_path)
-        clone_dir = Path(hub_path)
-    else:
-        clone_dir = Path("/tmp/agentihub-clone")
-        if clone_dir.exists():
-            shutil.rmtree(clone_dir)
-
-        # Try unauthenticated clone first (works for public repos like agentihub)
-        env = os.environ.copy()
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1", hub_url, str(clone_dir)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            env=env,
-        )
-        if result.returncode != 0:
-            # Fall back to authenticated clone for private repos
-            _log.info("Unauthenticated clone failed, trying with GitHub App token")
-            if clone_dir.exists():
-                shutil.rmtree(clone_dir)
-            token = resolve_github_token()
-            with git_askpass_env(token) as extra_env:
-                env.update(extra_env)
-                result = subprocess.run(
-                    ["git", "clone", "--depth", "1", hub_url, str(clone_dir)],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    env=env,
-                )
-                if result.returncode != 0:
-                    raise RuntimeError(f"Agentihub clone failed: {result.stderr.strip()}")
-
-    agent_dir = clone_dir / "agents" / agent_name
+    hub_path = Path(hub_path_str)
+    agent_dir = hub_path / "agents" / agent_name
     if not agent_dir.exists():
-        if clone_dir == Path("/tmp/agentihub-clone") and clone_dir.exists():
-            shutil.rmtree(clone_dir, ignore_errors=True)
-        raise RuntimeError(f"Agent '{agent_name}' not found in agentihub at {agent_dir}")
+        available = []
+        agents_dir = hub_path / "agents"
+        if agents_dir.exists():
+            available = [d.name for d in agents_dir.iterdir() if d.is_dir()]
+        raise RuntimeError(f"Agent '{agent_name}' not found in agentihub at {agent_dir}. Available: {available}")
 
-    # Copy package/ → /app/package/
+    # Point package_dir and evaluation_dir at the hub path — no copy
     src_package = agent_dir / "package"
     if src_package.exists():
-        dest_package = Path(cfg.agent_mode.package_dir)
-        if dest_package.exists():
-            shutil.rmtree(dest_package)
-        shutil.copytree(src_package, dest_package)
-        _log.info("Copied package/ → %s", dest_package)
+        cfg.agent_mode.package_dir = str(src_package)
+        _log.info("package_dir → %s (from agentihub, no copy)", src_package)
     else:
         _log.warning("No package/ dir in agent '%s'", agent_name)
 
-    # Copy evaluation/ → /app/evaluation/
     src_eval = agent_dir / "evaluation"
     if src_eval.exists():
-        dest_eval = Path(cfg.agent_mode.evaluation_dir)
-        if dest_eval.exists():
-            shutil.rmtree(dest_eval)
-        shutil.copytree(src_eval, dest_eval)
-        _log.info("Copied evaluation/ → %s", dest_eval)
+        cfg.agent_mode.evaluation_dir = str(src_eval)
+        _log.info("evaluation_dir → %s (from agentihub, no copy)", src_eval)
 
-    # Clean up clone
-    shutil.rmtree(clone_dir, ignore_errors=True)
     _log.info("Agentihub provision complete for agent '%s'", agent_name)
 
 
@@ -224,15 +178,19 @@ def _run_startup_scripts(package_dir: str) -> None:
 
 
 def _install_notification_hook(package_dir: str) -> None:
-    """Install hook_notifier.py into .claude/hooks/ and wire settings.json."""
+    """Install hook_notifier.py into ~/.claude/hooks/ and wire settings.json.
+
+    Writes outside the package_dir to avoid dirtying git checkouts
+    (agentihub hot-reload does git clean -fdx which would delete hooks).
+    """
     import json
     import shutil
 
-    pkg = Path(package_dir)
-    hooks_dir = pkg / ".claude" / "hooks"
+    claude_home = Path(os.getenv("CLAUDE_CODE_HOME_DIR", str(Path.home())))
+    hooks_dir = claude_home / ".claude" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy hook_notifier.py to package hooks dir
+    # Copy hook_notifier.py to user-level hooks dir
     src = Path(__file__).parent / "hook_notifier.py"
     dst = hooks_dir / "notifier.py"
     if src.exists():
@@ -242,8 +200,8 @@ def _install_notification_hook(package_dir: str) -> None:
         _log.warning("hook_notifier.py not found at %s", src)
         return
 
-    # Wire hooks into settings.json
-    settings_path = pkg / ".claude" / "settings.json"
+    # Wire hooks into user-level settings.json (not package_dir)
+    settings_path = claude_home / ".claude" / "settings.json"
     settings = {}
     if settings_path.exists():
         try:

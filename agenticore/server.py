@@ -1170,7 +1170,24 @@ def run_sse_server() -> None:
 
 
 def _auto_sync_agentihooks(cfg):
-    """Auto-sync agentihooks, bundle, and run init."""
+    """Auto-sync agentihooks, bundle, and run init.
+
+    Dev mode: use pre-mounted paths, run init, skip watchers.
+    Prod mode: clone from URLs, start watchers.
+    """
+    if cfg.dev_mode:
+        try:
+            from agenticore.hooks import sync_agentihooks, sync_bundle, run_agentihooks_init
+
+            hooks_path = sync_agentihooks()
+            bundle_path = sync_bundle()
+            if hooks_path or bundle_path:
+                run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path)
+            logger.info("dev mode: agentihooks init complete (no watchers)")
+        except Exception as e:
+            logger.warning("agentihooks init failed (dev mode): %s", e)
+        return
+
     if not cfg.agentihooks_url or os.getenv("AGENTICORE_AGENTIHOOKS_PATH"):
         return
     try:
@@ -1194,11 +1211,21 @@ def _auto_sync_agentihooks(cfg):
 
 
 def _auto_sync_agentihub(cfg):
-    """Auto-sync agentihub if URL is configured (clone only, no profile build).
+    """Auto-sync agentihub if URL is configured.
 
-    Agent mode handles its own provisioning via initializer.py.
-    This just ensures the repo is available on shared FS.
+    Dev mode: use pre-mounted path, skip watcher.
+    Prod mode: clone from URL, start watcher.
     """
+    if cfg.dev_mode:
+        try:
+            from agenticore.hooks import sync_agentihub
+
+            sync_agentihub()
+            logger.info("dev mode: agentihub ready (no watcher)")
+        except Exception as e:
+            logger.warning("agentihub init failed (dev mode): %s", e)
+        return
+
     if not cfg.agentihub_url:
         return
     try:

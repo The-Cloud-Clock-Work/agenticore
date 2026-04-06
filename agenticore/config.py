@@ -136,11 +136,13 @@ class Config:
     agentihooks_path: str = ""
     agentihooks_url: str = ""
     agentihooks_bundle_url: str = ""
+    agentihooks_bundle_path: str = ""  # AGENTICORE_AGENTIHOOKS_BUNDLE_PATH — dev mode mount
     agentihooks_sync_interval: int = 300  # seconds between background re-syncs; 0 to disable
     agentihooks_bundle_sync_interval: int = 300
     agentihub_url: str = ""
     agentihub_path: str = ""
     agentihub_sync_interval: int = 300
+    dev_mode: bool = False  # AGENTICORE_DEV_MODE — skip cloning, use mounted paths
 
 
 def _default_repos_root() -> str:
@@ -339,6 +341,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
     agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
     agentihooks_url = _env("AGENTICORE_AGENTIHOOKS_URL", raw.get("agentihooks_url", ""))
     agentihooks_bundle_url = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", raw.get("agentihooks_bundle_url", ""))
+    agentihooks_bundle_path = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_PATH", raw.get("agentihooks_bundle_path", ""))
     agentihooks_sync_interval = _env_int(
         "AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL", str(raw.get("agentihooks_sync_interval", 300))
     )
@@ -350,6 +353,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
     agentihub_sync_interval = _env_int(
         "AGENTICORE_AGENTIHUB_SYNC_INTERVAL", str(raw.get("agentihub_sync_interval", 300))
     )
+    dev_mode = _env("AGENTICORE_DEV_MODE", raw.get("dev_mode", "")).lower() in ("true", "1", "yes")
 
     return Config(
         repos=repos,
@@ -365,11 +369,13 @@ def load_config(config_path: Optional[str] = None) -> Config:
         agentihooks_path=agentihooks_path,
         agentihooks_url=agentihooks_url,
         agentihooks_bundle_url=agentihooks_bundle_url,
+        agentihooks_bundle_path=agentihooks_bundle_path,
         agentihooks_sync_interval=agentihooks_sync_interval,
         agentihooks_bundle_sync_interval=agentihooks_bundle_sync_interval,
         agentihub_url=agentihub_url,
         agentihub_path=agentihub_path,
         agentihub_sync_interval=agentihub_sync_interval,
+        dev_mode=dev_mode,
     )
 
 
