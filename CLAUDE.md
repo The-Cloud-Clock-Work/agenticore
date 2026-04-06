@@ -68,6 +68,20 @@ Request → Router → Clone repo → claude --worktree -p "task" → OTEL → P
 Profiles are directory-based packages with `profile.yml` + `.claude/` config.
 Profiles are discovered from `AGENTICORE_AGENTIHOOKS_PATH` (set to agentihooks repo) and `~/.agenticore/profiles/`.
 
+**Profile Ownership:** `AGENTICORE_DEFAULT_PROFILE` was removed. Profiles belong to agentihooks, not agenticore.
+The source of truth is `AGENTIHOOKS_PROFILE` env var, read into `cfg.agentihooks_profile`.
+Router and runner fall back to this value when no profile is specified per-request.
+`hooks.py` uses it for `agentihooks init --profile`.
+
+## Concurrency Gate
+
+`MAX_PARALLEL_JOBS` is enforced via `asyncio.Semaphore` in `runner.py`.
+When all slots are in use, new jobs are rejected immediately with `status=rejected`.
+REST endpoints return HTTP 503 with `retry=true`. The OpenAI-compat `/v1/chat/completions` endpoint also returns 503 at capacity.
+Agent mode queue (`completions.py`) checks queue depth before enqueue — rejects if `queue_depth >= max_queue_workers * 2`.
+No queuing — callers handle retry (distributed systems responsibility).
+Env var: `AGENTICORE_MAX_PARALLEL_JOBS` (default 3, set to 2 in dev Helm chart).
+
 ## A2A Agent Discovery (AgentiBridge)
 
 Agenticore self-registers with AgentiBridge on boot for Agent-to-Agent discovery.
