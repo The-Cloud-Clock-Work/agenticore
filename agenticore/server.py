@@ -52,11 +52,12 @@ async def run_task(
     create_repo: bool = False,
     private: bool = True,
     worktree_id: str = "",
+    wait: bool = False,
 ) -> str:
     """Submit a task for Claude Code execution.
 
     Async (fire and forget) by default — returns job ID immediately.
-    Use get_job(job_id) to poll for completion.
+    Set wait=True to block until the job completes.
 
     Args:
         task: What Claude should do
@@ -68,6 +69,7 @@ async def run_task(
         create_repo: Auto-create GitHub repo if it doesn't exist (default: false)
         private: Create repo as private (default: true)
         worktree_id: Reuse a pre-prepared worktree (from prepare_worktree)
+        wait: If true, block until job completes (default: false)
 
     Returns:
         JSON with job_id, status, and (if wait=true) output
@@ -83,7 +85,7 @@ async def run_task(
             profile=resolved_profile,
             repo_url=repo_url,
             base_ref=base_ref,
-            wait=False,
+            wait=wait,
             session_id=session_id or None,
             file_path=file_path,
             create_repo=create_repo,
@@ -685,6 +687,7 @@ def _build_rest_app():
             create_repo=body.get("create_repo", False),
             private=body.get("private", True),
             worktree_id=body.get("worktree_id", ""),
+            wait=body.get("wait", False),
         )
         data = json.loads(result)
         status_code = 200 if data.get("success") else 400
