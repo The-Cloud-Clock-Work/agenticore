@@ -1191,7 +1191,7 @@ def _auto_register_with_bridge(cfg):
         profiles = load_profiles()
         agent_id = register_with_bridge(cfg, profiles)
         if agent_id and cfg.agentibridge.heartbeat_interval > 0:
-            start_heartbeat_thread(cfg, agent_id)
+            start_heartbeat_thread(cfg, agent_id, profiles)
     except Exception as e:
         logger.warning("AgentiBridge registration failed: %s — A2A discovery unavailable", e)
 

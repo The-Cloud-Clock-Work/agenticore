@@ -104,26 +104,35 @@ def register_with_bridge(cfg: Config, profiles: dict) -> Optional[str]:
     return None
 
 
+_redis_client = None
+
+
 def _get_running_jobs_count(cfg: Config) -> int:
+    global _redis_client
     try:
         import redis as redis_lib
 
         if not cfg.redis.url:
             return 0
-        r = redis_lib.Redis.from_url(cfg.redis.url, decode_responses=True, socket_timeout=2)
+        if _redis_client is None:
+            _redis_client = redis_lib.Redis.from_url(
+                cfg.redis.url, decode_responses=True,
+                socket_timeout=2, socket_connect_timeout=2,
+            )
         prefix = cfg.redis.key_prefix
-        job_ids = r.zrevrange(f"{prefix}:job:idx", 0, -1) or []
+        job_ids = _redis_client.zrevrange(f"{prefix}:job:idx", 0, -1) or []
         count = 0
         for jid in job_ids:
-            status = r.hget(f"{prefix}:job:{jid}", "status")
+            status = _redis_client.hget(f"{prefix}:job:{jid}", "status")
             if status == "running":
                 count += 1
         return count
     except Exception:
+        _redis_client = None
         return 0
 
 
-def heartbeat(cfg: Config, agent_id: str) -> bool:
+def heartbeat(cfg: Config, agent_id: str, profiles: dict) -> bool:
     running = _get_running_jobs_count(cfg)
     try:
         with _make_client(cfg) as client:
@@ -138,13 +147,18 @@ def heartbeat(cfg: Config, agent_id: str) -> bool:
                 },
             )
             resp.raise_for_status()
+            data = resp.json()
+            if not data.get("success", True):
+                # Agent not registered (e.g. AgentiBridge restarted) — re-register
+                logger.info("AgentiBridge lost registration, re-registering %s", agent_id)
+                register_with_bridge(cfg, profiles)
             return True
     except Exception as e:
         logger.warning("AgentiBridge heartbeat failed: %s", e)
         return False
 
 
-def start_heartbeat_thread(cfg: Config, agent_id: str) -> threading.Thread:
+def start_heartbeat_thread(cfg: Config, agent_id: str, profiles: dict) -> threading.Thread:
     interval = cfg.agentibridge.heartbeat_interval
     mgmt = get_mgmt_logger()
 
@@ -152,7 +166,7 @@ def start_heartbeat_thread(cfg: Config, agent_id: str) -> threading.Thread:
         while True:
             time.sleep(interval)
             try:
-                ok = heartbeat(cfg, agent_id)
+                ok = heartbeat(cfg, agent_id, profiles)
                 if ok:
                     mgmt.info("heartbeat agentibridge OK agent=%s", agent_id)
                 else:
