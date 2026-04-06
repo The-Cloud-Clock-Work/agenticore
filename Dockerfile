@@ -98,4 +98,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf http://localhost:8200/health || exit 1
 
 ENTRYPOINT ["tini", "--"]
-CMD ["python", "-m", "agenticore"]
+CMD ["python", "-m", "agenticore", "serve"]
