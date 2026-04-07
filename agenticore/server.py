@@ -1257,8 +1257,9 @@ def _auto_register_with_bridge(cfg):
 def _ensure_claude_onboarding():
     """Ensure .claude.json has required flags for non-interactive operation.
 
-    Sets hasCompletedOnboarding (skips login prompt) and hasTrustDialogAccepted
-    (skips workspace trust prompt in interactive/channel modes).
+    Sets hasCompletedOnboarding (skips login prompt), hasTrustDialogAccepted
+    at root level, and project-level trust for the agent package directory
+    (required for interactive/channel modes like Telegram).
     """
     claude_json = Path.home() / ".claude.json"
     try:
@@ -1271,10 +1272,22 @@ def _ensure_claude_onboarding():
         if not data.get("hasTrustDialogAccepted"):
             data["hasTrustDialogAccepted"] = True
             dirty = True
+
+        # Project-level trust for agent package dir (channel mode requires this)
+        agent_name = os.environ.get("AGENTIHUB_AGENT", "").strip()
+        if agent_name:
+            home = Path.home()
+            pkg_path = str(home / "agentihub" / "agents" / agent_name / "package")
+            projects = data.setdefault("projects", {})
+            if pkg_path not in projects or not projects[pkg_path].get("hasTrustDialogAccepted"):
+                projects[pkg_path] = {"hasTrustDialogAccepted": True}
+                dirty = True
+
         if dirty:
             claude_json.write_text(json.dumps(data, indent=2))
-            logger.info("claude onboarding: hasCompletedOnboarding=%s hasTrustDialogAccepted=%s",
-                        data["hasCompletedOnboarding"], data["hasTrustDialogAccepted"])
+            logger.info("claude onboarding: onboarding=%s trust=%s agent=%s",
+                        data["hasCompletedOnboarding"], data["hasTrustDialogAccepted"],
+                        agent_name or "none")
     except Exception as e:
         logger.warning("claude onboarding patch failed: %s — non-fatal", e)
 
