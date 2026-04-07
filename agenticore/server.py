@@ -1255,15 +1255,26 @@ def _auto_register_with_bridge(cfg):
 
 
 def _ensure_claude_onboarding():
-    """Ensure .claude.json has hasCompletedOnboarding so interactive mode skips login prompt."""
+    """Ensure .claude.json has required flags for non-interactive operation.
+
+    Sets hasCompletedOnboarding (skips login prompt) and hasTrustDialogAccepted
+    (skips workspace trust prompt in interactive/channel modes).
+    """
     claude_json = Path.home() / ".claude.json"
     try:
         data = json.loads(claude_json.read_text()) if claude_json.exists() else {}
+        dirty = False
         if not data.get("hasCompletedOnboarding"):
             data["hasCompletedOnboarding"] = True
             data["installMethod"] = "native"
+            dirty = True
+        if not data.get("hasTrustDialogAccepted"):
+            data["hasTrustDialogAccepted"] = True
+            dirty = True
+        if dirty:
             claude_json.write_text(json.dumps(data, indent=2))
-            logger.info("claude onboarding: set hasCompletedOnboarding=true")
+            logger.info("claude onboarding: hasCompletedOnboarding=%s hasTrustDialogAccepted=%s",
+                        data["hasCompletedOnboarding"], data["hasTrustDialogAccepted"])
     except Exception as e:
         logger.warning("claude onboarding patch failed: %s — non-fatal", e)
 
