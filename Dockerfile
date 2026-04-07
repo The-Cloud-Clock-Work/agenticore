@@ -91,8 +91,11 @@ RUN useradd -m -s /bin/bash agenticore && \
     chown -R agenticore:agenticore /app /home/agenticore /opt/venv /opt/agenticore /shared
 
 # Copy baked-in Claude config (plugins, marketplace) to agenticore user
+# Then pre-install Telegram plugin deps so they're baked into the image
 RUN cp -r /root/.claude /home/agenticore/.claude && \
-    chown -R agenticore:agenticore /home/agenticore/.claude
+    chown -R agenticore:agenticore /home/agenticore/.claude && \
+    cd /home/agenticore/.claude/plugins/cache/claude-plugins-official/telegram/*/  && \
+    bun install --no-summary
 
 # Pod-specific shell functions
 COPY docker/bashrc /opt/agenticore/bashrc

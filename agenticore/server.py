@@ -1303,6 +1303,16 @@ def _ensure_claude_onboarding():
                 if src.exists() and not dst.exists():
                     shutil.copytree(str(src), str(dst))
                     logger.info("migrated baked %s → %s", src, dst)
+            # Ensure plugin deps are installed (node_modules may be missing
+            # if plugins dir existed on PVC from a prior install without deps)
+            import glob
+            for pkg_json in glob.glob(str(runtime / "plugins" / "cache" / "*" / "*" / "*" / "package.json")):
+                pkg_dir = Path(pkg_json).parent
+                if not (pkg_dir / "node_modules").exists():
+                    import subprocess as _sp
+                    _sp.run(["bun", "install", "--no-summary"], cwd=str(pkg_dir),
+                            capture_output=True, timeout=60)
+                    logger.info("installed plugin deps in %s", pkg_dir)
     except Exception as e:
         logger.warning("plugin migration failed: %s — non-fatal", e)
 
