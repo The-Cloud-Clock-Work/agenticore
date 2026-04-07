@@ -1328,28 +1328,39 @@ def _ensure_claude_onboarding():
                     _sp.run(["bun", "install", "--no-summary"], cwd=str(pkg_dir),
                             capture_output=True, timeout=60)
                     logger.info("installed plugin deps in %s", pkg_dir)
-        # Ensure installed plugins are enabled in settings.json
-        # (agentihooks regenerates settings.json but doesn't know about plugins)
-        settings_path = runtime / "settings.json"
-        if settings_path.exists():
-            settings = json.loads(settings_path.read_text())
-            plugins_json = runtime / "plugins" / "installed_plugins.json"
-            if plugins_json.exists():
-                installed = json.loads(plugins_json.read_text())
-                plugin_names = list(installed.get("plugins", {}).keys())
-                if plugin_names:
-                    enabled = settings.get("enabledPlugins", {})
-                    changed = False
-                    for name in plugin_names:
-                        if name not in enabled:
-                            enabled[name] = True
-                            changed = True
-                    if changed:
-                        settings["enabledPlugins"] = enabled
-                        settings_path.write_text(json.dumps(settings, indent=2))
-                        logger.info("enabled plugins in settings.json: %s", plugin_names)
     except Exception as e:
         logger.warning("plugin migration failed: %s — non-fatal", e)
+
+
+def _enable_installed_plugins():
+    """Inject enabledPlugins into settings.json for all installed plugins.
+
+    Must run AFTER agentihooks init, which regenerates settings.json
+    and doesn't know about Claude Code plugins.
+    """
+    try:
+        runtime = Path.home() / ".claude"
+        settings_path = runtime / "settings.json"
+        plugins_json = runtime / "plugins" / "installed_plugins.json"
+        if not settings_path.exists() or not plugins_json.exists():
+            return
+        settings = json.loads(settings_path.read_text())
+        installed = json.loads(plugins_json.read_text())
+        plugin_names = list(installed.get("plugins", {}).keys())
+        if not plugin_names:
+            return
+        enabled = settings.get("enabledPlugins", {})
+        changed = False
+        for name in plugin_names:
+            if name not in enabled:
+                enabled[name] = True
+                changed = True
+        if changed:
+            settings["enabledPlugins"] = enabled
+            settings_path.write_text(json.dumps(settings, indent=2))
+            logger.info("enabled plugins in settings.json: %s", plugin_names)
+    except Exception as e:
+        logger.warning("plugin enable failed: %s — non-fatal", e)
 
 
 def main():
@@ -1387,6 +1398,7 @@ def main():
     _ensure_claude_onboarding()
 
     _auto_sync_agentihooks(cfg)
+    _enable_installed_plugins()  # must run AFTER agentihooks regenerates settings.json
     _auto_sync_agentihub(cfg)
     _auto_register_with_bridge(cfg)
 
