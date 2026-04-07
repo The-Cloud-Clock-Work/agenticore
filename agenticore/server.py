@@ -1303,6 +1303,21 @@ def _ensure_claude_onboarding():
                 if src.exists() and not dst.exists():
                     shutil.copytree(str(src), str(dst))
                     logger.info("migrated baked %s → %s", src, dst)
+            # Fix installPath in installed_plugins.json (baked as /root/.claude/...)
+            ip_file = runtime / "plugins" / "installed_plugins.json"
+            if ip_file.exists():
+                ip_data = json.loads(ip_file.read_text())
+                dirty = False
+                for entries in ip_data.get("plugins", {}).values():
+                    for entry in entries:
+                        old_path = entry.get("installPath", "")
+                        if "/root/.claude/" in old_path:
+                            entry["installPath"] = old_path.replace(
+                                "/root/.claude/", str(runtime) + "/")
+                            dirty = True
+                if dirty:
+                    ip_file.write_text(json.dumps(ip_data, indent=2))
+                    logger.info("fixed installPath in installed_plugins.json")
             # Ensure plugin deps are installed (node_modules may be missing
             # if plugins dir existed on PVC from a prior install without deps)
             import glob
@@ -1313,15 +1328,26 @@ def _ensure_claude_onboarding():
                     _sp.run(["bun", "install", "--no-summary"], cwd=str(pkg_dir),
                             capture_output=True, timeout=60)
                     logger.info("installed plugin deps in %s", pkg_dir)
-        # Ensure Telegram plugin is enabled (install alone doesn't enable it)
-        import subprocess as _sp
-        result = _sp.run(
-            ["claude", "plugin", "enable", "telegram@claude-plugins-official"],
-            capture_output=True, text=True, timeout=15,
-            env={**os.environ, "HOME": str(Path.home())},
-        )
-        if result.returncode == 0:
-            logger.info("telegram plugin enabled")
+        # Ensure installed plugins are enabled in settings.json
+        # (agentihooks regenerates settings.json but doesn't know about plugins)
+        settings_path = runtime / "settings.json"
+        if settings_path.exists():
+            settings = json.loads(settings_path.read_text())
+            plugins_json = runtime / "plugins" / "installed_plugins.json"
+            if plugins_json.exists():
+                installed = json.loads(plugins_json.read_text())
+                plugin_names = list(installed.get("plugins", {}).keys())
+                if plugin_names:
+                    enabled = settings.get("enabledPlugins", {})
+                    changed = False
+                    for name in plugin_names:
+                        if name not in enabled:
+                            enabled[name] = True
+                            changed = True
+                    if changed:
+                        settings["enabledPlugins"] = enabled
+                        settings_path.write_text(json.dumps(settings, indent=2))
+                        logger.info("enabled plugins in settings.json: %s", plugin_names)
     except Exception as e:
         logger.warning("plugin migration failed: %s — non-fatal", e)
 
