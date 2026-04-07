@@ -90,6 +90,10 @@ RUN useradd -m -s /bin/bash agenticore && \
              /shared && \
     chown -R agenticore:agenticore /app /home/agenticore /opt/venv /opt/agenticore /shared
 
+# Copy baked-in Claude config (plugins, marketplace) to agenticore user
+RUN cp -r /root/.claude /home/agenticore/.claude && \
+    chown -R agenticore:agenticore /home/agenticore/.claude
+
 # Pod-specific shell functions
 COPY docker/bashrc /opt/agenticore/bashrc
 

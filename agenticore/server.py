@@ -13,6 +13,7 @@ Tools:
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -1290,6 +1291,20 @@ def _ensure_claude_onboarding():
                         agent_name or "none")
     except Exception as e:
         logger.warning("claude onboarding patch failed: %s — non-fatal", e)
+
+    # Migrate baked-in plugins/marketplace from image to runtime HOME
+    try:
+        baked = Path("/home/agenticore/.claude")
+        runtime = Path.home() / ".claude"
+        if baked.exists() and baked.resolve() != runtime.resolve():
+            for subdir in ("plugins", "marketplace"):
+                src = baked / subdir
+                dst = runtime / subdir
+                if src.exists() and not dst.exists():
+                    shutil.copytree(str(src), str(dst))
+                    logger.info("migrated baked %s → %s", src, dst)
+    except Exception as e:
+        logger.warning("plugin migration failed: %s — non-fatal", e)
 
 
 def main():
