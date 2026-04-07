@@ -1318,6 +1318,20 @@ def _ensure_claude_onboarding():
                 if dirty:
                     ip_file.write_text(json.dumps(ip_data, indent=2))
                     logger.info("fixed installPath in installed_plugins.json")
+            # Fix marketplace installLocation paths too
+            km_file = runtime / "plugins" / "known_marketplaces.json"
+            if km_file.exists():
+                km_data = json.loads(km_file.read_text())
+                dirty = False
+                for mp in km_data.values():
+                    loc = mp.get("installLocation", "")
+                    if "/root/.claude/" in loc:
+                        mp["installLocation"] = loc.replace(
+                            "/root/.claude/", str(runtime) + "/")
+                        dirty = True
+                if dirty:
+                    km_file.write_text(json.dumps(km_data, indent=2))
+                    logger.info("fixed installLocation in known_marketplaces.json")
             # Ensure plugin deps are installed (node_modules may be missing
             # if plugins dir existed on PVC from a prior install without deps)
             import glob
