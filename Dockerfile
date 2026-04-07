@@ -66,8 +66,7 @@ RUN curl -fsSL https://claude.ai/install.sh | bash && \
 
 # Telegram channel plugin — baked in so agents don't need runtime install
 RUN claude plugin marketplace add anthropics/claude-plugins-official && \
-    claude plugin install telegram@claude-plugins-official && \
-    claude plugin enable telegram@claude-plugins-official
+    claude plugin install telegram@claude-plugins-official
 
 # Python venv with all dependencies
 COPY --from=python-builder /opt/venv /opt/venv
