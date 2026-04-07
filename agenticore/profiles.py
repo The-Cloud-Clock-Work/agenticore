@@ -204,11 +204,21 @@ def _resolve_extends(profile: Profile, all_profiles: Dict[str, Profile]) -> Prof
 
 
 def _get_search_dirs() -> List[Path]:
-    """Build the list of profile search directories."""
+    """Build the list of profile search directories.
+
+    Search order (later entries override earlier on name collision):
+      1. agentihooks/profiles/ (base execution profiles)
+      2. agentihooks-bundle/profiles/ (operator/agent-specific profiles)
+      3. ~/.agenticore/profiles/ (user overrides)
+    """
+    from agenticore.hooks import resolve_repo_paths
+
+    hooks, bundle, _ = resolve_repo_paths()
     search_dirs = []
-    agentihooks_dir = _agentihooks_profiles_dir()
-    if agentihooks_dir:
-        search_dirs.append(agentihooks_dir)
+    if hooks:
+        search_dirs.append(hooks / "profiles")
+    if bundle:
+        search_dirs.append(bundle / "profiles")
     search_dirs.append(_user_profiles_dir())
     return search_dirs
 
@@ -378,7 +388,8 @@ def _build_core_cli_args(c: ProfileClaude) -> List[str]:
     """Build core CLI flags from ProfileClaude settings."""
     args: List[str] = []
 
-    args.extend(["--model", c.model])
+    if c.model and c.model.lower() != "default":
+        args.extend(["--model", c.model])
     args.extend(["--max-turns", str(c.max_turns)])
     args.extend(["--output-format", c.output_format])
 

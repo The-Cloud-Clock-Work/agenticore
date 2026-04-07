@@ -40,19 +40,37 @@ def _get_head_ref(dest: Path) -> str:
         return "?"
 
 
+def resolve_repo_paths(cfg=None):
+    """Resolve paths for agentihooks, bundle, and agentihub.
+
+    Dev mode: use pre-mounted paths from env vars.
+    Prod mode: derive from SHARED_FS_ROOT, explicit overrides honored.
+
+    Returns (hooks_path, bundle_path, hub_path) — all Optional[Path].
+    """
+    if cfg is None:
+        cfg = get_config()
+    if cfg.dev_mode:
+        hooks = Path(cfg.agentihooks_path) if cfg.agentihooks_path else None
+        bundle = Path(cfg.agentihooks_bundle_path) if cfg.agentihooks_bundle_path else None
+        hub = Path(cfg.agentihub_path) if cfg.agentihub_path else None
+        return hooks, bundle, hub
+    shared = cfg.repos.shared_fs_root
+    base = Path(shared) if shared else Path.home() / ".agenticore"
+    hooks = Path(cfg.agentihooks_path) if cfg.agentihooks_path else base / "agentihooks"
+    bundle = Path(cfg.agentihooks_bundle_path) if cfg.agentihooks_bundle_path else base / "agentihooks-bundle"
+    hub = Path(cfg.agentihub_path) if cfg.agentihub_path else base / "agentihub"
+    return hooks, bundle, hub
+
+
 def _install_dir() -> Path:
     """Determine where agentihooks should be installed.
 
     Checks AGENTICORE_AGENTIHOOKS_PATH first (explicit override), then
     AGENTICORE_SHARED_FS_ROOT for K8s deployments, then local default.
     """
-    explicit = os.getenv("AGENTICORE_AGENTIHOOKS_PATH", "")
-    if explicit:
-        return Path(explicit)
-    shared = os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
-    if shared:
-        return Path(shared) / "agentihooks"
-    return Path.home() / ".agenticore" / "agentihooks"
+    hooks, _, _ = resolve_repo_paths()
+    return hooks or Path.home() / ".agenticore" / "agentihooks"
 
 
 def _clone_or_fetch(url: str, dest: Path) -> None:
@@ -81,16 +99,14 @@ def _clone_or_fetch(url: str, dest: Path) -> None:
                 fcntl.flock(lf, fcntl.LOCK_UN)
 
 
-def start_sync_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
+def start_sync_watcher(url: str, dest: Path, interval: int) -> Optional[threading.Thread]:
     """Start a daemon thread that periodically git-fetches + rebuilds agentihooks.
 
-    Args:
-        url:      Agentihooks git URL (authenticated at call time by _clone_or_fetch).
-        dest:     Install directory (already cloned).
-        interval: Seconds between re-syncs. Must be > 0.
-
-    Returns the started Thread (daemon, so it dies with the process).
+    Returns the started Thread, or None in dev mode.
     """
+    if get_config().dev_mode:
+        logger.info("dev mode: skipping agentihooks watcher")
+        return None
     if interval <= 0:
         raise ValueError(f"interval must be > 0, got {interval}")
 
@@ -115,8 +131,11 @@ def start_sync_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
     return t
 
 
-def start_bundle_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
+def start_bundle_watcher(url: str, dest: Path, interval: int) -> Optional[threading.Thread]:
     """Daemon thread that periodically re-fetches the agentihooks bundle repo."""
+    if get_config().dev_mode:
+        logger.info("dev mode: skipping bundle watcher")
+        return None
     if interval <= 0:
         raise ValueError(f"interval must be > 0, got {interval}")
 
@@ -141,8 +160,11 @@ def start_bundle_watcher(url: str, dest: Path, interval: int) -> threading.Threa
     return t
 
 
-def start_agentihub_watcher(url: str, dest: Path, interval: int) -> threading.Thread:
+def start_agentihub_watcher(url: str, dest: Path, interval: int) -> Optional[threading.Thread]:
     """Daemon thread that periodically re-fetches the agentihub repo."""
+    if get_config().dev_mode:
+        logger.info("dev mode: skipping agentihub watcher")
+        return None
     if interval <= 0:
         raise ValueError(f"interval must be > 0, got {interval}")
 
@@ -168,17 +190,9 @@ def start_agentihub_watcher(url: str, dest: Path, interval: int) -> threading.Th
 
 
 def _agentihub_install_dir() -> Path:
-    """Determine where agentihub should be installed.
-
-    3-tier resolution: explicit env → shared FS → local default.
-    """
-    explicit = os.getenv("AGENTICORE_AGENTIHUB_PATH", "")
-    if explicit:
-        return Path(explicit)
-    shared = os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
-    if shared:
-        return Path(shared) / "agentihub"
-    return Path.home() / ".agenticore" / "agentihub"
+    """Determine where agentihub should be installed."""
+    _, _, hub = resolve_repo_paths()
+    return hub or Path.home() / ".agenticore" / "agentihub"
 
 
 def _clone_or_fetch_agentihub(url: str, dest: Path) -> None:
@@ -213,7 +227,15 @@ def sync_agentihub(url: str = "") -> Optional[Path]:
     Sets AGENTICORE_AGENTIHUB_PATH in-process. Returns the install directory,
     or None if no URL is configured.
     """
-    url = url or get_config().agentihub_url
+    cfg = get_config()
+    if cfg.dev_mode:
+        _, _, hub = resolve_repo_paths(cfg)
+        if hub and hub.exists():
+            logger.info("dev mode: agentihub at %s (no clone)", hub)
+            os.environ["AGENTICORE_AGENTIHUB_PATH"] = str(hub)
+            return hub
+        return None
+    url = url or cfg.agentihub_url
     if not url:
         explicit = os.getenv("AGENTICORE_AGENTIHUB_PATH")
         if explicit:
@@ -228,10 +250,8 @@ def sync_agentihub(url: str = "") -> Optional[Path]:
 
 def _bundle_dir() -> Path:
     """Determine where the agentihooks bundle should be installed."""
-    shared = os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
-    if shared:
-        return Path(shared) / "agentihooks-bundle"
-    return Path.home() / ".agenticore" / "agentihooks-bundle"
+    _, bundle, _ = resolve_repo_paths()
+    return bundle or Path.home() / ".agenticore" / "agentihooks-bundle"
 
 
 def _clone_or_fetch_bundle(url: str, dest: Path) -> None:
@@ -266,7 +286,15 @@ def sync_agentihooks(url: str = "") -> Optional[Path]:
     If AGENTICORE_AGENTIHOOKS_PATH is already set and no URL is provided,
     returns the existing path without cloning.
     """
-    url = url or get_config().agentihooks_url
+    cfg = get_config()
+    if cfg.dev_mode:
+        hooks, _, _ = resolve_repo_paths(cfg)
+        if hooks and hooks.exists():
+            logger.info("dev mode: agentihooks at %s (no clone)", hooks)
+            os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(hooks)
+            return hooks
+        return None
+    url = url or cfg.agentihooks_url
     if not url:
         explicit = os.getenv("AGENTICORE_AGENTIHOOKS_PATH")
         if explicit:
@@ -285,6 +313,12 @@ def sync_bundle() -> Optional[Path]:
     Returns the bundle directory, or None if no bundle URL is configured.
     """
     cfg = get_config()
+    if cfg.dev_mode:
+        _, bundle, _ = resolve_repo_paths(cfg)
+        if bundle and bundle.exists():
+            logger.info("dev mode: agentihooks-bundle at %s (no clone)", bundle)
+            return bundle
+        return None
     url = cfg.agentihooks_bundle_url
     if not url:
         return None
@@ -308,7 +342,7 @@ def run_agentihooks_init(hooks_path: Optional[Path] = None, bundle_path: Optiona
             capture_output=True,
         )
 
-    profile = os.getenv("AGENTIHOOKS_PROFILE", "coding")
+    profile = get_config().agentihooks_profile
     cmd = ["agentihooks", "init", "--profile", profile]
     if bundle_path and bundle_path.exists():
         cmd.extend(["--bundle", str(bundle_path)])

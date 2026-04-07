@@ -32,7 +32,7 @@ def route(profile: str = "", repo_url: str = "") -> str:
         # Fall through to default if profile not found
 
     cfg = get_config()
-    return cfg.claude.default_profile
+    return cfg.agentihooks_profile
 
 
 def ai_route(_task: str, repo_url: str = "") -> str:

@@ -93,6 +93,8 @@ async def run_task(
             worktree_id=worktree_id,
         )
 
+        if job.status == "rejected":
+            return json.dumps({"success": False, "error": "at capacity", "retry": True, "job": job.to_dict()})
         return json.dumps({"success": True, "job": job.to_dict()})
 
     except Exception as e:
@@ -449,9 +451,14 @@ def _enqueue_async_completion(
     )
     save_notification_config(uuid, config)
 
-    # Enqueue — returns None if Redis available, dict if fallback needed
-    fallback = enqueue_completion(completion)
+    # Enqueue — returns None if Redis available, dict if fallback needed, or {"rejected": True}
+    cfg = get_config()
+    max_depth = cfg.agent_mode.max_queue_workers * 2
+    fallback = enqueue_completion(completion, max_queue_depth=max_depth)
     if fallback is not None:
+        if isinstance(fallback, dict) and fallback.get("rejected"):
+            return {"success": False, "error": "at capacity", "retry": True, **fallback}
+
         # No Redis — run inline as background task
         import asyncio
 
@@ -690,7 +697,12 @@ def _build_rest_app():
             wait=body.get("wait", False),
         )
         data = json.loads(result)
-        status_code = 200 if data.get("success") else 400
+        if data.get("retry"):
+            status_code = 503
+        elif data.get("success"):
+            status_code = 200
+        else:
+            status_code = 400
         return JSONResponse(data, status_code=status_code)
 
     async def get_job_route(request: Request):
@@ -804,6 +816,14 @@ def _build_rest_app():
 
             if wait:
                 from agenticore.agent_mode.agent import AgentExecutor
+                from agenticore.runner import _get_job_semaphore
+
+                sem = _get_job_semaphore()
+                if sem.locked() and sem._value == 0:
+                    return JSONResponse(
+                        {"success": False, "error": "at capacity", "retry": True},
+                        status_code=503,
+                    )
 
                 executor = AgentExecutor()
                 result = await executor.execute(
@@ -855,6 +875,8 @@ def _build_rest_app():
                         meta=meta_dict,
                     ),
                 )
+                if not result.get("success", True) and result.get("retry"):
+                    return JSONResponse(result, status_code=503)
                 return JSONResponse(result, status_code=202)
 
         async def get_completions_list(request: Request):
@@ -935,15 +957,24 @@ def _build_rest_app():
             if model_name not in valid_models:
                 model_name = ""  # fall back to AGENT_MODE_MODEL default
 
+            # Concurrency gate for OpenAI-compat path
+            from agenticore.runner import _get_job_semaphore
+
+            sem = _get_job_semaphore()
+            if sem.locked() and sem._value == 0:
+                err, code = build_openai_error("at capacity", 503)
+                return JSONResponse(err, status_code=code)
+
             executor = AgentExecutor()
-            result = await executor.execute(
-                message=message,
-                external_uuid=request_uuid,
-                wait=True,
-                stateless=True,
-                model=model_name,
-                timeout=body.get("timeout", 0),
-            )
+            async with sem:
+                result = await executor.execute(
+                    message=message,
+                    external_uuid=request_uuid,
+                    wait=True,
+                    stateless=True,
+                    model=model_name,
+                    timeout=body.get("timeout", 0),
+                )
 
             if result.get("is_error"):
                 err, code = build_openai_error(result.get("error", "Agent error"), 500)
@@ -1139,7 +1170,24 @@ def run_sse_server() -> None:
 
 
 def _auto_sync_agentihooks(cfg):
-    """Auto-sync agentihooks, bundle, and run init."""
+    """Auto-sync agentihooks, bundle, and run init.
+
+    Dev mode: use pre-mounted paths, run init, skip watchers.
+    Prod mode: clone from URLs, start watchers.
+    """
+    if cfg.dev_mode:
+        try:
+            from agenticore.hooks import sync_agentihooks, sync_bundle, run_agentihooks_init
+
+            hooks_path = sync_agentihooks()
+            bundle_path = sync_bundle()
+            if hooks_path or bundle_path:
+                run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path)
+            logger.info("dev mode: agentihooks init complete (no watchers)")
+        except Exception as e:
+            logger.warning("agentihooks init failed (dev mode): %s", e)
+        return
+
     if not cfg.agentihooks_url or os.getenv("AGENTICORE_AGENTIHOOKS_PATH"):
         return
     try:
@@ -1163,11 +1211,21 @@ def _auto_sync_agentihooks(cfg):
 
 
 def _auto_sync_agentihub(cfg):
-    """Auto-sync agentihub if URL is configured (clone only, no profile build).
+    """Auto-sync agentihub if URL is configured.
 
-    Agent mode handles its own provisioning via initializer.py.
-    This just ensures the repo is available on shared FS.
+    Dev mode: use pre-mounted path, skip watcher.
+    Prod mode: clone from URL, start watcher.
     """
+    if cfg.dev_mode:
+        try:
+            from agenticore.hooks import sync_agentihub
+
+            sync_agentihub()
+            logger.info("dev mode: agentihub ready (no watcher)")
+        except Exception as e:
+            logger.warning("agentihub init failed (dev mode): %s", e)
+        return
+
     if not cfg.agentihub_url:
         return
     try:
@@ -1178,6 +1236,22 @@ def _auto_sync_agentihub(cfg):
             start_agentihub_watcher(cfg.agentihub_url, hub_path, cfg.agentihub_sync_interval)
     except Exception as e:
         logger.warning("agentihub sync failed: %s — non-fatal", e)
+
+
+def _auto_register_with_bridge(cfg):
+    """Register with AgentiBridge for A2A discovery. Best-effort — never blocks startup."""
+    if not cfg.agentibridge.url or not cfg.agentibridge.registration_enabled:
+        return
+    try:
+        from agenticore.bridge_client import register_with_bridge, start_heartbeat_thread
+        from agenticore.profiles import load_profiles
+
+        profiles = load_profiles()
+        agent_id = register_with_bridge(cfg, profiles)
+        if agent_id and cfg.agentibridge.heartbeat_interval > 0:
+            start_heartbeat_thread(cfg, agent_id, profiles)
+    except Exception as e:
+        logger.warning("AgentiBridge registration failed: %s — A2A discovery unavailable", e)
 
 
 def _ensure_claude_onboarding():
@@ -1230,6 +1304,7 @@ def main():
 
     _auto_sync_agentihooks(cfg)
     _auto_sync_agentihub(cfg)
+    _auto_register_with_bridge(cfg)
 
     # Agent mode initialization
     if cfg.agent_mode.enabled:

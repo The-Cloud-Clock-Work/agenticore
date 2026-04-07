@@ -415,7 +415,7 @@ helm install agenticore \
 | `storage.size` | `100Gi` | PVC size |
 | `replicas` | `2` | Static replica count (ignored when KEDA enabled) |
 | `image.tag` | `latest` | Container image tag |
-| `config.defaultProfile` | `code` | Default execution profile |
+| `config.agentihooksProfile` | `coding` | Active profile (set by agentihooks) |
 | `config.maxParallelJobs` | `3` | Max Claude subprocesses per pod |
 | `keda.enabled` | `false` | Enable KEDA autoscaling |
 | `keda.minReplicas` | `1` | KEDA min replicas |
@@ -527,7 +527,7 @@ Full compose details: [Docker Compose](docs/deployment/docker-compose.md).
 | `ANTHROPIC_AUTH_TOKEN` | _(empty)_ | Anthropic API key passed to Claude |
 | `REDIS_URL` | _(empty)_ | Redis URL — omit for file-based fallback |
 | `GITHUB_TOKEN` | _(empty)_ | GitHub token for auto-PR |
-| `AGENTICORE_DEFAULT_PROFILE` | `code` | Profile when none specified |
+| `AGENTIHOOKS_PROFILE` | `coding` | Active profile (set by agentihooks) |
 | `AGENTICORE_CLAUDE_TIMEOUT` | `3600` | Max job runtime in seconds |
 | `AGENTICORE_AGENTIHOOKS_PATH` | _(empty)_ | Explicit path to agentihooks repo (skips cloning) |
 | `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Git URL to clone agentihooks from (supports `GITHUB_TOKEN`) |

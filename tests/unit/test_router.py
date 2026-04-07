@@ -34,20 +34,20 @@ class TestRoute:
         assert result == "review"
 
     def test_unknown_profile_falls_to_default(self):
-        """Unknown profile falls back to default."""
+        """Unknown profile falls back to agentihooks_profile."""
         result = route(profile="nonexistent")
-        assert result == get_config().claude.default_profile
+        assert result == get_config().agentihooks_profile
 
     def test_no_profile_with_repo_uses_default(self):
         result = route(repo_url="https://github.com/org/repo")
-        assert result == get_config().claude.default_profile
+        assert result == get_config().agentihooks_profile
 
-    def test_no_profile_no_repo_uses_code(self):
+    def test_no_profile_no_repo_uses_default(self):
         result = route()
-        assert result == get_config().claude.default_profile
+        assert result == get_config().agentihooks_profile
 
-    @patch.dict(os.environ, {"AGENTICORE_DEFAULT_PROFILE": "review"}, clear=False)
-    def test_custom_default_profile(self):
+    @patch.dict(os.environ, {"AGENTIHOOKS_PROFILE": "review"}, clear=False)
+    def test_custom_agentihooks_profile(self):
         reset_config()
         result = route(repo_url="https://github.com/org/repo")
         assert result == "review"

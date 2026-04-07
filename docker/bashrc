@@ -5,7 +5,12 @@ alias cc='claude --dangerously-skip-permissions'
 alias gs='git status'
 alias gp='git push'
 gc() { git add -A && git commit -m "$(claude -p 'Write a short conventional commit message for this diff. Output ONLY the message, nothing else.' <<< "$(git diff --cached --stat)")"; }
-anton() { cd /app/package && unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"; }
+anton() {
+  local pkg_dir
+  pkg_dir="$(curl -s http://localhost:8200/health 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("package_dir",""))' 2>/dev/null)"
+  pkg_dir="${pkg_dir:-/app/package}"
+  cd "$pkg_dir" && unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"
+}
 agentipull() {
   echo "Pulling agentihooks..."
   agenticore hooks sync && agentihooks init

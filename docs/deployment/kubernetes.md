@@ -157,7 +157,7 @@ helm install agenticore \
 | `replicas` | `2` | Static replica count (ignored when KEDA enabled) |
 | `image.tag` | `latest` | Agenticore image tag |
 | `image.repository` | `tccw/agenticore` | Container image |
-| `config.defaultProfile` | `code` | Default execution profile |
+| `config.agentihooksProfile` | `coding` | Active profile (set by agentihooks) |
 | `config.maxParallelJobs` | `3` | Max Claude subprocesses per pod |
 | `keda.enabled` | `false` | Enable KEDA autoscaling |
 | `keda.redisAddress` | `redis:6379` | Redis host:port for KEDA |

@@ -46,7 +46,6 @@ class ReposConfig:
 class ClaudeConfig:
     binary: str = "claude"
     timeout: int = 3600
-    default_profile: str = "coding"
     config_dir: str = ""  # DEPRECATED — kept for backward compat warning only
     default_mcp_file: str = ""  # AGENTICORE_DEFAULT_MCP_FILE — injected into every job
     claude_home_dir: str = ""  # CLAUDE_CODE_HOME_DIR — home dir root (e.g. /shared)
@@ -107,6 +106,15 @@ class AgentModeConfig:
 
 
 @dataclass
+class AgentiBridgeConfig:
+    url: str = ""  # AGENTIBRIDGE_URL — base URL; empty = feature disabled
+    api_key: str = ""  # AGENTIBRIDGE_API_KEY — auth token
+    heartbeat_interval: int = 60  # AGENTIBRIDGE_HEARTBEAT_INTERVAL — seconds
+    registration_enabled: bool = True  # AGENTIBRIDGE_REGISTRATION_ENABLED
+    agent_id: str = ""  # AGENTIBRIDGE_AGENT_ID — override derived agent ID
+
+
+@dataclass
 class LangfuseConfig:
     host: str = "https://cloud.langfuse.com"
     public_key: str = ""
@@ -123,14 +131,18 @@ class Config:
     github: GithubConfig = field(default_factory=GithubConfig)
     langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
     agent_mode: AgentModeConfig = field(default_factory=AgentModeConfig)
+    agentibridge: AgentiBridgeConfig = field(default_factory=AgentiBridgeConfig)
+    agentihooks_profile: str = "coding"  # AGENTIHOOKS_PROFILE — active profile for this agent
     agentihooks_path: str = ""
     agentihooks_url: str = ""
     agentihooks_bundle_url: str = ""
+    agentihooks_bundle_path: str = ""  # AGENTICORE_AGENTIHOOKS_BUNDLE_PATH — dev mode mount
     agentihooks_sync_interval: int = 300  # seconds between background re-syncs; 0 to disable
     agentihooks_bundle_sync_interval: int = 300
     agentihub_url: str = ""
     agentihub_path: str = ""
     agentihub_sync_interval: int = 300
+    dev_mode: bool = False  # AGENTICORE_DEV_MODE — skip cloning, use mounted paths
 
 
 def _default_repos_root() -> str:
@@ -235,7 +247,6 @@ def load_config(config_path: Optional[str] = None) -> Config:
     claude = ClaudeConfig(
         binary=_env("AGENTICORE_CLAUDE_BINARY", claude_raw.get("binary", "claude")),
         timeout=_env_int("AGENTICORE_CLAUDE_TIMEOUT", str(claude_raw.get("timeout", 3600))),
-        default_profile=_env("AGENTICORE_DEFAULT_PROFILE", claude_raw.get("default_profile", "coding")),
         config_dir=config_dir,
         default_mcp_file=_env("AGENTICORE_DEFAULT_MCP_FILE", claude_raw.get("default_mcp_file", "")),
         claude_home_dir=claude_home_dir,
@@ -311,9 +322,26 @@ def load_config(config_path: Optional[str] = None) -> Config:
         default_notifications=_env("AGENT_MODE_DEFAULT_NOTIFICATIONS", "status"),
     )
 
+    # AgentiBridge — env overrides
+    agentibridge_raw = raw.get("agentibridge", {})
+    agentibridge = AgentiBridgeConfig(
+        url=_env("AGENTIBRIDGE_URL", agentibridge_raw.get("url", "")),
+        api_key=_env("AGENTIBRIDGE_API_KEY", agentibridge_raw.get("api_key", "")),
+        heartbeat_interval=_env_int(
+            "AGENTIBRIDGE_HEARTBEAT_INTERVAL", str(agentibridge_raw.get("heartbeat_interval", 60))
+        ),
+        registration_enabled=_env_bool(
+            "AGENTIBRIDGE_REGISTRATION_ENABLED",
+            str(agentibridge_raw.get("registration_enabled", True)).lower(),
+        ),
+        agent_id=_env("AGENTIBRIDGE_AGENT_ID", agentibridge_raw.get("agent_id", "")),
+    )
+
+    agentihooks_profile = _env("AGENTIHOOKS_PROFILE", raw.get("agentihooks_profile", "coding"))
     agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
     agentihooks_url = _env("AGENTICORE_AGENTIHOOKS_URL", raw.get("agentihooks_url", ""))
     agentihooks_bundle_url = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", raw.get("agentihooks_bundle_url", ""))
+    agentihooks_bundle_path = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_PATH", raw.get("agentihooks_bundle_path", ""))
     agentihooks_sync_interval = _env_int(
         "AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL", str(raw.get("agentihooks_sync_interval", 300))
     )
@@ -325,6 +353,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
     agentihub_sync_interval = _env_int(
         "AGENTICORE_AGENTIHUB_SYNC_INTERVAL", str(raw.get("agentihub_sync_interval", 300))
     )
+    dev_mode = _env("AGENTICORE_DEV_MODE", raw.get("dev_mode", "")).lower() in ("true", "1", "yes")
 
     return Config(
         repos=repos,
@@ -335,14 +364,18 @@ def load_config(config_path: Optional[str] = None) -> Config:
         github=github,
         langfuse=langfuse,
         agent_mode=agent_mode,
+        agentibridge=agentibridge,
+        agentihooks_profile=agentihooks_profile,
         agentihooks_path=agentihooks_path,
         agentihooks_url=agentihooks_url,
         agentihooks_bundle_url=agentihooks_bundle_url,
+        agentihooks_bundle_path=agentihooks_bundle_path,
         agentihooks_sync_interval=agentihooks_sync_interval,
         agentihooks_bundle_sync_interval=agentihooks_bundle_sync_interval,
         agentihub_url=agentihub_url,
         agentihub_path=agentihub_path,
         agentihub_sync_interval=agentihub_sync_interval,
+        dev_mode=dev_mode,
     )
 
 

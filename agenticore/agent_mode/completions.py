@@ -183,15 +183,20 @@ def create_completion(
     return completion
 
 
-def enqueue_completion(completion: Completion) -> Optional[dict]:
+def enqueue_completion(completion: Completion, max_queue_depth: int = 0) -> Optional[dict]:
     """Push completion to Redis queue for worker processing.
 
     Returns None on success (queued to Redis).
     Returns the completion dict if Redis is unavailable (caller should
     handle inline execution).
+    Returns {"rejected": True, ...} if queue depth exceeds max_queue_depth.
     """
     r = _get_redis()
     if r is not None:
+        if max_queue_depth > 0:
+            queue_len = r.llen(_queue_key())
+            if queue_len >= max_queue_depth:
+                return {"rejected": True, "error": "at capacity", "queue_depth": queue_len}
         payload = json.dumps(completion.to_dict())
         r.lpush(_queue_key(), payload)
         return None

@@ -38,6 +38,17 @@ logger = logging.getLogger(__name__)
 # Set to prevent GC of fire-and-forget background tasks
 _background_tasks: set = set()
 
+# Concurrency gate — lazy-initialized from AGENTICORE_MAX_PARALLEL_JOBS
+_job_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _get_job_semaphore() -> asyncio.Semaphore:
+    global _job_semaphore
+    if _job_semaphore is None:
+        cfg = get_config()
+        _job_semaphore = asyncio.Semaphore(cfg.repos.max_parallel_jobs)
+    return _job_semaphore
+
 
 def _task_done_callback(task: asyncio.Task) -> None:
     """Log unhandled exceptions from fire-and-forget tasks, then discard."""
@@ -664,7 +675,7 @@ async def execute_plan_job(
         raise ValueError(f"Plan {plan_id} not ready (status: {plan.status})")
 
     cfg = get_config()
-    resolved_profile = profile or cfg.claude.default_profile
+    resolved_profile = profile or cfg.agentihooks_profile
     task = (
         f"Execute the following implementation plan:\n\n"
         f"---\n{plan.content}\n---\n\n"
@@ -711,6 +722,31 @@ async def submit_job(
         The created Job (may still be running if wait=False)
     """
     cfg = get_config()
+    sem = _get_job_semaphore()
+
+    # Reject if at capacity — no queuing, caller retries
+    if sem.locked() and sem._value == 0:
+        mode = "rejected"
+        job = create_job(
+            task=task,
+            profile=profile,
+            repo_url=repo_url,
+            base_ref=base_ref,
+            mode=mode,
+            session_id=session_id,
+            ttl_seconds=cfg.repos.job_ttl_seconds,
+            file_path=file_path,
+        )
+        from agenticore.jobs import update_job
+
+        update_job(
+            job.id,
+            status="rejected",
+            error=f"at capacity ({cfg.repos.max_parallel_jobs}/{cfg.repos.max_parallel_jobs} slots in use)",
+        )
+        job.status = "rejected"
+        logger.warning("Job %s rejected — at capacity (%d slots)", job.id, cfg.repos.max_parallel_jobs)
+        return job
 
     mode = "sync" if wait else "fire_and_forget"
     job = create_job(
@@ -724,12 +760,15 @@ async def submit_job(
         file_path=file_path,
     )
 
+    async def _gated_run():
+        async with sem:
+            return await run_job(job, create_repo=create_repo, private=private, worktree_id=worktree_id)
+
     if wait:
-        return await run_job(job, create_repo=create_repo, private=private, worktree_id=worktree_id)
+        async with sem:
+            return await run_job(job, create_repo=create_repo, private=private, worktree_id=worktree_id)
     else:
-        _background_task = asyncio.create_task(
-            run_job(job, create_repo=create_repo, private=private, worktree_id=worktree_id)
-        )
+        _background_task = asyncio.create_task(_gated_run())
         _background_tasks.add(_background_task)
         _background_task.add_done_callback(_task_done_callback)
         return job

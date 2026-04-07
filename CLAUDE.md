@@ -66,7 +66,43 @@ Request → Router → Clone repo → claude --worktree -p "task" → OTEL → P
 ## Profile System
 
 Profiles are directory-based packages with `profile.yml` + `.claude/` config.
-Profiles are discovered from `AGENTICORE_AGENTIHOOKS_PATH` (set to agentihooks repo) and `~/.agenticore/profiles/`.
+Profile search dirs are derived from `resolve_repo_paths()` in `hooks.py`:
+1. `{agentihooks}/profiles/` — base execution profiles (coding, admin, default)
+2. `{agentihooks-bundle}/profiles/` — operator/agent profiles (agenticore, colt, patch-mode)
+3. `~/.agenticore/profiles/` — user overrides
+
+Paths are deterministic from `AGENTICORE_SHARED_FS_ROOT` (prod) or explicit env vars (dev mode).
+
+**Dev Mode:** Set `AGENTICORE_DEV_MODE=true` + mount paths via `AGENTICORE_AGENTIHOOKS_PATH`, `AGENTICORE_AGENTIHOOKS_BUNDLE_PATH`, `AGENTICORE_AGENTIHUB_PATH`. Skips cloning and watchers.
+
+**Profile Ownership:** Profiles belong to agentihooks, not agenticore.
+`AGENTIHOOKS_PROFILE` → `cfg.agentihooks_profile`. Router/runner fall back to this when no profile specified.
+
+**Agent packages:** `_provision_from_agentihub()` points `package_dir` directly at `{agentihub}/agents/{name}/package/` — no copy to `/app/package/`.
+
+## Concurrency Gate
+
+`MAX_PARALLEL_JOBS` is enforced via `asyncio.Semaphore` in `runner.py`.
+When all slots are in use, new jobs are rejected immediately with `status=rejected`.
+REST endpoints return HTTP 503 with `retry=true`. The OpenAI-compat `/v1/chat/completions` endpoint also returns 503 at capacity.
+Agent mode queue (`completions.py`) checks queue depth before enqueue — rejects if `queue_depth >= max_queue_workers * 2`.
+No queuing — callers handle retry (distributed systems responsibility).
+Env var: `AGENTICORE_MAX_PARALLEL_JOBS` (default 3, set to 2 in dev Helm chart).
+
+## A2A Agent Discovery (AgentiBridge)
+
+Agenticore self-registers with AgentiBridge on boot for Agent-to-Agent discovery.
+
+**Module:** `agenticore/bridge_client.py`
+
+**Config vars (all optional):**
+- `AGENTIBRIDGE_URL` — base URL; empty = disabled
+- `AGENTIBRIDGE_API_KEY` — auth token
+- `AGENTIBRIDGE_HEARTBEAT_INTERVAL` — seconds between heartbeats (default 60)
+- `AGENTIBRIDGE_REGISTRATION_ENABLED` — kill switch (default true)
+- `AGENTIBRIDGE_AGENT_ID` — override derived agent ID (default: pod name)
+
+**Startup flow:** after agentihooks + agentihub sync, `_auto_register_with_bridge()` builds an agent card (id, capabilities from profiles + agent_mode, endpoint) and POSTs to `{AGENTIBRIDGE_URL}/agents/register`. A daemon thread heartbeats every 60s. If AgentiBridge restarts and loses registry, heartbeat detects `success: false` and auto-re-registers. All ops are best-effort — never blocks startup.
 
 ## Redis + File Fallback
 
