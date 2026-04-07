@@ -287,30 +287,11 @@ def _start_telegram_channel(package_dir: str, model: str) -> None:
             (channel_dir / "access.json").write_text(json.dumps(access, indent=2))
             _log.warning("Telegram: no TELEGRAM_OWNER_ID — using pairing mode")
 
-    # Start channel from package dir — must be a git repo to bypass trust prompt
+    # Start channel from package dir (inside agentihub git repo — bypasses trust prompt)
     pkg = Path(package_dir)
     if not pkg.exists():
         _log.warning("Telegram: package dir %s not found — skipping channel start", pkg)
         return
-
-    # Ensure package dir is a git repo (trust prompt requires it for interactive/channel mode)
-    if not (pkg / ".git").exists():
-        subprocess.run(
-            ["git", "init"],
-            cwd=str(pkg),
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "add", "-A"],
-            cwd=str(pkg),
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "-c", "user.email=agent@agenticore", "-c", "user.name=agenticore",
-             "commit", "-m", "init", "--allow-empty"],
-            cwd=str(pkg),
-            capture_output=True,
-        )
 
     cmd = [
         "script", "-qfec",
