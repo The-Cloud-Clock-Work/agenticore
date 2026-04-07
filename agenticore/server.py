@@ -13,6 +13,7 @@ Tools:
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -1255,17 +1256,55 @@ def _auto_register_with_bridge(cfg):
 
 
 def _ensure_claude_onboarding():
-    """Ensure .claude.json has hasCompletedOnboarding so interactive mode skips login prompt."""
+    """Ensure .claude.json has required flags for non-interactive operation.
+
+    Sets hasCompletedOnboarding (skips login prompt), hasTrustDialogAccepted
+    at root level, and project-level trust for the agent package directory
+    (required for interactive/channel modes like Telegram).
+    """
     claude_json = Path.home() / ".claude.json"
     try:
         data = json.loads(claude_json.read_text()) if claude_json.exists() else {}
+        dirty = False
         if not data.get("hasCompletedOnboarding"):
             data["hasCompletedOnboarding"] = True
             data["installMethod"] = "native"
+            dirty = True
+        if not data.get("hasTrustDialogAccepted"):
+            data["hasTrustDialogAccepted"] = True
+            dirty = True
+
+        # Project-level trust for agent package dir (channel mode requires this)
+        agent_name = os.environ.get("AGENTIHUB_AGENT", "").strip()
+        if agent_name:
+            home = Path.home()
+            pkg_path = str(home / "agentihub" / "agents" / agent_name / "package")
+            projects = data.setdefault("projects", {})
+            if pkg_path not in projects or not projects[pkg_path].get("hasTrustDialogAccepted"):
+                projects[pkg_path] = {"hasTrustDialogAccepted": True}
+                dirty = True
+
+        if dirty:
             claude_json.write_text(json.dumps(data, indent=2))
-            logger.info("claude onboarding: set hasCompletedOnboarding=true")
+            logger.info("claude onboarding: onboarding=%s trust=%s agent=%s",
+                        data["hasCompletedOnboarding"], data["hasTrustDialogAccepted"],
+                        agent_name or "none")
     except Exception as e:
         logger.warning("claude onboarding patch failed: %s — non-fatal", e)
+
+    # Migrate baked-in plugins/marketplace from image to runtime HOME
+    try:
+        baked = Path("/home/agenticore/.claude")
+        runtime = Path.home() / ".claude"
+        if baked.exists() and baked.resolve() != runtime.resolve():
+            for subdir in ("plugins", "marketplace"):
+                src = baked / subdir
+                dst = runtime / subdir
+                if src.exists() and not dst.exists():
+                    shutil.copytree(str(src), str(dst))
+                    logger.info("migrated baked %s → %s", src, dst)
+    except Exception as e:
+        logger.warning("plugin migration failed: %s — non-fatal", e)
 
 
 def main():

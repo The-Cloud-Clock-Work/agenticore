@@ -54,11 +54,19 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm -rf /tmp/awscliv2.zip /tmp/aws && \
     aws --version
 
+# Bun (required by Claude Code channel plugins: Telegram, Discord, etc.)
+RUN curl -fsSL https://bun.sh/install | bash && \
+    cp --dereference /root/.bun/bin/bun /usr/local/bin/bun
+
 # Claude Code — native binary install (no Node.js required)
 RUN curl -fsSL https://claude.ai/install.sh | bash && \
     cp /root/.local/bin/claude /usr/local/bin/claude && \
     rm -rf /root/.local/bin/claude && \
     claude --version
+
+# Telegram channel plugin — baked in so agents don't need runtime install
+RUN claude plugin marketplace add anthropics/claude-plugins-official && \
+    claude plugin install telegram@claude-plugins-official
 
 # Python venv with all dependencies
 COPY --from=python-builder /opt/venv /opt/venv
@@ -81,6 +89,10 @@ RUN useradd -m -s /bin/bash agenticore && \
              /app/evaluation \
              /shared && \
     chown -R agenticore:agenticore /app /home/agenticore /opt/venv /opt/agenticore /shared
+
+# Copy baked-in Claude config (plugins, marketplace) to agenticore user
+RUN cp -r /root/.claude /home/agenticore/.claude && \
+    chown -R agenticore:agenticore /home/agenticore/.claude
 
 # Pod-specific shell functions
 COPY docker/bashrc /opt/agenticore/bashrc
