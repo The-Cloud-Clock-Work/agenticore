@@ -1313,6 +1313,15 @@ def _ensure_claude_onboarding():
                     _sp.run(["bun", "install", "--no-summary"], cwd=str(pkg_dir),
                             capture_output=True, timeout=60)
                     logger.info("installed plugin deps in %s", pkg_dir)
+        # Ensure Telegram plugin is enabled (install alone doesn't enable it)
+        import subprocess as _sp
+        result = _sp.run(
+            ["claude", "plugin", "enable", "telegram@claude-plugins-official"],
+            capture_output=True, text=True, timeout=15,
+            env={**os.environ, "HOME": str(Path.home())},
+        )
+        if result.returncode == 0:
+            logger.info("telegram plugin enabled")
     except Exception as e:
         logger.warning("plugin migration failed: %s — non-fatal", e)
 
