@@ -64,6 +64,10 @@ RUN curl -fsSL https://claude.ai/install.sh | bash && \
     rm -rf /root/.local/bin/claude && \
     claude --version
 
+# Telegram channel plugin — baked in so agents don't need runtime install
+RUN claude plugin marketplace add anthropics/claude-plugins-official && \
+    claude plugin install telegram@claude-plugins-official
+
 # Python venv with all dependencies
 COPY --from=python-builder /opt/venv /opt/venv
 ENV PATH="/home/agenticore/.local/bin:/opt/venv/bin:$PATH"
