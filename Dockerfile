@@ -54,6 +54,10 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm -rf /tmp/awscliv2.zip /tmp/aws && \
     aws --version
 
+# Bun (required by Claude Code channel plugins: Telegram, Discord, etc.)
+RUN curl -fsSL https://bun.sh/install | bash && \
+    cp --dereference /root/.bun/bin/bun /usr/local/bin/bun
+
 # Claude Code — native binary install (no Node.js required)
 RUN curl -fsSL https://claude.ai/install.sh | bash && \
     cp /root/.local/bin/claude /usr/local/bin/claude && \
