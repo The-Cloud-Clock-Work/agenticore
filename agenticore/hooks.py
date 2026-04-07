@@ -28,6 +28,20 @@ from agenticore.repos import _run_git, _with_redis_lock, resolve_github_token
 logger = logging.getLogger(__name__)
 
 
+def _scoped_lock_key(base_key: str) -> str:
+    """Return a pod-scoped Redis lock key when storage is isolated (PVC).
+
+    Pods on shared NFS need global lock keys for coordination.
+    Pods on isolated PVC (local-path) get pod-specific keys to avoid contention.
+    Controlled by AGENTICORE_SHARED_LOCKS env var (default: true for backwards compat).
+    """
+    shared = os.environ.get("AGENTICORE_SHARED_LOCKS", "true").lower() in ("true", "1", "yes")
+    if shared:
+        return base_key
+    hostname = os.environ.get("HOSTNAME", "unknown")
+    return f"{base_key}:{hostname}"
+
+
 def _get_head_ref(dest: Path) -> str:
     """Return the short HEAD commit ref for a git repo, or '?' on failure."""
     try:
@@ -89,7 +103,7 @@ def _clone_or_fetch(url: str, dest: Path) -> None:
                 _run_git(["git", "clone", url, str(dest)], extra_env=extra_env)
 
     if get_config().repos.shared_fs_root:
-        _with_redis_lock("agenticore:lock:agentihooks", _do)
+        _with_redis_lock(_scoped_lock_key("agenticore:lock:agentihooks"), _do)
     else:
         with open(lock_path, "w") as lf:
             fcntl.flock(lf, fcntl.LOCK_EX)
@@ -211,7 +225,7 @@ def _clone_or_fetch_agentihub(url: str, dest: Path) -> None:
                 _run_git(["git", "clone", url, str(dest)], extra_env=extra_env)
 
     if get_config().repos.shared_fs_root:
-        _with_redis_lock("agenticore:lock:agentihub", _do)
+        _with_redis_lock(_scoped_lock_key("agenticore:lock:agentihub"), _do)
     else:
         with open(lock_path, "w") as lf:
             fcntl.flock(lf, fcntl.LOCK_EX)
@@ -269,7 +283,7 @@ def _clone_or_fetch_bundle(url: str, dest: Path) -> None:
                 _run_git(["git", "clone", url, str(dest)], extra_env=extra_env)
 
     if get_config().repos.shared_fs_root:
-        _with_redis_lock("agenticore:lock:agentihooks-bundle", _do)
+        _with_redis_lock(_scoped_lock_key("agenticore:lock:agentihooks-bundle"), _do)
     else:
         with open(lock_path, "w") as lf:
             fcntl.flock(lf, fcntl.LOCK_EX)
