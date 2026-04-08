@@ -123,6 +123,19 @@ Before every `claude -p` call in agent_mode, `render_mcp_whitelist()` runs `agen
 - `agenticore/agent_mode/agent.py` → calls `render_mcp_whitelist(cwd)` before every completions request
 - `agentihub/agents/<name>/package/.agentihooks.json` — source of truth per agent
 
+**Per-call subtraction:** The completions API accepts `disable_mcp_servers` (list) to narrow the whitelist for a single call:
+```json
+POST /v1/chat/completions
+{ "disable_mcp_servers": ["tools-notifications", "tools-notifications-dev"], ... }
+```
+This temporarily removes those servers from `.agentihooks.json`, renders, then restores the file.
+
 **Scope:** Agent mode only (completions API). Runner/job dispatch uses worktrees without `.agentihooks.json`.
 
-**Smoke test:** `tests/smoke/test_mcp_whitelist.sh` — validates enabled tools work and disabled tools are blocked.
+**Smoke test:** `tests/smoke/test_mcp_whitelist.sh [agent] [--live]`
+```
+Phase 1 (instant):  data validation — config matches, enabled/disabled correct
+Phase 2 (--live):   agent self-reports visible servers
+Phase 3 (--live):   per-call subtraction — BEFORE/AFTER ~/.claude.json data proof
+Result: 24/24 ALL PASS on anton-agent (2026-04-08)
+```
