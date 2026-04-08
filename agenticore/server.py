@@ -650,7 +650,8 @@ def _build_rest_app():
                 try:
                     install_path = sync_agentihooks()
                     bundle_path = _bundle_dir() if cfg.agentihooks_bundle_url else None
-                    run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
+                    pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
+                    run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir)
                     results["agentihooks"] = "ok"
                 except Exception as e:
                     results["agentihooks"] = f"error: {e}"
@@ -1183,7 +1184,8 @@ def _auto_sync_agentihooks(cfg):
             hooks_path = sync_agentihooks()
             bundle_path = sync_bundle()
             if hooks_path or bundle_path:
-                run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path)
+                pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
+                run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path, repo_dir=pkg_dir)
             logger.info("dev mode: agentihooks init complete (no watchers)")
         except Exception as e:
             logger.warning("agentihooks init failed (dev mode): %s", e)
@@ -1202,7 +1204,8 @@ def _auto_sync_agentihooks(cfg):
 
         install_path = sync_agentihooks()
         bundle_path = sync_bundle()
-        run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
+        pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
+        run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir)
         if install_path and cfg.agentihooks_sync_interval > 0:
             start_sync_watcher(cfg.agentihooks_url, install_path, cfg.agentihooks_sync_interval)
         if bundle_path and cfg.agentihooks_bundle_sync_interval > 0:

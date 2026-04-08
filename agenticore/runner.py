@@ -435,6 +435,13 @@ async def run_job(
     if failed:
         return failed
 
+    # Pre-call: render MCP whitelist from .agentihooks.json
+    try:
+        from agenticore.hooks import render_mcp_whitelist
+        render_mcp_whitelist(cwd)
+    except Exception as e:
+        logger.warning("Pre-call MCP render failed (non-fatal): %s", e)
+
     cmd, env = _build_job_cmd(cfg, profile, job, base_ref, cwd)
 
     try:
