@@ -146,37 +146,73 @@ else
 fi
 
 set -e  # re-enable
-# --- Phase 2: Live API calls (optional) ---
+# --- Phase 2: Live agent call ---
+# One API call: ask the agent what tools it sees. Compare against whitelist.
 if [[ "$LIVE" == "--live" ]]; then
     echo ""
-    printf "%-40s %-8s %-8s %-30s\n" "── LIVE CALLS ──" "" "" ""
+    echo "── LIVE: Asking agent what MCP tools it sees ──"
+    echo ""
 
-    IFS='|' read -r allow_prompt block_prompt <<< "${LIVE_TESTS[$TARGET]}"
+    LIVE_PROMPT="List every MCP tool server name you can access right now. Output ONLY server names, one per line, no bullets, no explanation, no prefix. Example format: tools-agent"
+    payload="$(PROMPT="$LIVE_PROMPT" python3 -c "import json,os; print(json.dumps({'model':'agent','messages':[{'role':'user','content':os.environ['PROMPT']}],'max_tokens':300}))")"
 
-    # ALLOW test
-    printf "%-40s %-8s " "Live: ALLOW tool call" "ALLOW"
-    payload="$(PROMPT="$allow_prompt" python3 -c "import json,os; print(json.dumps({'model':'agent','messages':[{'role':'user','content':os.environ['PROMPT']}],'max_tokens':200}))")"
-    raw=$(echo "$payload" | KUBECONFIG="$KUBECONFIG" timeout 90 "$KUBECTL" exec -i -n "$NAMESPACE" "${TARGET}-0" -- bash -c 'curl -s --max-time 60 -X POST http://localhost:8200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer ${AGENTICORE_API_KEYS%%,*}" -d @-' 2>/dev/null || echo '{}')
-    content=$(echo "$raw" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('choices',[{}])[0].get('message',{}).get('content','EMPTY')[:80])" 2>/dev/null || echo "PARSE_ERROR")
-    if echo "$content" | grep -qi "TOOL_NOT_FOUND\|EMPTY\|PARSE_ERROR"; then
-        printf "\033[31m%-8s\033[0m %-30s\n" "FAIL" "${content:0:28}"
+    echo "  Calling ${TARGET}-0 completions API..."
+    raw=$(echo "$payload" | KUBECONFIG="$KUBECONFIG" timeout 180 "$KUBECTL" exec -i -n "$NAMESPACE" "${TARGET}-0" -- bash -c 'curl -s --max-time 120 -X POST http://localhost:8200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer ${AGENTICORE_API_KEYS%%,*}" -d @-' 2>/dev/null || echo '{}')
+
+    AGENT_RESPONSE=$(echo "$raw" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    content = d.get('choices',[{}])[0].get('message',{}).get('content','')
+    print(content)
+except:
+    print('PARSE_ERROR')
+" 2>/dev/null || echo "PARSE_ERROR")
+
+    if [[ "$AGENT_RESPONSE" == "PARSE_ERROR" || -z "$AGENT_RESPONSE" ]]; then
+        echo "  ERROR: No response from agent (timeout or parse failure)"
         ((FAIL++))
     else
-        printf "\033[32m%-8s\033[0m %-30s\n" "PASS" "${content:0:28}"
-        ((PASS++))
-    fi
+        # Extract server names from response
+        AGENT_SEES=$(echo "$AGENT_RESPONSE" | python3 -c "
+import sys, re
+lines = sys.stdin.read()
+# Extract anything that looks like tools-* or plugin:* or hooks-*
+servers = re.findall(r'(tools-[\w-]+|plugin:[\w:]+|hooks-[\w]+|home-bridge)', lines)
+for s in sorted(set(servers)):
+    print(s)
+" 2>/dev/null)
 
-    # BLOCK test
-    printf "%-40s %-8s " "Live: BLOCK tool call" "BLOCK"
-    payload="$(PROMPT="$block_prompt" python3 -c "import json,os; print(json.dumps({'model':'agent','messages':[{'role':'user','content':os.environ['PROMPT']}],'max_tokens':200}))")"
-    raw=$(echo "$payload" | KUBECONFIG="$KUBECONFIG" timeout 90 "$KUBECTL" exec -i -n "$NAMESPACE" "${TARGET}-0" -- bash -c 'curl -s --max-time 60 -X POST http://localhost:8200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer ${AGENTICORE_API_KEYS%%,*}" -d @-' 2>/dev/null || echo '{}')
-    content=$(echo "$raw" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('choices',[{}])[0].get('message',{}).get('content','EMPTY')[:80])" 2>/dev/null || echo "PARSE_ERROR")
-    if echo "$content" | grep -qi "TOOL_NOT_FOUND"; then
-        printf "\033[32m%-8s\033[0m %-30s\n" "PASS" "TOOL_NOT_FOUND ✓"
-        ((PASS++))
-    else
-        printf "\033[31m%-8s\033[0m %-30s\n" "FAIL" "${content:0:28}"
-        ((FAIL++))
+        echo "  Agent reports visible servers:"
+        echo "$AGENT_SEES" | sed 's/^/    /'
+        echo ""
+
+        printf "%-40s %-8s %-8s %-30s\n" "── LIVE VERIFICATION ──" "EXPECT" "RESULT" "DETAIL"
+        printf "%-40s %-8s %-8s %-30s\n" "────────────────────────────────────────" "────────" "────────" "──────────────────────────────"
+
+        set +e
+        # Check enabled servers ARE visible to agent
+        for server in ${EXPECT_ENABLED[$TARGET]}; do
+            if echo " $AGENT_SEES " | grep -q "$server"; then
+                printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" "Live: $server" "VISIBLE" "PASS" "agent sees it ✓"
+                ((PASS++))
+            else
+                printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" "Live: $server" "VISIBLE" "FAIL" "agent does NOT see it"
+                ((FAIL++))
+            fi
+        done
+
+        # Check blocked servers are NOT visible to agent
+        for server in ${EXPECT_BLOCKED[$TARGET]}; do
+            if echo " $AGENT_SEES " | grep -q "$server"; then
+                printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" "Live: $server" "HIDDEN" "FAIL" "agent SEES it (should be hidden)"
+                ((FAIL++))
+            else
+                printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" "Live: $server" "HIDDEN" "PASS" "agent cannot see it ✓"
+                ((PASS++))
+            fi
+        done
+        set -e
     fi
 fi
 
