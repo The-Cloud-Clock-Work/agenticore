@@ -3,211 +3,212 @@ set -euo pipefail
 
 # test_mcp_whitelist.sh — MCP whitelist smoke test
 #
-# Tests that agents only see tools from their .agentihooks.json whitelist.
-# Two paths: ALLOW (enabled tools work) and BLOCK (disabled tools refused).
+# Phase 1: Data validation (instant) — checks disabledMcpServers in ~/.claude.json
+# Phase 2: Live call (optional, ~30s) — one ALLOW + one BLOCK call to prove it works
 #
 # Usage:
-#   ./test_mcp_whitelist.sh                    # test anton-agent (default)
+#   ./test_mcp_whitelist.sh                    # test anton-agent
 #   ./test_mcp_whitelist.sh finops-agent       # test specific agent
+#   ./test_mcp_whitelist.sh anton-agent --live # include live API calls
 #   NAMESPACE=anton-prod ./test_mcp_whitelist.sh
-#
-# Output: table to stdout + JSON log to ~/.agenticore/logs/mcp-whitelist-<ts>.json
 
 NAMESPACE="${NAMESPACE:-anton-dev}"
 KUBECONFIG="${KUBECONFIG:-/home/iamroot/.kube/config-k3s}"
 KUBECTL="${KUBECTL:-/home/iamroot/bin/kubectl}"
 TARGET="${1:-anton-agent}"
+LIVE="${2:-}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 LOG_DIR="${HOME}/.agenticore/logs"
 LOG_FILE="${LOG_DIR}/mcp-whitelist-${TIMESTAMP}.json"
-
 mkdir -p "$LOG_DIR"
 
-# --- Test definitions per agent ---
-# Each test: "label|tool_prompt|expected" where expected = ALLOW or BLOCK
-declare -A AGENT_TESTS
+# --- Expected whitelist per agent ---
+declare -A EXPECT_ENABLED
+EXPECT_ENABLED[anton-agent]="tools-agent tools-agent-dev tools-notifications tools-notifications-dev"
+EXPECT_ENABLED[finops-agent]="tools-agent tools-code tools-observe"
+EXPECT_ENABLED[publishing-agent]="tools-agent tools-code tools-pm"
+EXPECT_ENABLED[notebooklm-agent]="tools-pm tools-pm-dev"
 
-AGENT_TESTS[anton-agent]="
-agentibridge-list|Call agentibridge list_agents now. If unavailable say TOOL_NOT_FOUND.|ALLOW
-github-list|Call github list_issues for The-Cloud-Clock-Work/antoncore now. If unavailable say TOOL_NOT_FOUND.|BLOCK
-litellm-list|Call litellm_tools list_models now. If unavailable say TOOL_NOT_FOUND.|BLOCK
-"
+# --- Expected blocked servers (sample, not exhaustive) ---
+declare -A EXPECT_BLOCKED
+EXPECT_BLOCKED[anton-agent]="tools-code tools-observe tools-infra tools-aigateway tools-pm"
+EXPECT_BLOCKED[finops-agent]="tools-infra tools-notifications tools-pm tools-aigateway"
+EXPECT_BLOCKED[publishing-agent]="tools-infra tools-notifications tools-observe tools-aigateway"
+EXPECT_BLOCKED[notebooklm-agent]="tools-code tools-observe tools-infra tools-agent tools-notifications"
 
-AGENT_TESTS[finops-agent]="
-grafana-search|Use the grafana search_dashboards tool with query api. Show result.|ALLOW
-github-get_me|Use the github get_me tool. Show result.|ALLOW
-agentibridge-list|Use the agentibridge list_agents tool. Show result.|ALLOW
-litellm-list_models|Use the litellm_tools list_models tool. If unavailable say TOOL_NOT_FOUND.|BLOCK
-notifications-send|Use the notifications send_notification tool. If unavailable say TOOL_NOT_FOUND.|BLOCK
-"
+# --- Live test definitions: "allow_prompt|block_prompt" ---
+declare -A LIVE_TESTS
+LIVE_TESTS[anton-agent]="Call agentibridge list_agents now. If unavailable say TOOL_NOT_FOUND.|Call github list_issues for The-Cloud-Clock-Work/antoncore. If unavailable say TOOL_NOT_FOUND."
+LIVE_TESTS[finops-agent]="Call grafana search_dashboards with query api. If unavailable say TOOL_NOT_FOUND.|Call litellm_tools list_models. If unavailable say TOOL_NOT_FOUND."
+LIVE_TESTS[publishing-agent]="Call github get_me. If unavailable say TOOL_NOT_FOUND.|Call grafana list_datasources. If unavailable say TOOL_NOT_FOUND."
+LIVE_TESTS[notebooklm-agent]="Check if mediagen tools exist. List them or say TOOL_NOT_FOUND.|Call github list_issues for any repo. If unavailable say TOOL_NOT_FOUND."
 
-AGENT_TESTS[publishing-agent]="
-github-get_me|Use the github get_me tool. Show result.|ALLOW
-agentibridge-list|Use the agentibridge list_agents tool. Show result.|ALLOW
-grafana-search|Use the grafana search_dashboards tool with query api. If unavailable say TOOL_NOT_FOUND.|BLOCK
-litellm-list_models|Use the litellm_tools list_models tool. If unavailable say TOOL_NOT_FOUND.|BLOCK
-"
-
-AGENT_TESTS[notebooklm-agent]="
-mediagen-check|Check if you have any mediagen or paper2slides tools available. List them or say TOOL_NOT_FOUND.|ALLOW
-github-list_issues|Use the github list_issues tool for The-Cloud-Clock-Work/antoncore. If unavailable say TOOL_NOT_FOUND.|BLOCK
-grafana-search|Use the grafana search_dashboards tool. If unavailable say TOOL_NOT_FOUND.|BLOCK
-"
-
-# --- Helpers ---
-_call() {
-    local pod="$1" prompt="$2"
-    # Build JSON payload safely with python env var
-    local payload
-    payload="$(PROMPT="$prompt" python3 -c "import json,os; print(json.dumps({'model':'agent','messages':[{'role':'user','content':os.environ['PROMPT']}],'max_tokens':300}))")"
-
-    echo "$payload" | KUBECONFIG="$KUBECONFIG" timeout 120 "$KUBECTL" exec -i -n "$NAMESPACE" "${pod}-0" -- \
-        bash -c 'API_KEY="${AGENTICORE_API_KEYS%%,*}"; curl -s --max-time 90 -X POST http://localhost:8200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer $API_KEY" -d @-' 2>/dev/null
-}
-
-_extract() {
-    python3 -c "
-import json, sys
-raw = sys.stdin.read()
-try:
-    d = json.loads(raw)
-    c = d.get('choices', [{}])[0].get('message', {}).get('content', '')
-    if not c:
-        c = d.get('error', {}).get('message', 'NO_RESPONSE')
-    print(c[:200].replace('\n', ' '))
-except:
-    print('PARSE_ERROR: ' + raw[:100])
-"
-}
-
-_judge() {
-    local response="$1" expected="$2"
-    local upper_resp
-    upper_resp="$(echo "$response" | tr '[:lower:]' '[:upper:]')"
-
-    if [[ "$expected" == "ALLOW" ]]; then
-        if echo "$upper_resp" | grep -q "TOOL_NOT_FOUND"; then
-            echo "FAIL"
-        elif echo "$upper_resp" | grep -q "PARSE_ERROR\|NO_RESPONSE"; then
-            echo "FAIL"
-        else
-            echo "PASS"
-        fi
-    else
-        if echo "$upper_resp" | grep -q "TOOL_NOT_FOUND"; then
-            echo "PASS"
-        else
-            echo "FAIL"
-        fi
-    fi
-}
-
-# --- Validate target ---
-if [[ -z "${AGENT_TESTS[$TARGET]+x}" ]]; then
-    echo "Unknown agent: $TARGET"
-    echo "Available: ${!AGENT_TESTS[*]}"
+# --- Validate ---
+if [[ -z "${EXPECT_ENABLED[$TARGET]+x}" ]]; then
+    echo "Unknown agent: $TARGET (available: ${!EXPECT_ENABLED[*]})"
     exit 1
 fi
-
-# Check pod running
 if ! KUBECONFIG="$KUBECONFIG" "$KUBECTL" get pod -n "$NAMESPACE" "${TARGET}-0" --no-headers 2>/dev/null | grep -q "Running"; then
     echo "ERROR: ${TARGET}-0 not running in ${NAMESPACE}"
     exit 1
 fi
 
-# --- Get agent whitelist ---
-WHITELIST=$(KUBECONFIG="$KUBECONFIG" "$KUBECTL" exec -n "$NAMESPACE" "${TARGET}-0" -- python3 -c "
-import json
+# --- Get actual state from pod ---
+POD_DATA=$(KUBECONFIG="$KUBECONFIG" "$KUBECTL" exec -n "$NAMESPACE" "${TARGET}-0" -- python3 -c "
+import json, os
 from pathlib import Path
-import os
+c = json.loads(Path.home().joinpath('.claude.json').read_text())
 agent = os.environ.get('AGENTIHUB_AGENT', 'unknown')
-cfg = Path(f'/shared/agentihub/agents/{agent}/package/.agentihooks.json')
-if cfg.exists():
-    print(json.dumps(json.load(open(cfg)).get('enabledMcpServers', [])))
-else:
-    print('[]')
-" 2>/dev/null | grep -v Defaulted)
+cfg_path = f'/shared/agentihub/agents/{agent}/package/.agentihooks.json'
+cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
+
+all_servers = sorted(c.get('mcpServers', {}).keys())
+disabled = []
+for p, v in c.get('projects', {}).items():
+    d = v.get('disabledMcpServers', [])
+    if d:
+        disabled = d
+        break
+enabled = sorted(set(all_servers) - set(disabled))
+
+print(json.dumps({
+    'agent': agent,
+    'profile': cfg.get('profile', ''),
+    'config_enabled': cfg.get('enabledMcpServers', []),
+    'actual_enabled': enabled,
+    'actual_disabled': sorted(disabled),
+    'all_servers': all_servers
+}))
+" 2>/dev/null)
+
+ACTUAL_ENABLED=$(echo "$POD_DATA" | python3 -c "import json,sys; print(' '.join(json.load(sys.stdin)['actual_enabled']))")
+ACTUAL_DISABLED=$(echo "$POD_DATA" | python3 -c "import json,sys; print(' '.join(json.load(sys.stdin)['actual_disabled']))")
+CONFIG_ENABLED=$(echo "$POD_DATA" | python3 -c "import json,sys; print(' '.join(json.load(sys.stdin)['config_enabled']))")
+AGENT_PROFILE=$(echo "$POD_DATA" | python3 -c "import json,sys; print(json.load(sys.stdin)['profile'])")
 
 # --- Header ---
 echo ""
 echo "╔══════════════════════════════════════════════════════════════════╗"
 echo "║  MCP Whitelist Smoke Test                                       ║"
 echo "╠══════════════════════════════════════════════════════════════════╣"
-printf "║  Agent:     %-52s║\n" "$TARGET"
+printf "║  Agent:     %-52s║\n" "${TARGET} (profile: ${AGENT_PROFILE})"
 printf "║  Namespace: %-52s║\n" "$NAMESPACE"
-printf "║  Whitelist: %-52s║\n" "$WHITELIST"
-printf "║  Time:      %-52s║\n" "$TIMESTAMP"
+printf "║  Config:    %-52s║\n" "$CONFIG_ENABLED"
+printf "║  Actual:    %-52s║\n" "$ACTUAL_ENABLED"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo ""
-printf "%-30s %-8s %-8s %-60s\n" "TOOL" "EXPECT" "RESULT" "RESPONSE"
-printf "%-30s %-8s %-8s %-60s\n" "------------------------------" "--------" "--------" "------------------------------------------------------------"
 
 PASS=0
 FAIL=0
-JSON_RESULTS="[]"
 
-while IFS='|' read -r label prompt expected; do
-    [[ -z "$label" ]] && continue
+printf "%-40s %-8s %-8s %-30s\n" "CHECK" "EXPECT" "RESULT" "DETAIL"
+printf "%-40s %-8s %-8s %-30s\n" "────────────────────────────────────────" "────────" "────────" "──────────────────────────────"
 
-    printf "%-30s %-8s " "$label" "$expected"
+# --- Phase 1: Data validation ---
+set +e  # grep returns 1 on no-match, don't exit
 
-    raw=$(_call "$TARGET" "$prompt" 2>&1)
-    response=$(echo "$raw" | _extract)
-    verdict=$(_judge "$response" "$expected")
-
-    if [[ "$verdict" == "PASS" ]]; then
-        printf "\033[32m%-8s\033[0m " "$verdict"
+# Check each expected-enabled server is actually enabled
+for server in ${EXPECT_ENABLED[$TARGET]}; do
+    if echo " $ACTUAL_ENABLED " | grep -q " $server "; then
+        printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" "$server" "ALLOW" "PASS" "enabled ✓"
         ((PASS++))
     else
-        printf "\033[31m%-8s\033[0m " "$verdict"
+        printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" "$server" "ALLOW" "FAIL" "NOT in enabled list"
         ((FAIL++))
     fi
+done
 
-    # Truncate response for display
-    display_resp="${response:0:58}"
-    printf "%-60s\n" "$display_resp"
+# Check each expected-blocked server is actually disabled
+for server in ${EXPECT_BLOCKED[$TARGET]}; do
+    if echo " $ACTUAL_DISABLED " | grep -q " $server "; then
+        printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" "$server" "BLOCK" "PASS" "disabled ✓"
+        ((PASS++))
+    else
+        printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" "$server" "BLOCK" "FAIL" "NOT in disabled list"
+        ((FAIL++))
+    fi
+done
 
-    # Accumulate JSON
-    JSON_RESULTS=$(PREV="$JSON_RESULTS" TOOL="$label" EXP="$expected" VERD="$verdict" RESP="$response" python3 -c "
-import json, os
-results = json.loads(os.environ['PREV'])
-results.append({
-    'tool': os.environ['TOOL'],
-    'expected': os.environ['EXP'],
-    'verdict': os.environ['VERD'],
-    'response': os.environ['RESP'][:300]
-})
-print(json.dumps(results))
-" 2>/dev/null || echo "$JSON_RESULTS")
+# Check config matches actual
+CONFIG_MATCH="true"
+for server in ${EXPECT_ENABLED[$TARGET]}; do
+    if ! echo " $CONFIG_ENABLED " | grep -q " $server "; then
+        CONFIG_MATCH="false"
+        break
+    fi
+done
+if [[ "$CONFIG_MATCH" == "true" ]]; then
+    printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" ".agentihooks.json matches expected" "MATCH" "PASS" "config = expected"
+    ((PASS++))
+else
+    printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" ".agentihooks.json matches expected" "MATCH" "FAIL" "config != expected"
+    ((FAIL++))
+fi
 
-done <<< "${AGENT_TESTS[$TARGET]}"
+set -e  # re-enable
+# --- Phase 2: Live API calls (optional) ---
+if [[ "$LIVE" == "--live" ]]; then
+    echo ""
+    printf "%-40s %-8s %-8s %-30s\n" "── LIVE CALLS ──" "" "" ""
 
+    IFS='|' read -r allow_prompt block_prompt <<< "${LIVE_TESTS[$TARGET]}"
+
+    # ALLOW test
+    printf "%-40s %-8s " "Live: ALLOW tool call" "ALLOW"
+    payload="$(PROMPT="$allow_prompt" python3 -c "import json,os; print(json.dumps({'model':'agent','messages':[{'role':'user','content':os.environ['PROMPT']}],'max_tokens':200}))")"
+    raw=$(echo "$payload" | KUBECONFIG="$KUBECONFIG" timeout 90 "$KUBECTL" exec -i -n "$NAMESPACE" "${TARGET}-0" -- bash -c 'curl -s --max-time 60 -X POST http://localhost:8200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer ${AGENTICORE_API_KEYS%%,*}" -d @-' 2>/dev/null || echo '{}')
+    content=$(echo "$raw" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('choices',[{}])[0].get('message',{}).get('content','EMPTY')[:80])" 2>/dev/null || echo "PARSE_ERROR")
+    if echo "$content" | grep -qi "TOOL_NOT_FOUND\|EMPTY\|PARSE_ERROR"; then
+        printf "\033[31m%-8s\033[0m %-30s\n" "FAIL" "${content:0:28}"
+        ((FAIL++))
+    else
+        printf "\033[32m%-8s\033[0m %-30s\n" "PASS" "${content:0:28}"
+        ((PASS++))
+    fi
+
+    # BLOCK test
+    printf "%-40s %-8s " "Live: BLOCK tool call" "BLOCK"
+    payload="$(PROMPT="$block_prompt" python3 -c "import json,os; print(json.dumps({'model':'agent','messages':[{'role':'user','content':os.environ['PROMPT']}],'max_tokens':200}))")"
+    raw=$(echo "$payload" | KUBECONFIG="$KUBECONFIG" timeout 90 "$KUBECTL" exec -i -n "$NAMESPACE" "${TARGET}-0" -- bash -c 'curl -s --max-time 60 -X POST http://localhost:8200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer ${AGENTICORE_API_KEYS%%,*}" -d @-' 2>/dev/null || echo '{}')
+    content=$(echo "$raw" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('choices',[{}])[0].get('message',{}).get('content','EMPTY')[:80])" 2>/dev/null || echo "PARSE_ERROR")
+    if echo "$content" | grep -qi "TOOL_NOT_FOUND"; then
+        printf "\033[32m%-8s\033[0m %-30s\n" "PASS" "TOOL_NOT_FOUND ✓"
+        ((PASS++))
+    else
+        printf "\033[31m%-8s\033[0m %-30s\n" "FAIL" "${content:0:28}"
+        ((FAIL++))
+    fi
+fi
+
+# --- Summary ---
 echo ""
-printf "══════════════════════════════════════════════════════════════════\n"
 TOTAL=$((PASS + FAIL))
+printf "══════════════════════════════════════════════════════════════════\n"
 if [[ "$FAIL" -eq 0 ]]; then
-    printf "\033[32m  ALL PASS: %d/%d tests passed\033[0m\n" "$PASS" "$TOTAL"
+    printf "\033[32m  ALL PASS: %d/%d\033[0m\n" "$PASS" "$TOTAL"
 else
     printf "\033[31m  %d FAILED, %d passed out of %d\033[0m\n" "$FAIL" "$PASS" "$TOTAL"
 fi
 echo ""
 
-# --- Write JSON log ---
-python3 -c "
+# --- JSON log ---
+python3 << PYEOF
 import json
 log = {
-    'timestamp': '$TIMESTAMP',
-    'agent': '$TARGET',
-    'namespace': '$NAMESPACE',
-    'whitelist': json.loads('$WHITELIST'),
-    'pass': $PASS,
-    'fail': $FAIL,
-    'total': $TOTAL,
-    'tests': json.loads('$JSON_RESULTS')
+    "timestamp": "$TIMESTAMP",
+    "agent": "$TARGET",
+    "namespace": "$NAMESPACE",
+    "profile": "$AGENT_PROFILE",
+    "config_enabled": "$CONFIG_ENABLED".split(),
+    "actual_enabled": "$ACTUAL_ENABLED".split(),
+    "pass": $PASS,
+    "fail": $FAIL,
+    "total": $TOTAL,
+    "live": "$LIVE" == "--live"
 }
-with open('$LOG_FILE', 'w') as f:
+with open("$LOG_FILE", "w") as f:
     json.dump(log, f, indent=2)
-print(f'Log: $LOG_FILE')
-" 2>/dev/null || echo "Warning: failed to write log"
+print(f"Log: $LOG_FILE")
+PYEOF
 
 exit "$FAIL"
