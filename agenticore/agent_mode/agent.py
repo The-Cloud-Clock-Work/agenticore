@@ -209,6 +209,7 @@ class AgentExecutor:
         timeout: int = 0,
         context: Optional[dict] = None,
         meta: Optional[dict] = None,
+        disable_mcp_servers: Optional[list] = None,
     ) -> dict:
         """Execute an agent request.
 
@@ -264,7 +265,7 @@ class AgentExecutor:
         # Pre-call: render MCP whitelist from .agentihooks.json
         try:
             from agenticore.hooks import render_mcp_whitelist
-            render_mcp_whitelist(cwd)
+            render_mcp_whitelist(cwd, disable_servers=disable_mcp_servers)
         except Exception as e:
             _log.warning("Pre-call MCP render failed (non-fatal): %s", e)
 

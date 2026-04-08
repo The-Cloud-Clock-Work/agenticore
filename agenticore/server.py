@@ -323,6 +323,7 @@ def _register_agent_mode_tools():
         meta: str = "{}",
         callback_url: str = "",
         notifications: str = "status",
+        disable_mcp_servers: str = "",
     ) -> str:
         """Call the agent with a message. Returns JSON with result.
 
@@ -368,6 +369,8 @@ def _register_agent_mode_tools():
                 from agenticore.agent_mode.agent import AgentExecutor
 
                 executor = AgentExecutor()
+                # Parse disable_mcp_servers from comma-separated string to list
+                dms = [s.strip() for s in disable_mcp_servers.split(",") if s.strip()] if disable_mcp_servers else None
                 result = await executor.execute(
                     message=message,
                     external_uuid=uuid,
@@ -387,9 +390,11 @@ def _register_agent_mode_tools():
                     timeout=timeout,
                     context=ctx,
                     meta=meta_dict,
+                    disable_mcp_servers=dms,
                 )
                 return json.dumps({"success": not result.get("is_error", False), **result})
             else:
+                dms = [s.strip() for s in disable_mcp_servers.split(",") if s.strip()] if disable_mcp_servers else None
                 return json.dumps(
                     _enqueue_async_completion(
                         message=message,
@@ -412,6 +417,7 @@ def _register_agent_mode_tools():
                             timeout=timeout,
                             context=ctx,
                             meta=meta_dict,
+                            disable_mcp_servers=dms,
                         ),
                     )
                 )
@@ -847,6 +853,7 @@ def _build_rest_app():
                     timeout=body.get("timeout", 0),
                     context=ctx,
                     meta=meta_dict,
+                    disable_mcp_servers=body.get("disable_mcp_servers"),
                 )
                 is_error = result.get("is_error", False)
                 return JSONResponse(
@@ -875,6 +882,7 @@ def _build_rest_app():
                         timeout=body.get("timeout", 0),
                         context=ctx,
                         meta=meta_dict,
+                        disable_mcp_servers=body.get("disable_mcp_servers"),
                     ),
                 )
                 if not result.get("success", True) and result.get("retry"):
@@ -976,6 +984,7 @@ def _build_rest_app():
                     stateless=True,
                     model=model_name,
                     timeout=body.get("timeout", 0),
+                    disable_mcp_servers=body.get("disable_mcp_servers"),
                 )
 
             if result.get("is_error"):
