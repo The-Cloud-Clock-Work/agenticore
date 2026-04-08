@@ -53,6 +53,11 @@ if ! KUBECONFIG="$KUBECONFIG" "$KUBECTL" get pod -n "$NAMESPACE" "${TARGET}-0" -
     exit 1
 fi
 
+# --- Force a fresh render before reading state ---
+KUBECONFIG="$KUBECONFIG" "$KUBECTL" exec -n "$NAMESPACE" "${TARGET}-0" -c agenticore -- \
+    bash -c 'agentihooks init --repo /shared/agentihub/agents/${AGENTIHUB_AGENT}/package --profile ${AGENTIHOOKS_PROFILE}' \
+    >/dev/null 2>&1 || true
+
 # --- Get actual state from pod ---
 POD_DATA=$(KUBECONFIG="$KUBECONFIG" "$KUBECTL" exec -n "$NAMESPACE" "${TARGET}-0" -- python3 -c "
 import json, os
@@ -228,11 +233,10 @@ for s in sorted(set(servers)):
         done
         set -e
 
-        # --- Phase 3: Per-call subtraction ---
-        # Pick servers to disable from the enabled list, call again, verify they disappear
+        # --- Phase 3: Per-call subtraction (DATA-DRIVEN) ---
+        # No LLM parsing. Reads ~/.claude.json before and after the API call.
         ENABLED_ARRAY=(${EXPECT_ENABLED[$TARGET]})
         if [[ ${#ENABLED_ARRAY[@]} -ge 2 ]]; then
-            # Disable half the enabled servers
             HALF=$(( ${#ENABLED_ARRAY[@]} / 2 ))
             DISABLE_LIST=()
             KEEP_LIST=()
@@ -244,28 +248,43 @@ for s in sorted(set(servers)):
                 fi
             done
 
-            DISABLE_CSV=$(IFS=,; echo "${DISABLE_LIST[*]}")
+            DISABLE_JSON=$(python3 -c "import json; print(json.dumps([$(printf '"%s",' "${DISABLE_LIST[@]}" | sed 's/,$//')]))")
+
             echo ""
-            echo "── PHASE 3: Per-call subtraction ──"
-            echo "  Disabling for this call: ${DISABLE_LIST[*]}"
-            echo "  Expecting to see only:   ${KEEP_LIST[*]}"
+            echo "── PHASE 3: Per-call subtraction (data-driven) ──"
+            echo ""
+            echo "  disable_mcp_servers: ${DISABLE_LIST[*]}"
+            echo "  expect to keep:     ${KEEP_LIST[*]}"
             echo ""
 
-            SUB_PROMPT="List every MCP tool server name you can access right now. Output ONLY server names, one per line, no bullets, no explanation, no prefix. Example format: tools-agent"
-            sub_payload="$(PROMPT="$SUB_PROMPT" DISABLE="$DISABLE_CSV" python3 -c "
+            # Step 1: Read BEFORE state
+            BEFORE_ENABLED=$(KUBECONFIG="$KUBECONFIG" "$KUBECTL" exec -n "$NAMESPACE" "${TARGET}-0" -c agenticore -- python3 -c "
+import json; from pathlib import Path
+c = json.loads(Path.home().joinpath('.claude.json').read_text())
+disabled = []
+for p, v in c.get('projects', {}).items():
+    d = v.get('disabledMcpServers', [])
+    if d: disabled = d; break
+enabled = sorted(set(c.get('mcpServers', {}).keys()) - set(disabled))
+print(' '.join(enabled))
+" 2>/dev/null)
+            echo "  BEFORE call: enabled = [$BEFORE_ENABLED]"
+
+            # Step 2: Make the API call with disable_mcp_servers
+            SUB_PROMPT="Say OK."
+            sub_payload="$(PROMPT="$SUB_PROMPT" DISABLE="$DISABLE_JSON" python3 -c "
 import json, os
-disable = [s.strip() for s in os.environ['DISABLE'].split(',') if s.strip()]
 print(json.dumps({
     'model': 'agent',
     'messages': [{'role': 'user', 'content': os.environ['PROMPT']}],
-    'max_tokens': 300,
-    'disable_mcp_servers': disable
+    'max_tokens': 50,
+    'disable_mcp_servers': json.loads(os.environ['DISABLE'])
 }))
 ")"
             B64_SUB=$(echo "$sub_payload" | base64 -w0)
             subfile="/tmp/mcp-test-sub-$$.json"
 
-            echo -n "  Calling with disable_mcp_servers "
+            echo -n "  Calling API with disable_mcp_servers "
             KUBECONFIG="$KUBECONFIG" "$KUBECTL" exec -n "$NAMESPACE" "${TARGET}-0" -c agenticore -- \
                 bash -c 'echo "'"$B64_SUB"'" | base64 -d | curl -s --max-time 120 -X POST http://localhost:8200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer ${AGENTICORE_API_KEYS%%,*}" -d @-' \
                 > "$subfile" 2>/dev/null &
@@ -273,62 +292,73 @@ print(json.dumps({
             while kill -0 "$subpid" 2>/dev/null; do echo -n "."; sleep 2; done
             wait "$subpid" 2>/dev/null
             echo " done"
-
-            sub_raw="$(cat "$subfile" 2>/dev/null || echo '{}')"
             rm -f "$subfile"
 
-            SUB_RESPONSE=$(echo "$sub_raw" | python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-    print(d.get('choices',[{}])[0].get('message',{}).get('content',''))
-except:
-    print('PARSE_ERROR')
-" 2>/dev/null || echo "PARSE_ERROR")
-
-            if [[ "$SUB_RESPONSE" == "PARSE_ERROR" || -z "$SUB_RESPONSE" ]]; then
-                echo "  ERROR: No response from subtraction call"
-                ((FAIL++))
-            else
-                SUB_SEES=$(echo "$SUB_RESPONSE" | python3 -c "
-import sys, re
-lines = sys.stdin.read()
-servers = re.findall(r'(tools-[\w-]+|plugin:[\w:]+|hooks-[\w]+|home-bridge)', lines)
-for s in sorted(set(servers)):
-    print(s)
+            # Step 3: Read AFTER state — ~/.claude.json now reflects the subtracted render
+            AFTER_ENABLED=$(KUBECONFIG="$KUBECONFIG" "$KUBECTL" exec -n "$NAMESPACE" "${TARGET}-0" -c agenticore -- python3 -c "
+import json; from pathlib import Path
+c = json.loads(Path.home().joinpath('.claude.json').read_text())
+disabled = []
+for p, v in c.get('projects', {}).items():
+    d = v.get('disabledMcpServers', [])
+    if d: disabled = d; break
+enabled = sorted(set(c.get('mcpServers', {}).keys()) - set(disabled))
+print(' '.join(enabled))
 " 2>/dev/null)
+            echo "  AFTER call:  enabled = [$AFTER_ENABLED]"
 
-                echo "  Agent reports after subtraction:"
-                echo "$SUB_SEES" | sed 's/^/    /'
-                echo ""
+            # Step 4: Verify .agentihooks.json was restored
+            RESTORED=$(KUBECONFIG="$KUBECONFIG" "$KUBECTL" exec -n "$NAMESPACE" "${TARGET}-0" -c agenticore -- python3 -c "
+import json, os
+agent = os.environ.get('AGENTIHUB_AGENT', '')
+cfg = json.load(open(f'/shared/agentihub/agents/{agent}/package/.agentihooks.json'))
+print(' '.join(sorted(cfg.get('enabledMcpServers', []))))
+" 2>/dev/null)
+            echo "  CONFIG file: restored = [$RESTORED]"
+            echo ""
 
-                printf "%-40s %-8s %-8s %-30s\n" "── SUBTRACTION VERIFICATION ──" "EXPECT" "RESULT" "DETAIL"
-                printf "%-40s %-8s %-8s %-30s\n" "────────────────────────────────────────" "────────" "────────" "──────────────────────────────"
+            printf "%-40s %-8s %-8s %-30s\n" "── SUBTRACTION VERIFICATION ──" "EXPECT" "RESULT" "DETAIL"
+            printf "%-40s %-8s %-8s %-30s\n" "────────────────────────────────────────" "────────" "────────" "──────────────────────────────"
 
-                set +e
-                # Servers we KEPT should still be visible
-                for server in "${KEEP_LIST[@]}"; do
-                    if echo " $SUB_SEES " | grep -q "$server"; then
-                        printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" "Sub: $server" "VISIBLE" "PASS" "still visible ✓"
-                        ((PASS++))
-                    else
-                        printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" "Sub: $server" "VISIBLE" "FAIL" "should still be visible"
-                        ((FAIL++))
-                    fi
-                done
+            set +e
+            # Servers we KEPT should be in AFTER_ENABLED
+            for server in "${KEEP_LIST[@]}"; do
+                if echo " $AFTER_ENABLED " | grep -q " $server "; then
+                    printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" "Sub: $server" "KEPT" "PASS" "still enabled after call ✓"
+                    ((PASS++))
+                else
+                    printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" "Sub: $server" "KEPT" "FAIL" "NOT in enabled after call"
+                    ((FAIL++))
+                fi
+            done
 
-                # Servers we DISABLED should be gone
-                for server in "${DISABLE_LIST[@]}"; do
-                    if echo " $SUB_SEES " | grep -q "$server"; then
-                        printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" "Sub: $server" "REMOVED" "FAIL" "still visible (should be gone)"
-                        ((FAIL++))
-                    else
-                        printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" "Sub: $server" "REMOVED" "PASS" "successfully removed ✓"
-                        ((PASS++))
-                    fi
-                done
-                set -e
+            # Servers we DISABLED should NOT be in AFTER_ENABLED
+            for server in "${DISABLE_LIST[@]}"; do
+                if echo " $AFTER_ENABLED " | grep -q " $server "; then
+                    printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" "Sub: $server" "REMOVED" "FAIL" "still enabled (should be gone)"
+                    ((FAIL++))
+                else
+                    printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" "Sub: $server" "REMOVED" "PASS" "removed from enabled ✓"
+                    ((PASS++))
+                fi
+            done
+
+            # Config file should be restored to original
+            CONFIG_RESTORED="true"
+            for server in ${EXPECT_ENABLED[$TARGET]}; do
+                if ! echo " $RESTORED " | grep -q " $server "; then
+                    CONFIG_RESTORED="false"
+                    break
+                fi
+            done
+            if [[ "$CONFIG_RESTORED" == "true" ]]; then
+                printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" ".agentihooks.json restored" "MATCH" "PASS" "config back to committed ✓"
+                ((PASS++))
+            else
+                printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" ".agentihooks.json restored" "MATCH" "FAIL" "config NOT restored"
+                ((FAIL++))
             fi
+            set -e
         fi
     fi
 fi
