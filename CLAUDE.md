@@ -107,3 +107,22 @@ Agenticore self-registers with AgentiBridge on boot for Agent-to-Agent discovery
 ## Redis + File Fallback
 
 Jobs stored as Redis hashes (`agenticore:job:{id}`) or `~/.agenticore/jobs/{id}.json`.
+
+## MCP Whitelist Rendering (Agent Mode)
+
+Before every `claude -p` call in agent_mode, `render_mcp_whitelist()` runs `agentihooks init --repo <package_dir>` to apply the MCP whitelist from `.agentihooks.json`.
+
+**Flow:**
+1. Global `.mcp.json` defines all 17+ MCP servers (fleet catalog, all disabled by default)
+2. Agent's `.agentihooks.json` (committed in agentihub) lists `enabledMcpServers` — the lifetime whitelist
+3. Pre-call: `agentihooks init --repo` computes `disabled = all_servers - enabled` and writes to `~/.claude.json`
+4. `claude -p` starts with only whitelisted tools visible
+
+**Key files:**
+- `agenticore/hooks.py` → `render_mcp_whitelist()` — the pre-call hook
+- `agenticore/agent_mode/agent.py` → calls `render_mcp_whitelist(cwd)` before every completions request
+- `agentihub/agents/<name>/package/.agentihooks.json` — source of truth per agent
+
+**Scope:** Agent mode only (completions API). Runner/job dispatch uses worktrees without `.agentihooks.json`.
+
+**Smoke test:** `tests/smoke/test_mcp_whitelist.sh` — validates enabled tools work and disabled tools are blocked.
