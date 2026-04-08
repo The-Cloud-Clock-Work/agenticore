@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import termios
+import threading
 import tty
 import uuid
 from dataclasses import asdict, dataclass
@@ -90,11 +91,11 @@ def _prompt(t, msg="") -> str:
                         break
                 continue
             if b in (0x03, 0x04):
-                t.write("\n")
+                t.write("\r\n")
                 t.flush()
                 return "q"
             if b in (0x0D, 0x0A):
-                t.write("\n")
+                t.write("\r\n")
                 t.flush()
                 return "".join(buf)
             if b in (0x7F, 0x08):
@@ -409,21 +410,44 @@ def _action_chat(t, pod: AgenticorePod):
     if not message:
         return
 
-    _write(t, f"\n  {YL}Sending to {pod.name}...{R}")
+    _write(t, f"\n  {YL}Sending to {pod.name}...{R} ", end="")
     t.flush()
 
-    resp = _kubectl_exec_curl(
-        pod,
-        "POST",
-        "/completions",
-        {
-            "message": message,
-            "uuid": str(uuid.uuid4()),
-            "wait": True,
-        },
-    )
+    result_box: list = []
+    done = threading.Event()
 
-    _write(t, "")
+    def _run():
+        result_box.append(
+            _kubectl_exec_curl(
+                pod,
+                "POST",
+                "/completions",
+                {
+                    "message": message,
+                    "uuid": str(uuid.uuid4()),
+                    "wait": True,
+                },
+            )
+        )
+        done.set()
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    elapsed = 0
+    idx = 0
+    while not done.wait(0.1):
+        elapsed += 0.1
+        secs = int(elapsed)
+        t.write(f"\r  {YL}{frames[idx]} Waiting for response... {secs}s{R}   ")
+        t.flush()
+        idx = (idx + 1) % len(frames)
+
+    t.write(f"\r  {GRB}✓ Response received ({int(elapsed)}s){R}       \n")
+    t.flush()
+
+    resp = result_box[0] if result_box else {"error": "no response"}
+
     if "error" in resp:
         _write(t, f"  {RDB}Error:{R} {resp['error']}")
     else:

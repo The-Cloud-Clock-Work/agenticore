@@ -323,6 +323,7 @@ def _register_agent_mode_tools():
         meta: str = "{}",
         callback_url: str = "",
         notifications: str = "status",
+        disable_mcp_servers: str = "",
     ) -> str:
         """Call the agent with a message. Returns JSON with result.
 
@@ -368,6 +369,8 @@ def _register_agent_mode_tools():
                 from agenticore.agent_mode.agent import AgentExecutor
 
                 executor = AgentExecutor()
+                # Parse disable_mcp_servers from comma-separated string to list
+                dms = [s.strip() for s in disable_mcp_servers.split(",") if s.strip()] if disable_mcp_servers else None
                 result = await executor.execute(
                     message=message,
                     external_uuid=uuid,
@@ -387,9 +390,11 @@ def _register_agent_mode_tools():
                     timeout=timeout,
                     context=ctx,
                     meta=meta_dict,
+                    disable_mcp_servers=dms,
                 )
                 return json.dumps({"success": not result.get("is_error", False), **result})
             else:
+                dms = [s.strip() for s in disable_mcp_servers.split(",") if s.strip()] if disable_mcp_servers else None
                 return json.dumps(
                     _enqueue_async_completion(
                         message=message,
@@ -412,6 +417,7 @@ def _register_agent_mode_tools():
                             timeout=timeout,
                             context=ctx,
                             meta=meta_dict,
+                            disable_mcp_servers=dms,
                         ),
                     )
                 )
@@ -650,7 +656,8 @@ def _build_rest_app():
                 try:
                     install_path = sync_agentihooks()
                     bundle_path = _bundle_dir() if cfg.agentihooks_bundle_url else None
-                    run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
+                    pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
+                    run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir)
                     results["agentihooks"] = "ok"
                 except Exception as e:
                     results["agentihooks"] = f"error: {e}"
@@ -846,6 +853,7 @@ def _build_rest_app():
                     timeout=body.get("timeout", 0),
                     context=ctx,
                     meta=meta_dict,
+                    disable_mcp_servers=body.get("disable_mcp_servers"),
                 )
                 is_error = result.get("is_error", False)
                 return JSONResponse(
@@ -874,6 +882,7 @@ def _build_rest_app():
                         timeout=body.get("timeout", 0),
                         context=ctx,
                         meta=meta_dict,
+                        disable_mcp_servers=body.get("disable_mcp_servers"),
                     ),
                 )
                 if not result.get("success", True) and result.get("retry"):
@@ -975,6 +984,7 @@ def _build_rest_app():
                     stateless=True,
                     model=model_name,
                     timeout=body.get("timeout", 0),
+                    disable_mcp_servers=body.get("disable_mcp_servers"),
                 )
 
             if result.get("is_error"):
@@ -1183,7 +1193,8 @@ def _auto_sync_agentihooks(cfg):
             hooks_path = sync_agentihooks()
             bundle_path = sync_bundle()
             if hooks_path or bundle_path:
-                run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path)
+                pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
+                run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path, repo_dir=pkg_dir)
             logger.info("dev mode: agentihooks init complete (no watchers)")
         except Exception as e:
             logger.warning("agentihooks init failed (dev mode): %s", e)
@@ -1202,7 +1213,8 @@ def _auto_sync_agentihooks(cfg):
 
         install_path = sync_agentihooks()
         bundle_path = sync_bundle()
-        run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path)
+        pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
+        run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir)
         if install_path and cfg.agentihooks_sync_interval > 0:
             start_sync_watcher(cfg.agentihooks_url, install_path, cfg.agentihooks_sync_interval)
         if bundle_path and cfg.agentihooks_bundle_sync_interval > 0:
@@ -1303,8 +1315,78 @@ def _ensure_claude_onboarding():
                 if src.exists() and not dst.exists():
                     shutil.copytree(str(src), str(dst))
                     logger.info("migrated baked %s → %s", src, dst)
+            # Fix installPath in installed_plugins.json (baked as /root/.claude/...)
+            ip_file = runtime / "plugins" / "installed_plugins.json"
+            if ip_file.exists():
+                ip_data = json.loads(ip_file.read_text())
+                dirty = False
+                for entries in ip_data.get("plugins", {}).values():
+                    for entry in entries:
+                        old_path = entry.get("installPath", "")
+                        if "/root/.claude/" in old_path:
+                            entry["installPath"] = old_path.replace(
+                                "/root/.claude/", str(runtime) + "/")
+                            dirty = True
+                if dirty:
+                    ip_file.write_text(json.dumps(ip_data, indent=2))
+                    logger.info("fixed installPath in installed_plugins.json")
+            # Fix marketplace installLocation paths too
+            km_file = runtime / "plugins" / "known_marketplaces.json"
+            if km_file.exists():
+                km_data = json.loads(km_file.read_text())
+                dirty = False
+                for mp in km_data.values():
+                    loc = mp.get("installLocation", "")
+                    if "/root/.claude/" in loc:
+                        mp["installLocation"] = loc.replace(
+                            "/root/.claude/", str(runtime) + "/")
+                        dirty = True
+                if dirty:
+                    km_file.write_text(json.dumps(km_data, indent=2))
+                    logger.info("fixed installLocation in known_marketplaces.json")
+            # Ensure plugin deps are installed (node_modules may be missing
+            # if plugins dir existed on PVC from a prior install without deps)
+            import glob
+            for pkg_json in glob.glob(str(runtime / "plugins" / "cache" / "*" / "*" / "*" / "package.json")):
+                pkg_dir = Path(pkg_json).parent
+                if not (pkg_dir / "node_modules").exists():
+                    import subprocess as _sp
+                    _sp.run(["bun", "install", "--no-summary"], cwd=str(pkg_dir),
+                            capture_output=True, timeout=60)
+                    logger.info("installed plugin deps in %s", pkg_dir)
     except Exception as e:
         logger.warning("plugin migration failed: %s — non-fatal", e)
+
+
+def _enable_installed_plugins():
+    """Inject enabledPlugins into settings.json for all installed plugins.
+
+    Must run AFTER agentihooks init, which regenerates settings.json
+    and doesn't know about Claude Code plugins.
+    """
+    try:
+        runtime = Path.home() / ".claude"
+        settings_path = runtime / "settings.json"
+        plugins_json = runtime / "plugins" / "installed_plugins.json"
+        if not settings_path.exists() or not plugins_json.exists():
+            return
+        settings = json.loads(settings_path.read_text())
+        installed = json.loads(plugins_json.read_text())
+        plugin_names = list(installed.get("plugins", {}).keys())
+        if not plugin_names:
+            return
+        enabled = settings.get("enabledPlugins", {})
+        changed = False
+        for name in plugin_names:
+            if name not in enabled:
+                enabled[name] = True
+                changed = True
+        if changed:
+            settings["enabledPlugins"] = enabled
+            settings_path.write_text(json.dumps(settings, indent=2))
+            logger.info("enabled plugins in settings.json: %s", plugin_names)
+    except Exception as e:
+        logger.warning("plugin enable failed: %s — non-fatal", e)
 
 
 def main():
@@ -1342,6 +1424,7 @@ def main():
     _ensure_claude_onboarding()
 
     _auto_sync_agentihooks(cfg)
+    _enable_installed_plugins()  # must run AFTER agentihooks regenerates settings.json
     _auto_sync_agentihub(cfg)
     _auto_register_with_bridge(cfg)
 

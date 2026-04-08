@@ -342,11 +342,21 @@ def sync_bundle() -> Optional[Path]:
     return dest
 
 
-def run_agentihooks_init(hooks_path: Optional[Path] = None, bundle_path: Optional[Path] = None) -> None:
-    """Run ``agentihooks init`` with profile and optional bundle.
+def run_agentihooks_init(
+    hooks_path: Optional[Path] = None,
+    bundle_path: Optional[Path] = None,
+    repo_dir: Optional[Path] = None,
+) -> None:
+    """Run ``agentihooks init`` with profile and optional bundle/repo.
 
     Also installs agentihooks via uv pip if hooks_path is provided.
     This replaces the old entrypoint.sh logic.
+
+    When *repo_dir* is given, ``--repo <dir>`` is passed so agentihooks
+    processes the per-repo ``.agentihooks.json`` whitelist and writes
+    ``disabledMcpServers`` into ``~/.claude.json`` for that project path.
+    This also registers a project target in ``state.json`` so the daemon
+    can auto-reconcile on file changes.
     """
     if hooks_path and hooks_path.exists():
         logger.info("Installing agentihooks from %s", hooks_path)
@@ -360,6 +370,8 @@ def run_agentihooks_init(hooks_path: Optional[Path] = None, bundle_path: Optiona
     cmd = ["agentihooks", "init", "--profile", profile]
     if bundle_path and bundle_path.exists():
         cmd.extend(["--bundle", str(bundle_path)])
+    if repo_dir and repo_dir.exists():
+        cmd.extend(["--repo", str(repo_dir)])
 
     logger.info("Running: %s", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -369,4 +381,63 @@ def run_agentihooks_init(hooks_path: Optional[Path] = None, bundle_path: Optiona
     if result.returncode != 0:
         logger.error("agentihooks init failed (exit %d):\n%s", result.returncode, result.stderr)
         raise RuntimeError(f"agentihooks init failed: {result.stderr}")
-    logger.info("agentihooks init complete (profile=%s, bundle=%s)", profile, bundle_path)
+    logger.info("agentihooks init complete (profile=%s, bundle=%s, repo=%s)", profile, bundle_path, repo_dir)
+
+
+def render_mcp_whitelist(repo_dir: Path, disable_servers: Optional[list] = None) -> None:
+    """Pre-call MCP render: re-apply .agentihooks.json whitelist for a repo.
+
+    Runs ``agentihooks init --repo <dir>`` to render disabledMcpServers
+    into ``~/.claude.json`` from the committed .agentihooks.json whitelist.
+    This is the subtractive step: global has all disabled, this enables
+    only what the agent needs for this call.
+
+    When *disable_servers* is provided, those servers are temporarily removed
+    from the enabledMcpServers before rendering. This is the per-call
+    subtraction layer: the caller can narrow the agent's lifetime whitelist
+    for a specific task. The .agentihooks.json file is restored after rendering.
+
+    Designed to run before every ``claude -p`` invocation so that
+    hot-reloads, daemon writes, or previous sessions cannot leave
+    stale MCP state.
+    """
+    if not repo_dir or not repo_dir.exists():
+        logger.debug("render_mcp_whitelist: no repo_dir, skipping")
+        return
+
+    agentihooks_json = repo_dir / ".agentihooks.json"
+    if not agentihooks_json.exists():
+        logger.debug("render_mcp_whitelist: no .agentihooks.json in %s, skipping", repo_dir)
+        return
+
+    # Per-call subtraction: temporarily narrow the whitelist
+    original_content = None
+    if disable_servers:
+        import json as _json
+
+        original_content = agentihooks_json.read_text()
+        config = _json.loads(original_content)
+        enabled = config.get("enabledMcpServers", [])
+        narrowed = [s for s in enabled if s not in disable_servers]
+        config["enabledMcpServers"] = narrowed
+        agentihooks_json.write_text(_json.dumps(config, indent=2) + "\n")
+        logger.info("Per-call subtraction: disabled %s → enabled %s", disable_servers, narrowed)
+
+    try:
+        profile = get_config().agentihooks_profile
+        cmd = ["agentihooks", "init", "--repo", str(repo_dir), "--profile", profile]
+
+        logger.info("Pre-call MCP render: %s", " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.stdout:
+            for line in result.stdout.strip().splitlines():
+                logger.info("agentihooks: %s", line)
+        if result.returncode != 0:
+            logger.warning("Pre-call MCP render failed (exit %d): %s", result.returncode, result.stderr)
+        else:
+            logger.info("Pre-call MCP render complete for %s", repo_dir)
+    finally:
+        # Always restore the original .agentihooks.json
+        if original_content is not None:
+            agentihooks_json.write_text(original_content)
+            logger.debug("Restored .agentihooks.json to committed state")
