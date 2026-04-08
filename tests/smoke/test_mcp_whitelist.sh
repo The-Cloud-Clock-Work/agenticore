@@ -227,6 +227,109 @@ for s in sorted(set(servers)):
             fi
         done
         set -e
+
+        # --- Phase 3: Per-call subtraction ---
+        # Pick servers to disable from the enabled list, call again, verify they disappear
+        ENABLED_ARRAY=(${EXPECT_ENABLED[$TARGET]})
+        if [[ ${#ENABLED_ARRAY[@]} -ge 2 ]]; then
+            # Disable half the enabled servers
+            HALF=$(( ${#ENABLED_ARRAY[@]} / 2 ))
+            DISABLE_LIST=()
+            KEEP_LIST=()
+            for i in "${!ENABLED_ARRAY[@]}"; do
+                if [[ $i -lt $HALF ]]; then
+                    KEEP_LIST+=("${ENABLED_ARRAY[$i]}")
+                else
+                    DISABLE_LIST+=("${ENABLED_ARRAY[$i]}")
+                fi
+            done
+
+            DISABLE_CSV=$(IFS=,; echo "${DISABLE_LIST[*]}")
+            echo ""
+            echo "── PHASE 3: Per-call subtraction ──"
+            echo "  Disabling for this call: ${DISABLE_LIST[*]}"
+            echo "  Expecting to see only:   ${KEEP_LIST[*]}"
+            echo ""
+
+            SUB_PROMPT="List every MCP tool server name you can access right now. Output ONLY server names, one per line, no bullets, no explanation, no prefix. Example format: tools-agent"
+            sub_payload="$(PROMPT="$SUB_PROMPT" DISABLE="$DISABLE_CSV" python3 -c "
+import json, os
+disable = [s.strip() for s in os.environ['DISABLE'].split(',') if s.strip()]
+print(json.dumps({
+    'model': 'agent',
+    'messages': [{'role': 'user', 'content': os.environ['PROMPT']}],
+    'max_tokens': 300,
+    'disable_mcp_servers': disable
+}))
+")"
+            B64_SUB=$(echo "$sub_payload" | base64 -w0)
+            subfile="/tmp/mcp-test-sub-$$.json"
+
+            echo -n "  Calling with disable_mcp_servers "
+            KUBECONFIG="$KUBECONFIG" "$KUBECTL" exec -n "$NAMESPACE" "${TARGET}-0" -c agenticore -- \
+                bash -c 'echo "'"$B64_SUB"'" | base64 -d | curl -s --max-time 120 -X POST http://localhost:8200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer ${AGENTICORE_API_KEYS%%,*}" -d @-' \
+                > "$subfile" 2>/dev/null &
+            subpid=$!
+            while kill -0 "$subpid" 2>/dev/null; do echo -n "."; sleep 2; done
+            wait "$subpid" 2>/dev/null
+            echo " done"
+
+            sub_raw="$(cat "$subfile" 2>/dev/null || echo '{}')"
+            rm -f "$subfile"
+
+            SUB_RESPONSE=$(echo "$sub_raw" | python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    print(d.get('choices',[{}])[0].get('message',{}).get('content',''))
+except:
+    print('PARSE_ERROR')
+" 2>/dev/null || echo "PARSE_ERROR")
+
+            if [[ "$SUB_RESPONSE" == "PARSE_ERROR" || -z "$SUB_RESPONSE" ]]; then
+                echo "  ERROR: No response from subtraction call"
+                ((FAIL++))
+            else
+                SUB_SEES=$(echo "$SUB_RESPONSE" | python3 -c "
+import sys, re
+lines = sys.stdin.read()
+servers = re.findall(r'(tools-[\w-]+|plugin:[\w:]+|hooks-[\w]+|home-bridge)', lines)
+for s in sorted(set(servers)):
+    print(s)
+" 2>/dev/null)
+
+                echo "  Agent reports after subtraction:"
+                echo "$SUB_SEES" | sed 's/^/    /'
+                echo ""
+
+                printf "%-40s %-8s %-8s %-30s\n" "── SUBTRACTION VERIFICATION ──" "EXPECT" "RESULT" "DETAIL"
+                printf "%-40s %-8s %-8s %-30s\n" "────────────────────────────────────────" "────────" "────────" "──────────────────────────────"
+
+                set +e
+                # Servers we KEPT should still be visible
+                for server in "${KEEP_LIST[@]}"; do
+                    if echo " $SUB_SEES " | grep -q "$server"; then
+                        printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" "Sub: $server" "VISIBLE" "PASS" "still visible ✓"
+                        ((PASS++))
+                    else
+                        printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" "Sub: $server" "VISIBLE" "FAIL" "should still be visible"
+                        ((FAIL++))
+                    fi
+                done
+
+                # Servers we DISABLED should be gone
+                for server in "${DISABLE_LIST[@]}"; do
+                    if echo " $SUB_SEES " | grep -q "$server"; then
+                        printf "%-40s %-8s \033[31m%-8s\033[0m %-30s\n" "Sub: $server" "REMOVED" "FAIL" "still visible (should be gone)"
+                        ((FAIL++))
+                    else
+                        printf "%-40s %-8s \033[32m%-8s\033[0m %-30s\n" "Sub: $server" "REMOVED" "PASS" "successfully removed ✓"
+                        ((PASS++))
+                    fi
+                done
+                set -e
+            fi
+        fi
     fi
 fi
 
