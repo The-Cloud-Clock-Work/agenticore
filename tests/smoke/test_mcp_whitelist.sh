@@ -156,8 +156,22 @@ if [[ "$LIVE" == "--live" ]]; then
     LIVE_PROMPT="List every MCP tool server name you can access right now. Output ONLY server names, one per line, no bullets, no explanation, no prefix. Example format: tools-agent"
     payload="$(PROMPT="$LIVE_PROMPT" python3 -c "import json,os; print(json.dumps({'model':'agent','messages':[{'role':'user','content':os.environ['PROMPT']}],'max_tokens':300}))")"
 
-    echo "  Calling ${TARGET}-0 completions API..."
-    raw=$(echo "$payload" | KUBECONFIG="$KUBECONFIG" timeout 180 "$KUBECTL" exec -i -n "$NAMESPACE" "${TARGET}-0" -- bash -c 'curl -s --max-time 120 -X POST http://localhost:8200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer ${AGENTICORE_API_KEYS%%,*}" -d @-' 2>/dev/null || echo '{}')
+    # Encode payload as base64 to avoid all quoting issues
+    B64_PAYLOAD=$(echo "$payload" | base64 -w0)
+
+    echo -n "  Calling ${TARGET}-0 completions API "
+    outfile="/tmp/mcp-test-result-$$.json"
+
+    KUBECONFIG="$KUBECONFIG" "$KUBECTL" exec -n "$NAMESPACE" "${TARGET}-0" -c agenticore -- \
+        bash -c 'echo "'"$B64_PAYLOAD"'" | base64 -d | curl -s --max-time 120 -X POST http://localhost:8200/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer ${AGENTICORE_API_KEYS%%,*}" -d @-' \
+        > "$outfile" 2>/dev/null &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do echo -n "."; sleep 2; done
+    wait "$pid" 2>/dev/null
+    echo " done"
+
+    raw="$(cat "$outfile" 2>/dev/null || echo '{}')"
+    rm -f "$outfile"
 
     AGENT_RESPONSE=$(echo "$raw" | python3 -c "
 import json, sys
