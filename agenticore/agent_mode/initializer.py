@@ -36,11 +36,28 @@ def _provision_from_agentihub(cfg) -> None:
     hub_path = Path(hub_path_str)
     agent_dir = hub_path / "agents" / agent_name
     if not agent_dir.exists():
-        available = []
-        agents_dir = hub_path / "agents"
-        if agents_dir.exists():
-            available = [d.name for d in agents_dir.iterdir() if d.is_dir()]
-        raise RuntimeError(f"Agent '{agent_name}' not found in agentihub at {agent_dir}. Available: {available}")
+        # Try aliases: check for aliases.yaml in the hub root, or fuzzy-match
+        # by checking if any agent dir contains an agent.yml with a matching name
+        aliases_file = hub_path / "aliases.yaml"
+        resolved = None
+        if aliases_file.exists():
+            try:
+                import yaml
+                aliases = yaml.safe_load(aliases_file.read_text()) or {}
+                if agent_name in aliases:
+                    resolved = hub_path / "agents" / aliases[agent_name]
+                    if resolved.exists():
+                        _log.info("Resolved agent '%s' → '%s' via aliases.yaml", agent_name, aliases[agent_name])
+                        agent_dir = resolved
+            except Exception as e:
+                _log.warning("Failed to read aliases.yaml: %s", e)
+
+        if resolved is None or not agent_dir.exists():
+            available = []
+            agents_dir = hub_path / "agents"
+            if agents_dir.exists():
+                available = [d.name for d in agents_dir.iterdir() if d.is_dir()]
+            raise RuntimeError(f"Agent '{agent_name}' not found in agentihub at {hub_path / 'agents' / agent_name}. Available: {available}")
 
     # Point package_dir and evaluation_dir at the hub path — no copy
     src_package = agent_dir / "package"
