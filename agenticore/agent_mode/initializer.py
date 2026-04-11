@@ -10,6 +10,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 from agenticore.config import get_config
@@ -201,7 +203,6 @@ def _install_notification_hook(package_dir: str) -> None:
     (agentihub hot-reload does git clean -fdx which would delete hooks).
     """
     import json
-    import shutil
 
     claude_home = Path(os.getenv("CLAUDE_CODE_HOME_DIR", str(Path.home())))
     hooks_dir = claude_home / ".claude" / "hooks"
@@ -311,9 +312,9 @@ def _start_telegram_channel(package_dir: str, model: str) -> None:
         return
 
     cmd = [
-        "script", "-qfec",
-        f"claude --model {model} --dangerously-skip-permissions "
-        f"--channels plugin:telegram@claude-plugins-official",
+        "script",
+        "-qfec",
+        f"claude --model {model} --dangerously-skip-permissions --channels plugin:telegram@claude-plugins-official",
         "/tmp/telegram-typescript",
     ]
     _log.info("Telegram: starting channel from %s (model=%s)", pkg, model)
@@ -330,20 +331,37 @@ def _start_telegram_channel(package_dir: str, model: str) -> None:
         _log.warning("Telegram: failed to start channel: %s", e)
 
 
-def initialize_agent_mode() -> None:
+def _bg_run_startup_scripts(package_dir: str) -> None:
+    """Wrapper for background thread — catches all exceptions."""
+    try:
+        _run_startup_scripts(package_dir)
+    except Exception as e:
+        _log.warning("Startup scripts error (non-fatal, background): %s", e)
+
+
+def _bg_install_notification_hook(package_dir: str) -> None:
+    """Wrapper for background thread — catches all exceptions."""
+    try:
+        _install_notification_hook(package_dir)
+    except Exception as e:
+        _log.warning("Notification hook install failed (non-fatal, background): %s", e)
+
+
+def initialize_agent_mode() -> list[threading.Thread]:
     """Main initialization entry point for agent mode.
 
-    1. Clone package repo if PACKAGE_REPO_URL is set
-    2. Validate package directory
-    3. Run startup scripts
-    4. Cache system prompt
+    Fatal steps (provision, clone, validate) run synchronously.
+    Non-fatal steps (startup scripts, notification hooks) run as background daemon threads.
+
+    Returns list of background threads for callers that need to join them (e.g. tests).
     """
+    t0 = time.monotonic()
     cfg = get_config()
     am = cfg.agent_mode
 
     _log.info("=== Agent Mode Initialization ===")
 
-    # Step 0: Provision from agentihub if AGENTIHUB_AGENT is set
+    # Step 0: Provision from agentihub if AGENTIHUB_AGENT is set (FATAL)
     if am.agent:
         try:
             _provision_from_agentihub(cfg)
@@ -352,7 +370,7 @@ def initialize_agent_mode() -> None:
             print(f"FATAL: Agentihub provision failed: {e}", file=sys.stderr)
             sys.exit(1)
 
-    # Step 1: Clone package repo if URL is configured (skipped if agentihub already populated)
+    # Step 1: Clone package repo if URL is configured (FATAL)
     if am.repo_url:
         try:
             _clone_package_repo(am.repo_url, am.repo_branch, str(Path(am.package_dir).parent))
@@ -361,7 +379,7 @@ def initialize_agent_mode() -> None:
             print(f"FATAL: Package repo clone failed: {e}", file=sys.stderr)
             sys.exit(1)
 
-    # Step 2: Validate package dir
+    # Step 2: Validate package dir (FATAL)
     try:
         _validate_package_dir(am.package_dir)
     except RuntimeError as e:
@@ -369,13 +387,7 @@ def initialize_agent_mode() -> None:
         print(f"FATAL: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Step 3: Run startup scripts
-    try:
-        _run_startup_scripts(am.package_dir)
-    except Exception as e:
-        _log.warning("Startup scripts error (non-fatal): %s", e)
-
-    # Step 4: Cache system prompt
+    # Step 3: Cache system prompt (instant file read)
     from agenticore.agent_mode.agent import _load_system_prompt
 
     prompt = _load_system_prompt(am.package_dir)
@@ -384,17 +396,32 @@ def initialize_agent_mode() -> None:
     else:
         _log.info("No default system prompt (system.md not found)")
 
-    # Step 5: Install notification hooks
-    try:
-        _install_notification_hook(am.package_dir)
-    except Exception as e:
-        _log.warning("Notification hook install failed (non-fatal): %s", e)
+    # Step 4+5: Non-fatal steps — fire as background daemon threads
+    bg_threads: list[threading.Thread] = []
+    t_scripts = threading.Thread(
+        target=_bg_run_startup_scripts,
+        args=(am.package_dir,),
+        name="startup-scripts",
+        daemon=True,
+    )
+    t_scripts.start()
+    bg_threads.append(t_scripts)
 
-    # Step 6: Telegram channel (platform capability)
+    t_hooks = threading.Thread(
+        target=_bg_install_notification_hook,
+        args=(am.package_dir,),
+        name="notif-hook",
+        daemon=True,
+    )
+    t_hooks.start()
+    bg_threads.append(t_hooks)
+
+    # Step 6: Telegram channel (already Popen/detached)
     _start_telegram_channel(am.package_dir, am.model)
 
-    _log.info("=== Agent Mode Ready ===")
+    _log.info("=== Agent Mode Ready (%.2fs) ===", time.monotonic() - t0)
     _log.info("  Package dir: %s", am.package_dir)
     _log.info("  Default model: %s", am.model)
     _log.info("  Max turns: %d", am.max_turns)
     _log.info("  Permission mode: %s", am.permission_mode)
+    return bg_threads

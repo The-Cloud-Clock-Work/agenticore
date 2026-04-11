@@ -279,7 +279,9 @@ class TestInitializeAgentMode:
 
         with patch.dict(os.environ, {"AGENT_MODE_PACKAGE_DIR": str(pkg)}):
             reset_config()
-            initialize_agent_mode()
+            bg_threads = initialize_agent_mode()
+            for t in bg_threads:
+                t.join(timeout=10)
 
         assert marker.exists()
         assert "INIT" in marker.read_text()
@@ -307,7 +309,9 @@ class TestInitializeAgentMode:
 
         with patch.dict(os.environ, {"AGENT_MODE_PACKAGE_DIR": str(pkg)}):
             reset_config()
-            initialize_agent_mode()
+            bg_threads = initialize_agent_mode()
+            for t in bg_threads:
+                t.join(timeout=10)
 
         assert marker.exists()
         assert "ok" in marker.read_text()

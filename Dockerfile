@@ -98,6 +98,10 @@ RUN cp -r /root/.claude /home/agenticore/.claude && \
     cd /home/agenticore/.claude/plugins/cache/claude-plugins-official/telegram/*/  && \
     bun install --no-summary
 
+# Default .agentihooks.json with brain+amygdala channels (overridden by agentihub if AGENTIHUB_AGENT set)
+RUN echo '{"profile":"agenticore","channels":["brain","amygdala"]}' > /app/package/.agentihooks.json && \
+    chown agenticore:agenticore /app/package/.agentihooks.json
+
 # Pod-specific shell functions
 COPY docker/bashrc /opt/agenticore/bashrc
 
