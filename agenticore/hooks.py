@@ -89,6 +89,7 @@ def _install_dir() -> Path:
 
 def _clone_or_fetch(url: str, dest: Path) -> None:
     """Clone or update agentihooks repo, flock/Redis-protected."""
+    t0 = time.monotonic()
     dest.mkdir(parents=True, exist_ok=True)
     lock_path = dest.parent / ".agentihooks.lock"
 
@@ -111,6 +112,7 @@ def _clone_or_fetch(url: str, dest: Path) -> None:
                 _do()
             finally:
                 fcntl.flock(lf, fcntl.LOCK_UN)
+    logger.info("_clone_or_fetch agentihooks done in %.2fs", time.monotonic() - t0)
 
 
 def start_sync_watcher(url: str, dest: Path, interval: int) -> Optional[threading.Thread]:
@@ -211,6 +213,7 @@ def _agentihub_install_dir() -> Path:
 
 def _clone_or_fetch_agentihub(url: str, dest: Path) -> None:
     """Clone or update agentihub repo (no profile build — agent mode handles provisioning)."""
+    t0 = time.monotonic()
     dest.mkdir(parents=True, exist_ok=True)
     lock_path = dest.parent / ".agentihub.lock"
 
@@ -233,6 +236,7 @@ def _clone_or_fetch_agentihub(url: str, dest: Path) -> None:
                 _do()
             finally:
                 fcntl.flock(lf, fcntl.LOCK_UN)
+    logger.info("_clone_or_fetch_agentihub done in %.2fs", time.monotonic() - t0)
 
 
 def sync_agentihub(url: str = "") -> Optional[Path]:
@@ -270,6 +274,7 @@ def _bundle_dir() -> Path:
 
 def _clone_or_fetch_bundle(url: str, dest: Path) -> None:
     """Clone or update agentihooks bundle repo, with GitHub App auth."""
+    t0 = time.monotonic()
     dest.mkdir(parents=True, exist_ok=True)
     lock_path = dest.parent / ".agentihooks-bundle.lock"
 
@@ -291,6 +296,7 @@ def _clone_or_fetch_bundle(url: str, dest: Path) -> None:
                 _do()
             finally:
                 fcntl.flock(lf, fcntl.LOCK_UN)
+    logger.info("_clone_or_fetch_bundle done in %.2fs", time.monotonic() - t0)
 
 
 def sync_agentihooks(url: str = "") -> Optional[Path]:
@@ -358,6 +364,8 @@ def run_agentihooks_init(
     This also registers a project target in ``state.json`` so the daemon
     can auto-reconcile on file changes.
     """
+    t0 = time.monotonic()
+
     if hooks_path and hooks_path.exists():
         logger.info("Installing agentihooks from %s", hooks_path)
         subprocess.run(
@@ -381,7 +389,13 @@ def run_agentihooks_init(
     if result.returncode != 0:
         logger.error("agentihooks init failed (exit %d):\n%s", result.returncode, result.stderr)
         raise RuntimeError(f"agentihooks init failed: {result.stderr}")
-    logger.info("agentihooks init complete (profile=%s, bundle=%s, repo=%s)", profile, bundle_path, repo_dir)
+    logger.info(
+        "agentihooks init complete in %.2fs (profile=%s, bundle=%s, repo=%s)",
+        time.monotonic() - t0,
+        profile,
+        bundle_path,
+        repo_dir,
+    )
 
 
 def render_mcp_whitelist(repo_dir: Path, disable_servers: Optional[list] = None) -> None:

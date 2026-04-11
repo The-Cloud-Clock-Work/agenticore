@@ -17,7 +17,10 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -656,7 +659,9 @@ def _build_rest_app():
                 try:
                     install_path = sync_agentihooks()
                     bundle_path = _bundle_dir() if cfg.agentihooks_bundle_url else None
-                    pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
+                    pkg_dir = (
+                        Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
+                    )
                     run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir)
                     results["agentihooks"] = "ok"
                 except Exception as e:
@@ -1180,75 +1185,70 @@ def run_sse_server() -> None:
     uvicorn.run(app, host=cfg.server.host, port=cfg.server.port, log_level="info")
 
 
-def _auto_sync_agentihooks(cfg):
-    """Auto-sync agentihooks, bundle, and run init.
+def _do_sync_agentihooks(cfg) -> Optional[Path]:
+    """Clone/fetch agentihooks repo. Thread-safe. Returns install path."""
+    if cfg.dev_mode or (not cfg.agentihooks_url and not os.getenv("AGENTICORE_AGENTIHOOKS_PATH")):
+        from agenticore.hooks import sync_agentihooks
 
-    Dev mode: use pre-mounted paths, run init, skip watchers.
-    Prod mode: clone from URLs, start watchers.
-    """
+        return sync_agentihooks()
+    if not cfg.agentihooks_url:
+        return None
+    from agenticore.hooks import sync_agentihooks
+
+    return sync_agentihooks()
+
+
+def _do_sync_bundle(cfg) -> Optional[Path]:
+    """Clone/fetch agentihooks-bundle repo. Thread-safe. Returns bundle path."""
+    from agenticore.hooks import sync_bundle
+
+    return sync_bundle()
+
+
+def _do_sync_agentihub(cfg) -> Optional[Path]:
+    """Clone/fetch agentihub repo. Thread-safe. Returns hub path."""
     if cfg.dev_mode:
-        try:
-            from agenticore.hooks import sync_agentihooks, sync_bundle, run_agentihooks_init
+        from agenticore.hooks import sync_agentihub
 
-            hooks_path = sync_agentihooks()
-            bundle_path = sync_bundle()
-            if hooks_path or bundle_path:
-                pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
-                run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path, repo_dir=pkg_dir)
-            logger.info("dev mode: agentihooks init complete (no watchers)")
-        except Exception as e:
-            logger.warning("agentihooks init failed (dev mode): %s", e)
-        return
-
-    if not cfg.agentihooks_url or os.getenv("AGENTICORE_AGENTIHOOKS_PATH"):
-        return
-    try:
-        from agenticore.hooks import (
-            sync_agentihooks,
-            sync_bundle,
-            run_agentihooks_init,
-            start_sync_watcher,
-            start_bundle_watcher,
-        )
-
-        install_path = sync_agentihooks()
-        bundle_path = sync_bundle()
-        pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
-        run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir)
-        if install_path and cfg.agentihooks_sync_interval > 0:
-            start_sync_watcher(cfg.agentihooks_url, install_path, cfg.agentihooks_sync_interval)
-        if bundle_path and cfg.agentihooks_bundle_sync_interval > 0:
-            start_bundle_watcher(cfg.agentihooks_bundle_url, bundle_path, cfg.agentihooks_bundle_sync_interval)
-    except Exception as e:
-        logger.warning("agentihooks sync failed: %s — profiles may be unavailable", e)
-
-
-def _auto_sync_agentihub(cfg):
-    """Auto-sync agentihub if URL is configured.
-
-    Dev mode: use pre-mounted path, skip watcher.
-    Prod mode: clone from URL, start watcher.
-    """
-    if cfg.dev_mode:
-        try:
-            from agenticore.hooks import sync_agentihub
-
-            sync_agentihub()
-            logger.info("dev mode: agentihub ready (no watcher)")
-        except Exception as e:
-            logger.warning("agentihub init failed (dev mode): %s", e)
-        return
-
+        return sync_agentihub()
     if not cfg.agentihub_url:
-        return
-    try:
-        from agenticore.hooks import sync_agentihub, start_agentihub_watcher
+        return None
+    from agenticore.hooks import sync_agentihub
 
-        hub_path = sync_agentihub()
-        if hub_path and cfg.agentihub_sync_interval > 0:
-            start_agentihub_watcher(cfg.agentihub_url, hub_path, cfg.agentihub_sync_interval)
-    except Exception as e:
-        logger.warning("agentihub sync failed: %s — non-fatal", e)
+    return sync_agentihub()
+
+
+def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optional[Path]) -> None:
+    """Run agentihooks init + start watchers. Must run after git syncs complete."""
+    from agenticore.hooks import run_agentihooks_init
+
+    if hooks_path or bundle_path:
+        pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
+        run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path, repo_dir=pkg_dir)
+
+    if cfg.dev_mode:
+        logger.info("dev mode: agentihooks init complete (no watchers)")
+        return
+
+    # Start watchers (daemon threads — safe to start from main thread)
+    if hooks_path and cfg.agentihooks_url and cfg.agentihooks_sync_interval > 0:
+        from agenticore.hooks import start_sync_watcher
+
+        start_sync_watcher(cfg.agentihooks_url, hooks_path, cfg.agentihooks_sync_interval)
+    if bundle_path and cfg.agentihooks_bundle_url and cfg.agentihooks_bundle_sync_interval > 0:
+        from agenticore.hooks import start_bundle_watcher
+
+        start_bundle_watcher(cfg.agentihooks_bundle_url, bundle_path, cfg.agentihooks_bundle_sync_interval)
+
+
+def _start_agentihub_watcher_if_needed(cfg, hub_path: Optional[Path]) -> None:
+    """Start agentihub watcher daemon thread if configured."""
+    if cfg.dev_mode or not hub_path or not cfg.agentihub_url:
+        return
+    if cfg.agentihub_sync_interval > 0:
+        from agenticore.hooks import start_agentihub_watcher
+
+        start_agentihub_watcher(cfg.agentihub_url, hub_path, cfg.agentihub_sync_interval)
 
 
 def _auto_register_with_bridge(cfg):
@@ -1267,12 +1267,58 @@ def _auto_register_with_bridge(cfg):
         logger.warning("AgentiBridge registration failed: %s — A2A discovery unavailable", e)
 
 
+def _safe_result(future: Future, label: str):
+    """Extract result from a future, logging failures as non-fatal."""
+    try:
+        return future.result()
+    except Exception as e:
+        logger.warning("%s failed (non-fatal): %s", label, e)
+        return None
+
+
+def _install_bashrc() -> None:
+    """Install agenticore bashrc snippet into ~/.bashrc. Non-fatal."""
+    bashrc_src = Path("/opt/agenticore/bashrc")
+    bashrc_dst = Path.home() / ".bashrc"
+    if bashrc_src.exists():
+        try:
+            content = bashrc_dst.read_text() if bashrc_dst.exists() else ""
+            marker = "# agenticore-shell"
+            if marker in content:
+                content = content[: content.index(marker)]
+            content += f"{marker}\n{bashrc_src.read_text()}"
+            bashrc_dst.write_text(content)
+        except OSError:
+            pass
+
+
+def _bun_install_plugin_deps(runtime: Path) -> None:
+    """Install missing node_modules for plugins. Non-fatal, runs in background."""
+    try:
+        import glob as _glob
+
+        for pkg_json in _glob.glob(str(runtime / "plugins" / "cache" / "*" / "*" / "*" / "package.json")):
+            pkg_dir = Path(pkg_json).parent
+            if not (pkg_dir / "node_modules").exists():
+                subprocess.run(
+                    ["bun", "install", "--no-summary"],
+                    cwd=str(pkg_dir),
+                    capture_output=True,
+                    timeout=60,
+                )
+                logger.info("installed plugin deps in %s", pkg_dir)
+    except Exception as e:
+        logger.warning("bun install plugin deps failed (non-fatal): %s", e)
+
+
 def _ensure_claude_onboarding():
     """Ensure .claude.json has required flags for non-interactive operation.
 
     Sets hasCompletedOnboarding (skips login prompt), hasTrustDialogAccepted
     at root level, and project-level trust for the agent package directory
     (required for interactive/channel modes like Telegram).
+
+    Plugin dep install (bun) is NOT done here — it runs as a background thread.
     """
     claude_json = Path.home() / ".claude.json"
     try:
@@ -1298,9 +1344,12 @@ def _ensure_claude_onboarding():
 
         if dirty:
             claude_json.write_text(json.dumps(data, indent=2))
-            logger.info("claude onboarding: onboarding=%s trust=%s agent=%s",
-                        data["hasCompletedOnboarding"], data["hasTrustDialogAccepted"],
-                        agent_name or "none")
+            logger.info(
+                "claude onboarding: onboarding=%s trust=%s agent=%s",
+                data["hasCompletedOnboarding"],
+                data["hasTrustDialogAccepted"],
+                agent_name or "none",
+            )
     except Exception as e:
         logger.warning("claude onboarding patch failed: %s — non-fatal", e)
 
@@ -1324,8 +1373,7 @@ def _ensure_claude_onboarding():
                     for entry in entries:
                         old_path = entry.get("installPath", "")
                         if "/root/.claude/" in old_path:
-                            entry["installPath"] = old_path.replace(
-                                "/root/.claude/", str(runtime) + "/")
+                            entry["installPath"] = old_path.replace("/root/.claude/", str(runtime) + "/")
                             dirty = True
                 if dirty:
                     ip_file.write_text(json.dumps(ip_data, indent=2))
@@ -1338,22 +1386,11 @@ def _ensure_claude_onboarding():
                 for mp in km_data.values():
                     loc = mp.get("installLocation", "")
                     if "/root/.claude/" in loc:
-                        mp["installLocation"] = loc.replace(
-                            "/root/.claude/", str(runtime) + "/")
+                        mp["installLocation"] = loc.replace("/root/.claude/", str(runtime) + "/")
                         dirty = True
                 if dirty:
                     km_file.write_text(json.dumps(km_data, indent=2))
                     logger.info("fixed installLocation in known_marketplaces.json")
-            # Ensure plugin deps are installed (node_modules may be missing
-            # if plugins dir existed on PVC from a prior install without deps)
-            import glob
-            for pkg_json in glob.glob(str(runtime / "plugins" / "cache" / "*" / "*" / "*" / "package.json")):
-                pkg_dir = Path(pkg_json).parent
-                if not (pkg_dir / "node_modules").exists():
-                    import subprocess as _sp
-                    _sp.run(["bun", "install", "--no-summary"], cwd=str(pkg_dir),
-                            capture_output=True, timeout=60)
-                    logger.info("installed plugin deps in %s", pkg_dir)
     except Exception as e:
         logger.warning("plugin migration failed: %s — non-fatal", e)
 
@@ -1390,7 +1427,15 @@ def _enable_installed_plugins():
 
 
 def main():
-    """Entrypoint for ``python -m agenticore``."""
+    """Entrypoint for ``python -m agenticore``.
+
+    Phased parallel startup:
+      Phase 1 — setup tasks + git clones (all parallel via ThreadPoolExecutor)
+      Phase 2 — agentihooks init + enable plugins (sequential, needs Phase 1)
+      Phase 3 — agent mode init (sequential, needs Phase 2)
+    """
+    t0 = time.monotonic()
+
     # Auto-reap orphaned child processes (zombie prevention when running as PID 1)
     signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
@@ -1398,37 +1443,64 @@ def main():
 
     print("Starting Agenticore...", file=sys.stderr)
 
-    # Purge stale git credential helpers (legacy from gh CLI)
-    subprocess.run(
-        ["git", "config", "--global", "--unset-all", "credential.https://github.com.helper"], capture_output=True
-    )
-    subprocess.run(
-        ["git", "config", "--global", "--unset-all", "credential.https://gist.github.com.helper"], capture_output=True
-    )
+    # ── Phase 1: fire all independent tasks in parallel ──────────────
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="boot") as ex:
+        # Background bun install — fire and forget, never blocks boot
+        runtime_claude = Path.home() / ".claude"
+        ex.submit(_bun_install_plugin_deps, runtime_claude)
 
-    # Install bashrc for exec sessions
-    bashrc_src = Path("/opt/agenticore/bashrc")
-    bashrc_dst = Path.home() / ".bashrc"
-    if bashrc_src.exists():
-        try:
-            content = bashrc_dst.read_text() if bashrc_dst.exists() else ""
-            marker = "# agenticore-shell"
-            if marker in content:
-                content = content[: content.index(marker)]
-            content += f"{marker}\n{bashrc_src.read_text()}"
-            bashrc_dst.write_text(content)
-        except OSError:
-            pass
+        # Setup tasks (instant I/O)
+        f_git1 = ex.submit(
+            subprocess.run,
+            ["git", "config", "--global", "--unset-all", "credential.https://github.com.helper"],
+            capture_output=True,
+        )
+        f_git2 = ex.submit(
+            subprocess.run,
+            ["git", "config", "--global", "--unset-all", "credential.https://gist.github.com.helper"],
+            capture_output=True,
+        )
+        f_bashrc = ex.submit(_install_bashrc)
+        f_onboard = ex.submit(_ensure_claude_onboarding)
 
-    # Ensure Claude Code skips onboarding/login prompt (uses CLAUDE_CODE_OAUTH_TOKEN)
-    _ensure_claude_onboarding()
+        # Git clones — all 3 in parallel
+        f_hooks = ex.submit(_do_sync_agentihooks, cfg)
+        f_bundle = ex.submit(_do_sync_bundle, cfg)
+        f_hub = ex.submit(_do_sync_agentihub, cfg)
 
-    _auto_sync_agentihooks(cfg)
+        # Bridge registration — best-effort, overlaps with everything
+        f_bridge = ex.submit(_auto_register_with_bridge, cfg)
+
+        # Wait for setup tasks (fast, <1s)
+        for f in [f_git1, f_git2, f_bashrc, f_onboard]:
+            _safe_result(f, "setup")
+
+        t1 = time.monotonic()
+
+        # Wait for all 3 git clones
+        hooks_path = _safe_result(f_hooks, "sync_agentihooks")
+        bundle_path = _safe_result(f_bundle, "sync_bundle")
+        hub_path = _safe_result(f_hub, "sync_agentihub")
+
+        t2 = time.monotonic()
+        logger.info("boot phase1 done in %.2fs (setup=%.2fs git=%.2fs)", t2 - t0, t1 - t0, t2 - t1)
+
+    # ── Phase 2: agentihooks init + plugins (sequential) ─────────────
+    try:
+        _finish_agentihooks_init(cfg, hooks_path, bundle_path)
+    except Exception as e:
+        logger.warning("agentihooks init failed: %s — profiles may be unavailable", e)
+
     _enable_installed_plugins()  # must run AFTER agentihooks regenerates settings.json
-    _auto_sync_agentihub(cfg)
-    _auto_register_with_bridge(cfg)
+    _start_agentihub_watcher_if_needed(cfg, hub_path)
 
-    # Agent mode initialization
+    # Bridge future — don't care about result, already submitted
+    _safe_result(f_bridge, "bridge_registration")
+
+    t3 = time.monotonic()
+    logger.info("boot phase2 done in %.2fs (init+plugins)", t3 - t2)
+
+    # ── Phase 3: agent mode (needs hub_path + agentihooks init) ──────
     if cfg.agent_mode.enabled:
         print("Agent mode enabled — initializing...", file=sys.stderr)
         _register_agent_mode_tools()
@@ -1436,10 +1508,18 @@ def main():
 
         initialize_agent_mode()
 
+    t4 = time.monotonic()
+
     tools = mcp._tool_manager.list_tools()
     print(f"Tools: {len(tools)}", file=sys.stderr)
     for t in tools:
         print(f"  - {t.name}", file=sys.stderr)
+
+    print(
+        f"Agenticore ready in {t4 - t0:.1f}s "
+        f"(setup={t1 - t0:.1f}s git={t2 - t1:.1f}s init={t3 - t2:.1f}s agent={t4 - t3:.1f}s)",
+        file=sys.stderr,
+    )
 
     if cfg.server.transport == "sse":
         run_sse_server()
