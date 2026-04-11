@@ -8,7 +8,11 @@ gc() { git add -A && git commit -m "$(claude -p 'Write a short conventional comm
 anton() {
   local pkg_dir
   pkg_dir="$(curl -s http://localhost:8200/health 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("package_dir",""))' 2>/dev/null)"
+  if [ -z "$pkg_dir" ] && [ -n "$AGENTIHUB_AGENT" ]; then
+    pkg_dir="${AGENTICORE_SHARED_FS_ROOT:-$HOME}/agentihub/agents/${AGENTIHUB_AGENT}/package"
+  fi
   pkg_dir="${pkg_dir:-/app/package}"
+  [ -d "$pkg_dir" ] || { echo "package_dir not found: $pkg_dir"; return 1; }
   cd "$pkg_dir" && unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"
 }
 agentipull() {
