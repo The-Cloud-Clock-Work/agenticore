@@ -439,15 +439,21 @@ class AgentExecutor:
         cfg = get_config()
         am = cfg.agent_mode
 
-        # Always stateless for OpenAI-compat streaming (no multi-turn server-side memory)
-        mapping = register_session(external_uuid, stateless=True)
-        claude_session_id = mapping.claude_session_id
+        # Streaming calls need a transcript file for the event_relay hook to parse,
+        # so we DON'T pass --no-session-persistence. Pass an empty session id to
+        # build_claude_cmd so it adds neither --resume nor --session-id; claude
+        # opens a fresh session and writes the JSONL transcript normally.
+        # register_session(stateless=True) gives us a unique mapping for state
+        # tracking even though we don't forward its random claude_session_id
+        # to the CLI (that UUID would trigger a --resume of a non-existent
+        # session and silently produce no output).
+        register_session(external_uuid, stateless=True)
         save_state(external_uuid, wait=True, meta=meta)
 
         cmd = build_claude_cmd(
             message,
-            claude_session_id=claude_session_id,
-            stateless=True,
+            claude_session_id="",
+            stateless=False,
             model=model,
             max_turns=max_turns,
             system_prompt=system_prompt,
@@ -462,7 +468,7 @@ class AgentExecutor:
 
         env = build_subprocess_env()
         env["AGENTICORE_CORRELATION_ID"] = external_uuid
-        env["AGENTICORE_CLAUDE_SESSION_ID"] = claude_session_id
+        env["AGENTICORE_CLAUDE_SESSION_ID"] = ""
         env["AGENTICORE_EVENT_STREAM"] = "1"
 
         cwd = Path(am.package_dir)
