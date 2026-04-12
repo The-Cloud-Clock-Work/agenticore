@@ -374,6 +374,23 @@ def run_agentihooks_init(
             capture_output=True,
         )
 
+    # Clear stale sync locks from previous pod incarnations. /shared is a
+    # PVC so sync.lock + sync-daemon.pid survive pod restarts. If a prior
+    # pod crashed or was force-killed mid-init, the locks stay on disk and
+    # new agentihooks invocations deadlock waiting for a process that will
+    # never release them. PID in sync-daemon.pid is from the dead pod and
+    # references nothing in the new pod's namespace.
+    try:
+        state_dir = Path("/shared/.agentihooks")
+        if state_dir.exists():
+            for stale in ("sync.lock", "sync-daemon.pid"):
+                p = state_dir / stale
+                if p.exists():
+                    logger.info("Clearing stale %s from /shared (previous pod)", stale)
+                    p.unlink(missing_ok=True)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("stale-lock cleanup failed: %s", exc)
+
     profile = get_config().agentihooks_profile
 
     # Persist the bundle link BEFORE init. Passing --bundle to init is
