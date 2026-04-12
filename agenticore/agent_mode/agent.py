@@ -439,7 +439,10 @@ class AgentExecutor:
         cfg = get_config()
         am = cfg.agent_mode
 
-        # Always stateless for OpenAI-compat streaming (no multi-turn server-side memory)
+        # Streaming calls need a transcript file for the event_relay hook to parse,
+        # so we DON'T pass --no-session-persistence. Each call gets its own fresh
+        # session id (register_session with stateless=True still gives us a unique
+        # external uuid mapping) but Claude writes the JSONL transcript normally.
         mapping = register_session(external_uuid, stateless=True)
         claude_session_id = mapping.claude_session_id
         save_state(external_uuid, wait=True, meta=meta)
@@ -447,7 +450,7 @@ class AgentExecutor:
         cmd = build_claude_cmd(
             message,
             claude_session_id=claude_session_id,
-            stateless=True,
+            stateless=False,
             model=model,
             max_turns=max_turns,
             system_prompt=system_prompt,
