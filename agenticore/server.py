@@ -626,7 +626,7 @@ def _build_rest_app():
     """Build a Starlette app with REST endpoints mirroring MCP tools."""
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.responses import JSONResponse, Response, StreamingResponse
+    from starlette.responses import JSONResponse, StreamingResponse
     from starlette.routing import Route
 
     def health(request: Request):  # noqa: ARG001 — Starlette requires request param
@@ -985,11 +985,13 @@ def _build_rest_app():
 
             if "/stream-status" in found_tokens and not clean_message.strip():
                 if stream:
+
                     async def status_gen():
                         yield format_role_open_chunk(model_name or "agenticore-agent", request_uuid)
                         yield format_status_meta(stream_cfg, model_name or "agenticore-agent", request_uuid)
                         yield format_stop_chunk({}, model_name or "agenticore-agent", request_uuid)
                         yield format_done()
+
                     return StreamingResponse(status_gen(), media_type="text/event-stream")
                 return JSONResponse({"stream_config": stream_cfg, "agent_id": agent_id})
 

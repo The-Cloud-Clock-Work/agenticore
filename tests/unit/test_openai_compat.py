@@ -233,28 +233,36 @@ class TestSseFormatters:
 class TestFormatEventAsSse:
     def test_assistant_text(self):
         s = format_event_as_sse(
-            {"event_type": "assistant_text", "content": "hi"}, "m", "r",
+            {"event_type": "assistant_text", "content": "hi"},
+            "m",
+            "r",
         )
         d = _parse_sse_chunk(s)
         assert d["choices"][0]["delta"]["content"] == "hi"
 
     def test_thinking(self):
         s = format_event_as_sse(
-            {"event_type": "thinking", "content": "think"}, "m", "r",
+            {"event_type": "thinking", "content": "think"},
+            "m",
+            "r",
         )
         d = _parse_sse_chunk(s)
         assert d["choices"][0]["x_agenticore_event_type"] == "thinking"
 
     def test_tool_use(self):
         s = format_event_as_sse(
-            {"event_type": "tool_use", "content": json.dumps({"id": "x", "name": "B"})}, "m", "r",
+            {"event_type": "tool_use", "content": json.dumps({"id": "x", "name": "B"})},
+            "m",
+            "r",
         )
         d = _parse_sse_chunk(s)
         assert d["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "B"
 
     def test_tool_result(self):
         s = format_event_as_sse(
-            {"event_type": "tool_result", "content": json.dumps({"output": "ok"})}, "m", "r",
+            {"event_type": "tool_result", "content": json.dumps({"output": "ok"})},
+            "m",
+            "r",
         )
         d = _parse_sse_chunk(s)
         assert d["choices"][0]["delta"]["content"] == "ok"

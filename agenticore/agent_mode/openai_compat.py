@@ -96,12 +96,14 @@ def format_text_delta(text: str, model: str, request_uuid: str) -> str:
 def format_thinking_delta(text: str, model: str, request_uuid: str) -> str:
     """Streaming delta for thinking blocks. Marked with x_agenticore_event_type."""
     env = _chunk_envelope(model, request_uuid)
-    env["choices"] = [{
-        "index": 0,
-        "delta": {"content": text},
-        "finish_reason": None,
-        "x_agenticore_event_type": "thinking",
-    }]
+    env["choices"] = [
+        {
+            "index": 0,
+            "delta": {"content": text},
+            "finish_reason": None,
+            "x_agenticore_event_type": "thinking",
+        }
+    ]
     return _sse(env)
 
 
@@ -112,22 +114,26 @@ def format_tool_use_delta(tool_use_json: str, model: str, request_uuid: str) -> 
     except Exception:
         data = {}
     env = _chunk_envelope(model, request_uuid)
-    env["choices"] = [{
-        "index": 0,
-        "delta": {
-            "tool_calls": [{
-                "index": 0,
-                "id": data.get("id", ""),
-                "type": "function",
-                "function": {
-                    "name": data.get("name", ""),
-                    "arguments": json.dumps(data.get("input", {})),
-                },
-            }],
-        },
-        "finish_reason": None,
-        "x_agenticore_event_type": "tool_use",
-    }]
+    env["choices"] = [
+        {
+            "index": 0,
+            "delta": {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": data.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": data.get("name", ""),
+                            "arguments": json.dumps(data.get("input", {})),
+                        },
+                    }
+                ],
+            },
+            "finish_reason": None,
+            "x_agenticore_event_type": "tool_use",
+        }
+    ]
     return _sse(env)
 
 
@@ -138,14 +144,16 @@ def format_tool_result_delta(tool_result_json: str, model: str, request_uuid: st
     except Exception:
         data = {"output": str(tool_result_json)}
     env = _chunk_envelope(model, request_uuid)
-    env["choices"] = [{
-        "index": 0,
-        "delta": {"content": data.get("output", "")},
-        "finish_reason": None,
-        "x_agenticore_event_type": "tool_result",
-        "x_agenticore_tool_use_id": data.get("tool_use_id", ""),
-        "x_agenticore_is_error": bool(data.get("is_error", False)),
-    }]
+    env["choices"] = [
+        {
+            "index": 0,
+            "delta": {"content": data.get("output", "")},
+            "finish_reason": None,
+            "x_agenticore_event_type": "tool_result",
+            "x_agenticore_tool_use_id": data.get("tool_use_id", ""),
+            "x_agenticore_is_error": bool(data.get("is_error", False)),
+        }
+    ]
     return _sse(env)
 
 
@@ -170,12 +178,14 @@ def format_done() -> str:
 def format_status_meta(stream_cfg: dict, model: str, request_uuid: str) -> str:
     """Meta SSE chunk for /stream-status — reports current visibility config."""
     env = _chunk_envelope(model, request_uuid)
-    env["choices"] = [{
-        "index": 0,
-        "delta": {"content": json.dumps(stream_cfg)},
-        "finish_reason": None,
-        "x_agenticore_event_type": "stream_config",
-    }]
+    env["choices"] = [
+        {
+            "index": 0,
+            "delta": {"content": json.dumps(stream_cfg)},
+            "finish_reason": None,
+            "x_agenticore_event_type": "stream_config",
+        }
+    ]
     return _sse(env)
 
 

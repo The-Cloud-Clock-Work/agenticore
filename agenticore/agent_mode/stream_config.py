@@ -14,7 +14,6 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Optional
 
 from agenticore.jobs import _get_redis
 
@@ -123,12 +122,14 @@ def strip_tokens(message: str) -> tuple[str, list[str]]:
     if not message:
         return message, []
     found: list[str] = []
+
     def _replace(m: re.Match) -> str:
         tok = m.group(1)
         if tok in SLASH_TOKENS:
             found.append(tok)
             return ""
         return tok
+
     cleaned = _TOKEN_RE.sub(_replace, message)
     cleaned = re.sub(r"[ \t]+", " ", cleaned).strip()
     return cleaned, found

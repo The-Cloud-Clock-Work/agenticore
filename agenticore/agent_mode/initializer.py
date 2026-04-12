@@ -45,6 +45,7 @@ def _provision_from_agentihub(cfg) -> None:
         if aliases_file.exists():
             try:
                 import yaml
+
                 aliases = yaml.safe_load(aliases_file.read_text()) or {}
                 if agent_name in aliases:
                     resolved = hub_path / "agents" / aliases[agent_name]
@@ -59,7 +60,9 @@ def _provision_from_agentihub(cfg) -> None:
             agents_dir = hub_path / "agents"
             if agents_dir.exists():
                 available = [d.name for d in agents_dir.iterdir() if d.is_dir()]
-            raise RuntimeError(f"Agent '{agent_name}' not found in agentihub at {hub_path / 'agents' / agent_name}. Available: {available}")
+            raise RuntimeError(
+                f"Agent '{agent_name}' not found in agentihub at {hub_path / 'agents' / agent_name}. Available: {available}"
+            )
 
     # Point package_dir and evaluation_dir at the hub path — no copy
     src_package = agent_dir / "package"
@@ -407,6 +410,7 @@ def _bg_install_event_relay_hook() -> None:
     completed when the bg thread starts.
     """
     import time as _time
+
     relay_script = Path("/shared/agentihooks/hooks/observability/event_relay.py")
     for _ in range(12):
         if relay_script.exists():
@@ -416,7 +420,6 @@ def _bg_install_event_relay_hook() -> None:
         _install_event_relay_hook()
     except Exception as e:
         _log.warning("Event relay hook install failed (non-fatal, background): %s", e)
-
 
 
 def initialize_agent_mode() -> list[threading.Thread]:

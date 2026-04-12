@@ -265,6 +265,7 @@ class AgentExecutor:
         # Pre-call: render MCP whitelist from .agentihooks.json
         try:
             from agenticore.hooks import render_mcp_whitelist
+
             render_mcp_whitelist(cwd, disable_servers=disable_mcp_servers)
         except Exception as e:
             _log.warning("Pre-call MCP render failed (non-fatal): %s", e)
@@ -470,6 +471,7 @@ class AgentExecutor:
 
         try:
             from agenticore.hooks import render_mcp_whitelist
+
             render_mcp_whitelist(cwd, disable_servers=disable_mcp_servers)
         except Exception as e:
             _log.warning("Pre-call MCP render failed (non-fatal): %s", e)
@@ -505,15 +507,13 @@ class AgentExecutor:
             raise
 
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=max(5, resolved_timeout)
-            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=max(5, resolved_timeout))
         except asyncio.TimeoutError:
             try:
                 proc.kill()
             except Exception:
                 pass
-            stdout_bytes, stderr_bytes = b"", b""
+            stdout_bytes, _ = b"", b""
 
         out_text = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
         result = digest_claude_output(out_text)
