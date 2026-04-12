@@ -375,6 +375,30 @@ def run_agentihooks_init(
         )
 
     profile = get_config().agentihooks_profile
+
+    # Persist the bundle link BEFORE init. Passing --bundle to init is
+    # transient — it tells init where to read this one time but doesn't
+    # write the link to state.json. Without a persisted link, subsequent
+    # agentihooks invocations (including the pre-call MCP render hook and
+    # any interactive shell) see "No bundle linked" and refuse to merge
+    # the bundle's master .mcp.json into ~/.claude.json. Net effect:
+    # Claude Code sessions spawn with zero MCP servers, which silently
+    # breaks agents that rely on MCP tool access. Run `bundle link`
+    # explicitly so state.json carries the linkage across restarts.
+    if bundle_path and bundle_path.exists():
+        link_cmd = ["agentihooks", "bundle", "link", str(bundle_path)]
+        logger.info("Running: %s", " ".join(link_cmd))
+        link_result = subprocess.run(link_cmd, capture_output=True, text=True)
+        if link_result.returncode != 0:
+            logger.warning(
+                "agentihooks bundle link failed (exit %d): %s",
+                link_result.returncode,
+                link_result.stderr.strip(),
+            )
+        else:
+            for line in (link_result.stdout or "").strip().splitlines():
+                logger.info("agentihooks: %s", line)
+
     cmd = ["agentihooks", "init", "--profile", profile]
     if bundle_path and bundle_path.exists():
         cmd.extend(["--bundle", str(bundle_path)])
@@ -389,6 +413,34 @@ def run_agentihooks_init(
     if result.returncode != 0:
         logger.error("agentihooks init failed (exit %d):\n%s", result.returncode, result.stderr)
         raise RuntimeError(f"agentihooks init failed: {result.stderr}")
+
+    # Post-init assertion: if a bundle was provided, ~/.claude.json MUST
+    # have at least one MCP server registered. Zero servers = bundle link
+    # or init silently no-op'd, meaning every subsequent claude subprocess
+    # will start with no MCP tools. Fail loudly instead of limping on.
+    if bundle_path and bundle_path.exists():
+        try:
+            from pathlib import Path as _P
+            import json as _json
+
+            claude_json = _P("/shared/.claude.json")
+            if claude_json.exists():
+                data = _json.loads(claude_json.read_text())
+                mcp_count = len(data.get("mcpServers", {}))
+                if mcp_count == 0:
+                    logger.error(
+                        "agentihooks init: bundle linked but ~/.claude.json "
+                        "mcpServers is empty. Agent will start with no MCP "
+                        "tools. Check bundle .claude/.mcp.json integrity."
+                    )
+                else:
+                    logger.info(
+                        "agentihooks init: ~/.claude.json mcpServers count=%d",
+                        mcp_count,
+                    )
+        except Exception as exc:  # pragma: no cover — belt-and-braces observability
+            logger.warning("agentihooks init post-check failed: %s", exc)
+
     logger.info(
         "agentihooks init complete in %.2fs (profile=%s, bundle=%s, repo=%s)",
         time.monotonic() - t0,
