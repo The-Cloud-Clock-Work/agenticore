@@ -45,6 +45,7 @@ def _get_mcp_tool_names() -> list:
     """Read actual registered MCP tools from the server instance."""
     try:
         from agenticore.server import mcp
+
         return sorted(t.name for t in mcp._tool_manager.list_tools())
     except Exception:
         return []
@@ -122,8 +123,10 @@ def _get_running_jobs_count(cfg: Config) -> int:
             return 0
         if _redis_client is None:
             _redis_client = redis_lib.Redis.from_url(
-                cfg.redis.url, decode_responses=True,
-                socket_timeout=2, socket_connect_timeout=2,
+                cfg.redis.url,
+                decode_responses=True,
+                socket_timeout=2,
+                socket_connect_timeout=2,
             )
         prefix = cfg.redis.key_prefix
         job_ids = _redis_client.zrevrange(f"{prefix}:job:idx", 0, -1) or []
