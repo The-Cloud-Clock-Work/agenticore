@@ -370,3 +370,161 @@ class AgentExecutor:
                 result["result"] = error_text or f"Claude exited with code {proc.returncode}"
 
         return result
+
+    async def _spawn_subprocess(
+        self, cmd: list, cwd: Path, env: dict, context: Optional[dict] = None
+    ) -> tuple[asyncio.subprocess.Process, Optional[bytes]]:
+        """Spawn the Claude subprocess without awaiting communicate().
+
+        Returns (process, stdin_data). Caller is responsible for draining
+        stdout/stderr and awaiting completion.
+        """
+        stdin_data = json.dumps(context).encode() if context else None
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(cwd),
+            env=env,
+            stdin=asyncio.subprocess.PIPE if stdin_data else asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        return proc, stdin_data
+
+    async def execute_streaming(
+        self,
+        message: str,
+        external_uuid: str,
+        stream_cfg: dict,
+        model: str = "",
+        max_turns: int = 0,
+        system_prompt: str = "",
+        append_system_prompt: Optional[bool] = None,
+        permission_mode: str = "",
+        effort: str = "",
+        max_budget_usd: float = 0,
+        fallback_model: str = "",
+        allowed_tools: str = "",
+        disallowed_tools: str = "",
+        timeout: int = 0,
+        context: Optional[dict] = None,
+        meta: Optional[dict] = None,
+        disable_mcp_servers: Optional[list] = None,
+        request_uuid: str = "",
+        sse_model_name: str = "",
+    ):
+        """Streaming variant of execute(). Yields SSE chunk strings.
+
+        Spawns the Claude subprocess, then concurrently tails the per-uuid
+        Redis Stream of hook events while the subprocess runs. Each visible
+        event is mapped to an OpenAI delta chunk and yielded immediately.
+        On done sentinel (or process exit), drains stdout, digests the
+        result, and yields a final stop chunk + [DONE].
+        """
+        from agenticore.agent_mode.event_tailer import tail_event_stream
+        from agenticore.agent_mode.openai_compat import (
+            format_done,
+            format_event_as_sse,
+            format_role_open_chunk,
+            format_stop_chunk,
+        )
+        from agenticore.agent_mode.session_registry import (
+            mark_session_complete,
+            mark_session_failed,
+            register_session,
+        )
+        from agenticore.agent_mode.state import save_state
+        from agenticore.runner import build_subprocess_env
+
+        cfg = get_config()
+        am = cfg.agent_mode
+
+        # Always stateless for OpenAI-compat streaming (no multi-turn server-side memory)
+        mapping = register_session(external_uuid, stateless=True)
+        claude_session_id = mapping.claude_session_id
+        save_state(external_uuid, wait=True, meta=meta)
+
+        cmd = build_claude_cmd(
+            message,
+            claude_session_id=claude_session_id,
+            stateless=True,
+            model=model,
+            max_turns=max_turns,
+            system_prompt=system_prompt,
+            append_system_prompt=append_system_prompt,
+            permission_mode=permission_mode,
+            effort=effort,
+            max_budget_usd=max_budget_usd,
+            fallback_model=fallback_model,
+            allowed_tools=allowed_tools,
+            disallowed_tools=disallowed_tools,
+        )
+
+        env = build_subprocess_env()
+        env["AGENTICORE_CORRELATION_ID"] = external_uuid
+        env["AGENTICORE_CLAUDE_SESSION_ID"] = claude_session_id
+        env["AGENTICORE_EVENT_STREAM"] = "1"
+
+        cwd = Path(am.package_dir)
+        if not cwd.exists():
+            cwd = Path.cwd()
+
+        try:
+            from agenticore.hooks import render_mcp_whitelist
+            render_mcp_whitelist(cwd, disable_servers=disable_mcp_servers)
+        except Exception as e:
+            _log.warning("Pre-call MCP render failed (non-fatal): %s", e)
+
+        resolved_timeout = timeout or am.timeout
+        rid = request_uuid or external_uuid
+        mdl = sse_model_name or model or am.model
+
+        proc, stdin_data = await self._spawn_subprocess(cmd, cwd, env, context)
+
+        if stdin_data and proc.stdin is not None:
+            try:
+                proc.stdin.write(stdin_data)
+                await proc.stdin.drain()
+                proc.stdin.close()
+            except Exception:
+                pass
+
+        yield format_role_open_chunk(mdl, rid)
+
+        try:
+            async for event in tail_event_stream(external_uuid, stream_cfg, proc, resolved_timeout):
+                if event.get("event_type") == "done":
+                    break
+                chunk = format_event_as_sse(event, mdl, rid)
+                if chunk:
+                    yield chunk
+        except asyncio.CancelledError:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            raise
+
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=max(5, resolved_timeout)
+            )
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            stdout_bytes, stderr_bytes = b"", b""
+
+        out_text = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
+        result = digest_claude_output(out_text)
+
+        if proc.returncode and proc.returncode != 0 and not result["is_error"]:
+            result["is_error"] = True
+
+        if result["is_error"]:
+            mark_session_failed(external_uuid)
+        else:
+            mark_session_complete(external_uuid)
+
+        yield format_stop_chunk(result.get("usage", {}), mdl, rid)
+        yield format_done()

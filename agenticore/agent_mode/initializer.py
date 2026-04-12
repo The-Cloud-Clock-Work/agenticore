@@ -347,6 +347,78 @@ def _bg_install_notification_hook(package_dir: str) -> None:
         _log.warning("Notification hook install failed (non-fatal, background): %s", e)
 
 
+def _install_event_relay_hook() -> None:
+    """Wire the agentihooks event_relay.py script for SSE event streaming.
+
+    Adds PostToolUse + Stop + Notification entries to ~/.claude/settings.json
+    pointing at the relay script in the agentihooks PVC mount. The script
+    self-gates on AGENTICORE_EVENT_STREAM=1 so non-streaming traffic is a no-op.
+    Idempotent — safe to call alongside _install_notification_hook.
+    """
+    import json
+
+    relay_script = "/shared/agentihooks/hooks/observability/event_relay.py"
+    if not Path(relay_script).exists():
+        _log.info("Event relay script not found at %s — skipping wire-up", relay_script)
+        return
+
+    claude_home = Path(os.getenv("CLAUDE_CODE_HOME_DIR", str(Path.home())))
+    settings_path = claude_home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings = {}
+    if settings_path.exists():
+        try:
+            with open(settings_path) as f:
+                settings = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            settings = {}
+
+    hooks = settings.get("hooks", {})
+    relay_cmd = f"python3 {relay_script}"
+
+    hook_entries = {
+        "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": relay_cmd}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": relay_cmd}]}],
+        "Notification": [{"hooks": [{"type": "command", "command": relay_cmd}]}],
+    }
+
+    for hook_name, entries in hook_entries.items():
+        existing = hooks.get(hook_name, [])
+        existing_cmds = set()
+        for e in existing:
+            for h in e.get("hooks", []):
+                existing_cmds.add(h.get("command", ""))
+        for entry in entries:
+            cmd = entry["hooks"][0]["command"]
+            if cmd not in existing_cmds:
+                existing.append(entry)
+        hooks[hook_name] = existing
+
+    settings["hooks"] = hooks
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
+    _log.info("Event relay hooks wired in settings.json (PostToolUse + Stop + Notification)")
+
+
+def _bg_install_event_relay_hook() -> None:
+    """Wrapper for background thread — catches all exceptions.
+
+    Polls up to 60s for the relay script since agentihooks sync may not have
+    completed when the bg thread starts.
+    """
+    import time as _time
+    relay_script = Path("/shared/agentihooks/hooks/observability/event_relay.py")
+    for _ in range(12):
+        if relay_script.exists():
+            break
+        _time.sleep(5)
+    try:
+        _install_event_relay_hook()
+    except Exception as e:
+        _log.warning("Event relay hook install failed (non-fatal, background): %s", e)
+
+
+
 def initialize_agent_mode() -> list[threading.Thread]:
     """Main initialization entry point for agent mode.
 
@@ -415,6 +487,14 @@ def initialize_agent_mode() -> list[threading.Thread]:
     )
     t_hooks.start()
     bg_threads.append(t_hooks)
+
+    t_relay = threading.Thread(
+        target=_bg_install_event_relay_hook,
+        name="event-relay-hook",
+        daemon=True,
+    )
+    t_relay.start()
+    bg_threads.append(t_relay)
 
     # Step 6: Telegram channel (already Popen/detached)
     _start_telegram_channel(am.package_dir, am.model)

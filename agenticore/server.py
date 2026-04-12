@@ -626,7 +626,7 @@ def _build_rest_app():
     """Build a Starlette app with REST endpoints mirroring MCP tools."""
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.responses import JSONResponse, Response
+    from starlette.responses import JSONResponse, Response, StreamingResponse
     from starlette.routing import Route
 
     def health(request: Request):  # noqa: ARG001 — Starlette requires request param
@@ -819,6 +819,8 @@ def _build_rest_app():
     if cfg.agent_mode.enabled:
 
         async def post_completions(request: Request):
+            from agenticore.agent_mode import stream_config as sc
+
             body = await request.json()
             if "message" not in body or "uuid" not in body:
                 return JSONResponse({"success": False, "error": "message and uuid are required"}, status_code=400)
@@ -826,6 +828,10 @@ def _build_rest_app():
             ctx = body.get("context")
             meta_dict = body.get("meta", {})
             wait = body.get("wait", True)
+
+            agent_id = os.environ.get("AGENTIHUB_AGENT", "default")
+            clean_message, _stream_cfg, _found = sc.get_for_request(agent_id, body["message"])
+            body["message"] = clean_message
 
             if wait:
                 from agenticore.agent_mode.agent import AgentExecutor
@@ -940,10 +946,14 @@ def _build_rest_app():
             from agenticore.agent_mode.openai_compat import (
                 build_openai_error,
                 build_openai_response,
-                build_openai_stream_chunks,
                 extract_request_id,
                 flatten_messages,
+                format_done,
+                format_role_open_chunk,
+                format_status_meta,
+                format_stop_chunk,
             )
+            from agenticore.agent_mode import stream_config as sc
 
             body = await request.json()
             messages = body.get("messages")
@@ -952,12 +962,10 @@ def _build_rest_app():
                 return JSONResponse(err, status_code=code)
 
             stream = body.get("stream", False)
-            message = flatten_messages(messages)
+            raw_message = flatten_messages(messages)
             headers = {k.decode(): v.decode() for k, v in request.scope.get("headers", [])}
             request_uuid = extract_request_id(headers, body)
             raw_model = body.get("model", "")
-            # Strip provider prefixes (e.g. "openai/publishing-agent") and
-            # ignore model names that aren't valid Claude model aliases.
             valid_models = {
                 "sonnet",
                 "opus",
@@ -970,9 +978,21 @@ def _build_rest_app():
             }
             model_name = raw_model.split("/")[-1] if "/" in raw_model else raw_model
             if model_name not in valid_models:
-                model_name = ""  # fall back to AGENT_MODE_MODEL default
+                model_name = ""
 
-            # Concurrency gate for OpenAI-compat path
+            agent_id = os.environ.get("AGENTIHUB_AGENT", "default")
+            clean_message, stream_cfg, found_tokens = sc.get_for_request(agent_id, raw_message)
+
+            if "/stream-status" in found_tokens and not clean_message.strip():
+                if stream:
+                    async def status_gen():
+                        yield format_role_open_chunk(model_name or "agenticore-agent", request_uuid)
+                        yield format_status_meta(stream_cfg, model_name or "agenticore-agent", request_uuid)
+                        yield format_stop_chunk({}, model_name or "agenticore-agent", request_uuid)
+                        yield format_done()
+                    return StreamingResponse(status_gen(), media_type="text/event-stream")
+                return JSONResponse({"stream_config": stream_cfg, "agent_id": agent_id})
+
             from agenticore.runner import _get_job_semaphore
 
             sem = _get_job_semaphore()
@@ -981,9 +1001,23 @@ def _build_rest_app():
                 return JSONResponse(err, status_code=code)
 
             executor = AgentExecutor()
+
+            if stream:
+                gen = executor.execute_streaming(
+                    message=clean_message,
+                    external_uuid=request_uuid,
+                    stream_cfg=stream_cfg,
+                    model=model_name,
+                    timeout=body.get("timeout", 0),
+                    disable_mcp_servers=body.get("disable_mcp_servers"),
+                    request_uuid=request_uuid,
+                    sse_model_name=model_name or "agenticore-agent",
+                )
+                return StreamingResponse(gen, media_type="text/event-stream")
+
             async with sem:
                 result = await executor.execute(
-                    message=message,
+                    message=clean_message,
                     external_uuid=request_uuid,
                     wait=True,
                     stateless=True,
@@ -995,10 +1029,6 @@ def _build_rest_app():
             if result.get("is_error"):
                 err, code = build_openai_error(result.get("error", "Agent error"), 500)
                 return JSONResponse(err, status_code=code)
-
-            if stream:
-                sse_payload = build_openai_stream_chunks(result, model_name, request_uuid)
-                return Response(sse_payload, media_type="text/event-stream")
 
             return JSONResponse(build_openai_response(result, model_name, request_uuid))
 

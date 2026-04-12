@@ -1,5 +1,7 @@
 """Unit tests for agenticore.agent_mode.openai_compat."""
 
+import json
+
 import pytest
 
 from agenticore.agent_mode.openai_compat import (
@@ -7,6 +9,15 @@ from agenticore.agent_mode.openai_compat import (
     build_openai_response,
     extract_request_id,
     flatten_messages,
+    format_done,
+    format_event_as_sse,
+    format_role_open_chunk,
+    format_status_meta,
+    format_stop_chunk,
+    format_text_delta,
+    format_thinking_delta,
+    format_tool_result_delta,
+    format_tool_use_delta,
 )
 
 
@@ -133,3 +144,123 @@ class TestExtractRequestId:
     def test_generates_uuid_for_empty_headers(self):
         rid = extract_request_id({}, {})
         assert len(rid) == 36
+
+
+def _parse_sse_chunk(s: str) -> dict:
+    assert s.startswith("data: ")
+    assert s.endswith("\n\n")
+    return json.loads(s[6:-2])
+
+
+@pytest.mark.unit
+class TestSseFormatters:
+    def test_role_open_chunk(self):
+        s = format_role_open_chunk("sonnet", "rid-1")
+        d = _parse_sse_chunk(s)
+        assert d["object"] == "chat.completion.chunk"
+        assert d["choices"][0]["delta"] == {"role": "assistant"}
+        assert d["choices"][0]["finish_reason"] is None
+
+    def test_text_delta(self):
+        s = format_text_delta("hello world", "sonnet", "rid-2")
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["delta"]["content"] == "hello world"
+        assert d["choices"][0]["finish_reason"] is None
+
+    def test_thinking_delta_marked(self):
+        s = format_thinking_delta("I should think", "sonnet", "rid-3")
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["delta"]["content"] == "I should think"
+        assert d["choices"][0]["x_agenticore_event_type"] == "thinking"
+
+    def test_tool_use_delta(self):
+        tu = json.dumps({"id": "tu_1", "name": "Bash", "input": {"command": "ls"}})
+        s = format_tool_use_delta(tu, "sonnet", "rid-4")
+        d = _parse_sse_chunk(s)
+        tc = d["choices"][0]["delta"]["tool_calls"][0]
+        assert tc["id"] == "tu_1"
+        assert tc["function"]["name"] == "Bash"
+        assert json.loads(tc["function"]["arguments"]) == {"command": "ls"}
+        assert d["choices"][0]["x_agenticore_event_type"] == "tool_use"
+
+    def test_tool_use_delta_handles_garbage(self):
+        s = format_tool_use_delta("not json", "sonnet", "rid-4b")
+        d = _parse_sse_chunk(s)
+        tc = d["choices"][0]["delta"]["tool_calls"][0]
+        assert tc["id"] == ""
+        assert tc["function"]["name"] == ""
+
+    def test_tool_result_delta(self):
+        tr = json.dumps({"tool_use_id": "tu_1", "is_error": False, "output": "rows: 5"})
+        s = format_tool_result_delta(tr, "sonnet", "rid-5")
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["delta"]["content"] == "rows: 5"
+        assert d["choices"][0]["x_agenticore_event_type"] == "tool_result"
+        assert d["choices"][0]["x_agenticore_tool_use_id"] == "tu_1"
+        assert d["choices"][0]["x_agenticore_is_error"] is False
+
+    def test_tool_result_propagates_is_error(self):
+        tr = json.dumps({"tool_use_id": "x", "is_error": True, "output": "boom"})
+        s = format_tool_result_delta(tr, "sonnet", "rid-5b")
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["x_agenticore_is_error"] is True
+
+    def test_stop_chunk_with_usage(self):
+        s = format_stop_chunk({"input_tokens": 50, "output_tokens": 100}, "sonnet", "rid-6")
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["finish_reason"] == "stop"
+        assert d["usage"]["prompt_tokens"] == 50
+        assert d["usage"]["completion_tokens"] == 100
+        assert d["usage"]["total_tokens"] == 150
+
+    def test_stop_chunk_no_usage(self):
+        s = format_stop_chunk({}, "sonnet", "rid-6b")
+        d = _parse_sse_chunk(s)
+        assert d["usage"]["total_tokens"] == 0
+
+    def test_done_marker(self):
+        assert format_done() == "data: [DONE]\n\n"
+
+    def test_status_meta(self):
+        cfg = {"show_thinking": True, "show_tools": False, "show_text": True}
+        s = format_status_meta(cfg, "sonnet", "rid-7")
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["x_agenticore_event_type"] == "stream_config"
+        assert json.loads(d["choices"][0]["delta"]["content"]) == cfg
+
+
+@pytest.mark.unit
+class TestFormatEventAsSse:
+    def test_assistant_text(self):
+        s = format_event_as_sse(
+            {"event_type": "assistant_text", "content": "hi"}, "m", "r",
+        )
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["delta"]["content"] == "hi"
+
+    def test_thinking(self):
+        s = format_event_as_sse(
+            {"event_type": "thinking", "content": "think"}, "m", "r",
+        )
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["x_agenticore_event_type"] == "thinking"
+
+    def test_tool_use(self):
+        s = format_event_as_sse(
+            {"event_type": "tool_use", "content": json.dumps({"id": "x", "name": "B"})}, "m", "r",
+        )
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "B"
+
+    def test_tool_result(self):
+        s = format_event_as_sse(
+            {"event_type": "tool_result", "content": json.dumps({"output": "ok"})}, "m", "r",
+        )
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["delta"]["content"] == "ok"
+
+    def test_unknown_returns_none(self):
+        assert format_event_as_sse({"event_type": "garbage", "content": ""}, "m", "r") is None
+
+    def test_done_returns_none(self):
+        assert format_event_as_sse({"event_type": "done", "content": ""}, "m", "r") is None
