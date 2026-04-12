@@ -159,7 +159,6 @@ class TestRestCompletions:
         with (
             patch("agenticore.agent_mode.completions.create_completion", return_value=mock_completion),
             patch("agenticore.agent_mode.completions.enqueue_completion", return_value=None),
-            patch("agenticore.agent_mode.notifications.save_notification_config"),
         ):
             client = TestClient(agent_rest_app)
             resp = client.post(

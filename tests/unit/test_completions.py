@@ -132,14 +132,11 @@ class TestCompletionCRUD:
         c = create_completion(
             uuid="cp1",
             message="task",
-            callback_url="https://example.com/webhook",
             request_params={"model": "opus", "max_turns": 50},
         )
-        assert c.callback_url == "https://example.com/webhook"
         assert c.request_params["model"] == "opus"
 
         retrieved = get_completion("cp1")
-        assert retrieved.callback_url == "https://example.com/webhook"
         assert retrieved.request_params["max_turns"] == 50
 
 

@@ -51,7 +51,6 @@ def save_state(
     external_uuid: str,
     wait: bool = True,
     meta: Optional[dict] = None,
-    notifications: Optional[dict] = None,
 ) -> dict:
     """Save conversation state for a request.
 
@@ -62,7 +61,6 @@ def save_state(
         "uuid": external_uuid,
         "wait": wait,
         "meta": meta or {},
-        "notifications": notifications or {},
         "updated_at": now,
     }
 
