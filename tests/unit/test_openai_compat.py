@@ -170,31 +170,33 @@ class TestSseFormatters:
     def test_thinking_delta_marked(self):
         s = format_thinking_delta("I should think", "sonnet", "rid-3")
         d = _parse_sse_chunk(s)
-        assert d["choices"][0]["delta"]["content"] == "I should think"
+        assert d["choices"][0]["delta"]["reasoning_content"] == "I should think"
         assert d["choices"][0]["x_agenticore_event_type"] == "thinking"
 
     def test_tool_use_delta(self):
         tu = json.dumps({"id": "tu_1", "name": "Bash", "input": {"command": "ls"}})
         s = format_tool_use_delta(tu, "sonnet", "rid-4")
         d = _parse_sse_chunk(s)
-        tc = d["choices"][0]["delta"]["tool_calls"][0]
-        assert tc["id"] == "tu_1"
-        assert tc["function"]["name"] == "Bash"
-        assert json.loads(tc["function"]["arguments"]) == {"command": "ls"}
+        content = d["choices"][0]["delta"]["content"]
+        assert "tool_use:Bash" in content
+        assert "ls" in content
         assert d["choices"][0]["x_agenticore_event_type"] == "tool_use"
+        assert d["choices"][0]["x_agenticore_tool_name"] == "Bash"
+        assert d["choices"][0]["x_agenticore_tool_use_id"] == "tu_1"
 
     def test_tool_use_delta_handles_garbage(self):
         s = format_tool_use_delta("not json", "sonnet", "rid-4b")
         d = _parse_sse_chunk(s)
-        tc = d["choices"][0]["delta"]["tool_calls"][0]
-        assert tc["id"] == ""
-        assert tc["function"]["name"] == ""
+        content = d["choices"][0]["delta"]["content"]
+        assert "tool_use:tool" in content
 
     def test_tool_result_delta(self):
         tr = json.dumps({"tool_use_id": "tu_1", "is_error": False, "output": "rows: 5"})
         s = format_tool_result_delta(tr, "sonnet", "rid-5")
         d = _parse_sse_chunk(s)
-        assert d["choices"][0]["delta"]["content"] == "rows: 5"
+        content = d["choices"][0]["delta"]["content"]
+        assert "rows: 5" in content
+        assert "```tool_result" in content
         assert d["choices"][0]["x_agenticore_event_type"] == "tool_result"
         assert d["choices"][0]["x_agenticore_tool_use_id"] == "tu_1"
         assert d["choices"][0]["x_agenticore_is_error"] is False
@@ -256,7 +258,7 @@ class TestFormatEventAsSse:
             "r",
         )
         d = _parse_sse_chunk(s)
-        assert d["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "B"
+        assert "tool_use:B" in d["choices"][0]["delta"]["content"]
 
     def test_tool_result(self):
         s = format_event_as_sse(
@@ -265,7 +267,7 @@ class TestFormatEventAsSse:
             "r",
         )
         d = _parse_sse_chunk(s)
-        assert d["choices"][0]["delta"]["content"] == "ok"
+        assert "ok" in d["choices"][0]["delta"]["content"]
 
     def test_unknown_returns_none(self):
         assert format_event_as_sse({"event_type": "garbage", "content": ""}, "m", "r") is None

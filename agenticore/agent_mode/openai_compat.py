@@ -94,12 +94,14 @@ def format_text_delta(text: str, model: str, request_uuid: str) -> str:
 
 
 def format_thinking_delta(text: str, model: str, request_uuid: str) -> str:
-    """Streaming delta for thinking blocks. Marked with x_agenticore_event_type."""
+    """Streaming delta for thinking blocks. Uses delta.reasoning_content so
+    OpenAI-compatible clients (LibreChat, OpenWebUI, etc.) render it in a
+    dedicated reasoning panel instead of inlining into assistant text."""
     env = _chunk_envelope(model, request_uuid)
     env["choices"] = [
         {
             "index": 0,
-            "delta": {"content": text},
+            "delta": {"reasoning_content": text},
             "finish_reason": None,
             "x_agenticore_event_type": "thinking",
         }
@@ -108,50 +110,65 @@ def format_thinking_delta(text: str, model: str, request_uuid: str) -> str:
 
 
 def format_tool_use_delta(tool_use_json: str, model: str, request_uuid: str) -> str:
-    """Streaming delta for tool_use blocks. Maps to OpenAI tool_calls schema."""
+    """Streaming delta for tool_use blocks.
+
+    Emits as plain delta.content (markdown-fenced) instead of OpenAI's
+    delta.tool_calls schema. Reason: chat clients like LibreChat treat
+    delta.tool_calls as a request to execute the function client-side and
+    fail with 'Tool not found' because they don't have agenticore's tool
+    registry. We're not asking the client to execute anything — we're
+    showing the operator what the agent is doing — so a code block is the
+    right surface."""
     try:
         data = json.loads(tool_use_json) if isinstance(tool_use_json, str) else tool_use_json
     except Exception:
         data = {}
+    name = data.get("name", "tool")
+    inp = data.get("input", {})
+    try:
+        args_pretty = json.dumps(inp, indent=2, ensure_ascii=False)
+    except Exception:
+        args_pretty = str(inp)
+    rendered = f"\n\n```tool_use:{name}\n{args_pretty}\n```\n"
     env = _chunk_envelope(model, request_uuid)
     env["choices"] = [
         {
             "index": 0,
-            "delta": {
-                "tool_calls": [
-                    {
-                        "index": 0,
-                        "id": data.get("id", ""),
-                        "type": "function",
-                        "function": {
-                            "name": data.get("name", ""),
-                            "arguments": json.dumps(data.get("input", {})),
-                        },
-                    }
-                ],
-            },
+            "delta": {"content": rendered},
             "finish_reason": None,
             "x_agenticore_event_type": "tool_use",
+            "x_agenticore_tool_name": name,
+            "x_agenticore_tool_use_id": data.get("id", ""),
         }
     ]
     return _sse(env)
 
 
 def format_tool_result_delta(tool_result_json: str, model: str, request_uuid: str) -> str:
-    """Streaming delta for tool_result blocks. Custom event_type marker."""
+    """Streaming delta for tool_result blocks. Rendered as a fenced block so
+    chat clients show it inline below the tool_use block."""
     try:
         data = json.loads(tool_result_json) if isinstance(tool_result_json, str) else tool_result_json
     except Exception:
         data = {"output": str(tool_result_json)}
+    output = data.get("output", "")
+    if not isinstance(output, str):
+        try:
+            output = json.dumps(output, indent=2, ensure_ascii=False)
+        except Exception:
+            output = str(output)
+    is_error = bool(data.get("is_error", False))
+    fence = "tool_result:error" if is_error else "tool_result"
+    rendered = f"\n```{fence}\n{output}\n```\n"
     env = _chunk_envelope(model, request_uuid)
     env["choices"] = [
         {
             "index": 0,
-            "delta": {"content": data.get("output", "")},
+            "delta": {"content": rendered},
             "finish_reason": None,
             "x_agenticore_event_type": "tool_result",
             "x_agenticore_tool_use_id": data.get("tool_use_id", ""),
-            "x_agenticore_is_error": bool(data.get("is_error", False)),
+            "x_agenticore_is_error": is_error,
         }
     ]
     return _sse(env)
