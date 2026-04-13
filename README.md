@@ -326,11 +326,14 @@ Agent Mode:     Request → load package → claude -p "task" → result (+ noti
 
 ### Key features
 
+- **Real-time SSE streaming** — `stream=true` on `/v1/chat/completions`
+  delivers thinking blocks, tool calls, tool results, and assistant text as
+  live SSE deltas on the same open HTTP connection. Sticky per-agent
+  visibility toggles via `/show-thinking`, `/show-tools`, `/show-all`,
+  `/hide-*`. See [SSE Streaming reference](docs/reference/sse-streaming.md)
+  and [test it yourself](docs/getting-started/test-streaming.md).
 - **Async completion queue** — `wait=false` pushes to a Redis queue; a worker
-  process picks it up. Poll `GET /completions/{uuid}` or receive results via
-  webhook callback.
-- **Notification streaming** — Real-time `status`, `tool_call`, and `thinking`
-  events delivered to a `callback_url` during execution via Claude Code hooks.
+  process picks it up. Poll `GET /completions/{uuid}` for the result.
 - **Session continuity** — Conversations can be resumed across requests using
   the external correlation UUID.
 - **Redis+file fallback** — Same pattern as the job store. Everything works
@@ -343,22 +346,19 @@ Agent Mode:     Request → load package → claude -p "task" → result (+ noti
 AGENT_MODE=true AGENT_MODE_PACKAGE_DIR=./my-package \
   AGENTICORE_TRANSPORT=sse agenticore serve
 
-# Start the queue worker (separate terminal)
-AGENT_MODE=true AGENT_MODE_PACKAGE_DIR=./my-package \
-  python -m agenticore.agent_mode
+# Stream a conversation with live thinking + tool deltas
+curl -sN http://localhost:8200/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"/show-all"}]}'
 
-# Submit an async completion with webhook notifications
+curl -sN http://localhost:8200/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"list files in /tmp then summarize"}]}'
+
+# Or submit async and poll
 curl -X POST http://localhost:8200/completions \
   -H "Content-Type: application/json" \
-  -d '{
-    "message": "Analyze the auth module",
-    "uuid": "req-1",
-    "wait": false,
-    "callback_url": "https://your-app.com/webhook",
-    "notifications": {"status": true, "tool_call": true}
-  }'
-
-# Poll for result
+  -d '{"message":"Analyze the auth module","uuid":"req-1","wait":false}'
 curl http://localhost:8200/completions/req-1
 ```
 

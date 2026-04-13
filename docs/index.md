@@ -44,6 +44,7 @@ Deploy anywhere:
 
 - [Quickstart](getting-started/quickstart.md) — Install, start the server, submit your first job
 - [Connecting Clients](getting-started/connecting-clients.md) — MCP, REST, and CLI client setup
+- [Test Streaming](getting-started/test-streaming.md) — Port-forward an agent pod and watch thinking + tool calls stream live
 
 ## Architecture
 
@@ -65,3 +66,4 @@ Deploy anywhere:
 - [CLI Commands](reference/cli-commands.md) — All 11 CLI subcommands with flags and examples
 - [Configuration](reference/configuration.md) — All env vars, YAML config, file paths
 - [API Reference](reference/api-reference.md) — 5 MCP tools + 6 REST endpoints with schemas
+- [SSE Streaming](reference/sse-streaming.md) — Real-time thinking + tool deltas, slash token toggles, event schema, diagnostics
