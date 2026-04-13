@@ -942,7 +942,7 @@ def _build_rest_app():
             agent_id = os.environ.get("AGENTIHUB_AGENT", "default")
             clean_message, stream_cfg, found_tokens = sc.get_for_request(agent_id, raw_message)
 
-            if "/stream-status" in found_tokens and not clean_message.strip():
+            if found_tokens and not clean_message.strip():
                 if stream:
 
                     async def status_gen():
