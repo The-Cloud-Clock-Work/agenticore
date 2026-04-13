@@ -47,5 +47,5 @@ sse-starlette==3.2.0
 starlette==0.52.1
 typing-inspection==0.4.2
 typing_extensions==4.15.0
-uvicorn==0.40.0
+uvicorn==0.44.0
 yarl==1.22.0
