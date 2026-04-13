@@ -1,1 +1,7 @@
-{"channels": ["brain", "amygdala"]}
+{
+  "channels": [
+    "brain",
+    "amygdala"
+  ],
+  "profile": "anton"
+}
