@@ -324,8 +324,6 @@ def _register_agent_mode_tools():
         timeout: int = 0,
         context: str = "",
         meta: str = "{}",
-        callback_url: str = "",
-        notifications: str = "status",
         disable_mcp_servers: str = "",
     ) -> str:
         """Call the agent with a message. Returns JSON with result.
@@ -349,8 +347,6 @@ def _register_agent_mode_tools():
             timeout: Max execution time in seconds
             context: JSON dict passed via stdin to Claude
             meta: Platform metadata JSON for hooks
-            callback_url: Webhook URL for async notifications
-            notifications: Comma-separated notification types (status,tool_call,thinking)
 
         Returns:
             JSON with agent response or acceptance message
@@ -402,8 +398,6 @@ def _register_agent_mode_tools():
                     _enqueue_async_completion(
                         message=message,
                         uuid=uuid,
-                        callback_url=callback_url,
-                        notifications_param=notifications,
                         request_params=dict(
                             stateless=stateless,
                             model=model,
@@ -432,34 +426,16 @@ def _register_agent_mode_tools():
 def _enqueue_async_completion(
     message: str,
     uuid: str,
-    callback_url: str = "",
-    notifications_param=None,
     request_params: dict = None,
 ) -> dict:
     """Create and enqueue an async completion. Returns response dict."""
     from agenticore.agent_mode.completions import create_completion, enqueue_completion
-    from agenticore.agent_mode.notifications import (
-        NotificationConfig,
-        parse_notifications_param,
-        save_notification_config,
-    )
 
     completion = create_completion(
         uuid=uuid,
         message=message,
-        callback_url=callback_url,
         request_params=request_params or {},
     )
-
-    # Save notification config
-    notif_types = parse_notifications_param(notifications_param)
-    config = NotificationConfig(
-        callback_url=callback_url,
-        status=notif_types.get("status", True),
-        tool_call=notif_types.get("tool_call", False),
-        thinking=notif_types.get("thinking", False),
-    )
-    save_notification_config(uuid, config)
 
     # Enqueue — returns None if Redis available, dict if fallback needed, or {"rejected": True}
     cfg = get_config()
@@ -875,8 +851,6 @@ def _build_rest_app():
                 result = _enqueue_async_completion(
                     message=body["message"],
                     uuid=body["uuid"],
-                    callback_url=body.get("callback_url", ""),
-                    notifications_param=body.get("notifications", "status"),
                     request_params=dict(
                         stateless=body.get("stateless", False),
                         model=body.get("model", ""),
@@ -925,21 +899,6 @@ def _build_rest_app():
                     status_code=404,
                 )
             return JSONResponse({"success": True, "completion": completion.to_dict()})
-
-        async def patch_notifications_route(request: Request):
-            from agenticore.agent_mode.notifications import update_notification_config
-
-            uuid = request.path_params["uuid"]
-            body = await request.json()
-            config = update_notification_config(uuid, **body)
-            if config is None:
-                return JSONResponse(
-                    {"success": False, "error": f"Notification config not found: {uuid}"},
-                    status_code=404,
-                )
-            from dataclasses import asdict
-
-            return JSONResponse({"success": True, "notifications": asdict(config)})
 
         async def post_openai_chat_completions(request: Request):
             from agenticore.agent_mode.agent import AgentExecutor
@@ -1073,7 +1032,6 @@ def _build_rest_app():
                 Route("/completions", post_completions, methods=["POST"]),
                 Route("/completions", get_completions_list, methods=["GET"]),
                 Route("/completions/{uuid:path}", get_completion_route, methods=["GET"]),
-                Route("/completions/{uuid:path}/notifications", patch_notifications_route, methods=["PATCH"]),
                 Route("/v1/chat/completions", post_openai_chat_completions, methods=["POST"]),
                 Route("/v1/models", get_openai_models, methods=["GET"]),
             ]

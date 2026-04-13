@@ -44,7 +44,6 @@ class TestProcessCompletion:
 
         with (
             patch("agenticore.agent_mode.agent.AgentExecutor", return_value=mock_executor),
-            patch("agenticore.agent_mode.notifications.send_notification", new_callable=AsyncMock),
         ):
             await _process_completion({"uuid": "w1", "message": "test task", "request_params": {}})
 
@@ -80,7 +79,6 @@ class TestProcessCompletion:
 
         with (
             patch("agenticore.agent_mode.agent.AgentExecutor", return_value=mock_executor),
-            patch("agenticore.agent_mode.notifications.send_notification", new_callable=AsyncMock),
         ):
             await _process_completion({"uuid": "w2", "message": "fail task", "request_params": {}})
 
@@ -102,7 +100,6 @@ class TestProcessCompletion:
 
         with (
             patch("agenticore.agent_mode.agent.AgentExecutor", return_value=mock_executor),
-            patch("agenticore.agent_mode.notifications.send_notification", new_callable=AsyncMock),
         ):
             await _process_completion({"uuid": "w3", "message": "crash task", "request_params": {}})
 
@@ -110,49 +107,6 @@ class TestProcessCompletion:
         assert c is not None
         assert c.status == "failed"
         assert "boom" in c.error
-
-    @pytest.mark.asyncio
-    async def test_sends_notifications(self, tmp_path):
-        """Worker sends status notifications during processing."""
-        from agenticore.agent_mode.completions import create_completion
-        from agenticore.agent_mode.worker import _process_completion
-
-        create_completion(uuid="w4", message="notify task")
-
-        mock_result = {
-            "result": "ok",
-            "session_id": "",
-            "cost_usd": 0,
-            "duration_ms": 100,
-            "num_turns": 1,
-            "is_error": False,
-            "error": "",
-            "usage": {},
-            "tool_uses": [],
-        }
-
-        mock_notify = AsyncMock()
-        mock_executor = AsyncMock()
-        mock_executor.execute = AsyncMock(return_value=mock_result)
-
-        with (
-            patch("agenticore.agent_mode.agent.AgentExecutor", return_value=mock_executor),
-            patch("agenticore.agent_mode.notifications.send_notification", mock_notify),
-        ):
-            await _process_completion(
-                {
-                    "uuid": "w4",
-                    "message": "notify task",
-                    "callback_url": "https://example.com/hook",
-                    "request_params": {},
-                }
-            )
-
-        # Should have at least 2 notifications: started + completed
-        assert mock_notify.call_count >= 2
-        calls = [c.args for c in mock_notify.call_args_list]
-        event_types = [c[1] for c in calls]
-        assert "status" in event_types
 
 
 @pytest.mark.unit
@@ -182,7 +136,6 @@ class TestRunInlineCompletion:
 
         with (
             patch("agenticore.agent_mode.agent.AgentExecutor", return_value=mock_executor),
-            patch("agenticore.agent_mode.notifications.send_notification", new_callable=AsyncMock),
         ):
             await run_inline_completion({"uuid": "il1", "message": "inline task", "request_params": {}})
 

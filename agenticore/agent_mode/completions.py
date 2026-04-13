@@ -30,7 +30,6 @@ class Completion:
     error: str = ""
     usage: dict = field(default_factory=dict)
     tool_uses: list = field(default_factory=list)
-    callback_url: str = ""
     created_at: str = ""
     started_at: str = ""
     ended_at: str = ""
@@ -75,7 +74,6 @@ class Completion:
             error=data.get("error", ""),
             usage=usage,
             tool_uses=tool_uses,
-            callback_url=data.get("callback_url", ""),
             created_at=data.get("created_at", ""),
             started_at=data.get("started_at", ""),
             ended_at=data.get("ended_at", ""),
@@ -167,7 +165,6 @@ def _completion_file(uuid: str) -> Path:
 def create_completion(
     uuid: str,
     message: str,
-    callback_url: str = "",
     request_params: Optional[dict] = None,
 ) -> Completion:
     """Create a new completion and persist it."""
@@ -175,7 +172,6 @@ def create_completion(
         uuid=uuid,
         status="queued",
         message=message,
-        callback_url=callback_url,
         created_at=_now_iso(),
         request_params=request_params or {},
     )

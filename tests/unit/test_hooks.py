@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from agenticore.config import reset_config
 from agenticore.hooks import (
     _install_dir,
     start_bundle_watcher,
@@ -13,6 +14,17 @@ from agenticore.hooks import (
     start_sync_watcher,
     sync_agentihooks,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_config_singleton(monkeypatch):
+    """Reset the cached config singleton before every test in this module so
+    env-var changes (AGENTICORE_AGENTIHOOKS_PATH, AGENTICORE_SHARED_FS_ROOT)
+    take effect on the next get_config() call.
+    """
+    reset_config()
+    yield
+    reset_config()
 
 
 @pytest.mark.unit
@@ -54,6 +66,7 @@ class TestSyncAgentihooks:
 
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = ""
+            mock_cfg.return_value.dev_mode = False
             result = sync_agentihooks()
 
         assert result is None
@@ -64,6 +77,7 @@ class TestSyncAgentihooks:
 
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = ""
+            mock_cfg.return_value.dev_mode = False
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
                 result = sync_agentihooks()
 
@@ -77,6 +91,7 @@ class TestSyncAgentihooks:
 
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = ""
+            mock_cfg.return_value.dev_mode = False
             mock_cfg.return_value.repos.shared_fs_root = ""
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
                 with patch("agenticore.hooks._install_dir", return_value=tmp_path):
@@ -92,6 +107,7 @@ class TestSyncAgentihooks:
 
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = "https://github.com/other/repo"
+            mock_cfg.return_value.dev_mode = False
             mock_cfg.return_value.repos.shared_fs_root = ""
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
                 with patch("agenticore.hooks._install_dir", return_value=tmp_path):
@@ -105,6 +121,7 @@ class TestSyncAgentihooks:
 
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = "https://github.com/config/repo"
+            mock_cfg.return_value.dev_mode = False
             mock_cfg.return_value.repos.shared_fs_root = ""
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
                 with patch("agenticore.hooks._install_dir", return_value=tmp_path):

@@ -25,15 +25,12 @@ async def _process_completion(request: dict) -> None:
     """Process a single completion request from the queue."""
     from agenticore.agent_mode.agent import AgentExecutor
     from agenticore.agent_mode.completions import update_completion
-    from agenticore.agent_mode.notifications import send_notification
 
     uuid = request.get("uuid", "")
-    callback_url = request.get("callback_url", "")
 
     _log.info("Processing completion: %s", uuid)
 
     update_completion(uuid, status="running", started_at=_now_iso())
-    await send_notification(uuid, "status", {"status": "started", "uuid": uuid})
 
     executor = AgentExecutor()
     params = request.get("request_params", {})
@@ -62,17 +59,9 @@ async def _process_completion(request: dict) -> None:
             tool_uses=result.get("tool_uses", []),
         )
 
-        status_event = "completed" if not is_error else "failed"
-        await send_notification(uuid, "status", {"status": status_event, "uuid": uuid})
-
-        # Deliver final result
-        if callback_url:
-            await send_notification(uuid, "result", result)
-
     except Exception as e:
         _log.error("Completion %s failed: %s", uuid, e)
         update_completion(uuid, status="failed", error=str(e), ended_at=_now_iso())
-        await send_notification(uuid, "status", {"status": "failed", "uuid": uuid, "error": str(e)})
 
 
 async def completion_worker(max_concurrent: int = 1) -> None:
