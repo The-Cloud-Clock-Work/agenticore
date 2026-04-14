@@ -3,7 +3,7 @@
 import asyncio
 import json
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -196,6 +196,17 @@ class TestBuildClaudeCmd:
         cmd = build_claude_cmd("task", output_format="text")
         idx = cmd.index("--output-format")
         assert cmd[idx + 1] == "text"
+
+    def test_stream_json_adds_partial_message_flags(self):
+        cmd = build_claude_cmd("task", output_format="stream-json")
+        idx = cmd.index("--output-format")
+        assert cmd[idx + 1] == "stream-json"
+        assert "--verbose" in cmd
+        assert "--include-partial-messages" in cmd
+
+    def test_non_stream_json_no_partial_flags(self):
+        cmd = build_claude_cmd("task", output_format="json")
+        assert "--include-partial-messages" not in cmd
 
     @patch.dict(os.environ, {**_BASE_ENV, "AGENT_MODE_EFFORT": "medium"})
     def test_config_effort_default(self):
@@ -891,3 +902,156 @@ class TestAgentExecutor:
         cmd = captured_cmds[0]
         assert "--resume" in cmd
         assert "established-sid" in cmd
+
+
+# ─── execute_streaming stream-json parser tests ──────────────────────────────
+
+class _FakeStdout:
+    """Minimal async readline-able stream for mocking proc.stdout."""
+
+    def __init__(self, lines: list[bytes]):
+        self._lines = list(lines)
+
+    async def readline(self) -> bytes:
+        if not self._lines:
+            return b""
+        return self._lines.pop(0)
+
+
+def _stream_json_lines(events: list[dict]) -> list[bytes]:
+    return [(json.dumps(e) + "\n").encode() for e in events]
+
+
+def _make_streaming_proc(events: list[dict], returncode: int = 0):
+    proc = AsyncMock()
+    proc.stdout = _FakeStdout(_stream_json_lines(events))
+    proc.returncode = returncode
+    proc.pid = 22222
+    proc.wait = AsyncMock(return_value=returncode)
+    proc.terminate = MagicMock()
+    proc.kill = MagicMock()
+    proc.stdin = None
+    return proc
+
+
+class TestExecuteStreamingParser:
+    """Validates the stream-json → SSE dispatcher in execute_streaming."""
+
+    @pytest.mark.asyncio
+    async def test_text_thinking_and_tool_use(self, _agent_env):
+        events = [
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": "let me think"},
+                },
+            },
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {"type": "tool_use", "id": "tu_1", "name": "Bash", "input": {}},
+                },
+            },
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"command":"ls"}'},
+                },
+            },
+            {
+                "type": "stream_event",
+                "event": {"type": "content_block_stop", "index": 1},
+            },
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": [{"type": "text", "text": "file1\nfile2"}],
+                            "is_error": False,
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 2,
+                    "delta": {"type": "text_delta", "text": "Done."},
+                },
+            },
+            {"type": "result", "subtype": "success", "usage": {"input_tokens": 10, "output_tokens": 5}},
+        ]
+        proc = _make_streaming_proc(events)
+
+        async def fake_exec(*args, **kwargs):
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            executor = AgentExecutor()
+            stream_cfg = {"show_thinking": True, "show_tools": True, "show_text": True}
+            chunks = []
+            async for ch in executor.execute_streaming(
+                message="hi",
+                external_uuid="stream-test-1",
+                stream_cfg=stream_cfg,
+            ):
+                chunks.append(ch)
+
+        merged = "".join(chunks)
+        assert "reasoning_content" in merged
+        assert "let me think" in merged
+        assert "tool_use:Bash" in merged
+        assert "file1" in merged
+        assert "Done." in merged
+        assert "[DONE]" in merged
+
+    @pytest.mark.asyncio
+    async def test_hidden_thinking_filtered(self, _agent_env):
+        events = [
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": "secret thought"},
+                },
+            },
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "text_delta", "text": "visible answer"},
+                },
+            },
+            {"type": "result", "subtype": "success", "usage": {}},
+        ]
+        proc = _make_streaming_proc(events)
+
+        async def fake_exec(*args, **kwargs):
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            executor = AgentExecutor()
+            stream_cfg = {"show_thinking": False, "show_tools": False, "show_text": True}
+            chunks = []
+            async for ch in executor.execute_streaming(
+                message="hi",
+                external_uuid="stream-test-2",
+                stream_cfg=stream_cfg,
+            ):
+                chunks.append(ch)
+
+        merged = "".join(chunks)
+        assert "secret thought" not in merged
+        assert "visible answer" in merged

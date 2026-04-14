@@ -71,4 +71,10 @@ helpme() {
   echo ""
 }
 
-helpme
+# Only print the banner for interactive shells. Non-interactive invocations
+# (claude's Bash tool, kubectl exec without -t, scripts) must not have the
+# banner leak into stdout — it pollutes tool_result output and confuses
+# chat clients seeing the SSE stream.
+case $- in
+    *i*) helpme ;;
+esac

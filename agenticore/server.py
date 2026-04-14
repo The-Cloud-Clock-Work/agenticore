@@ -940,9 +940,19 @@ def _build_rest_app():
                 model_name = ""
 
             agent_id = os.environ.get("AGENTIHUB_AGENT", "default")
-            clean_message, stream_cfg, found_tokens = sc.get_for_request(agent_id, raw_message)
+            last_user_msg = ""
+            for _m in reversed(messages or []):
+                if _m.get("role") == "user":
+                    _c = _m.get("content", "")
+                    last_user_msg = _c if isinstance(_c, str) else str(_c)
+                    break
+            last_clean, stream_cfg, found_tokens = sc.get_for_request(agent_id, last_user_msg)
+            if found_tokens:
+                clean_message, _ = sc.strip_tokens(raw_message)
+            else:
+                clean_message = raw_message
 
-            if "/stream-status" in found_tokens and not clean_message.strip():
+            if found_tokens and not last_clean.strip():
                 if stream:
 
                     async def status_gen():
