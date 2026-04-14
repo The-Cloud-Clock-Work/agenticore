@@ -20,8 +20,8 @@ from agenticore.jobs import _get_redis
 KEY_PREFIX = os.environ.get("REDIS_KEY_PREFIX", "agenticore")
 
 DEFAULT_CONFIG: dict[str, bool] = {
-    "show_thinking": False,
-    "show_tools": False,
+    "show_thinking": True,
+    "show_tools": True,
     "show_text": True,
 }
 
