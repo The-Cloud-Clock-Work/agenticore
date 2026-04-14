@@ -266,9 +266,9 @@ See [`tests/smoke/verify_streaming_pipeline.sh`](https://github.com/The-Cloud-Cl
 
 ## Related
 
-- [`docs/architecture/agent-mode.md`]({% link architecture/agent-mode.md %}) — agent mode overview
-- [`docs/reference/api-reference.md`]({% link reference/api-reference.md %}) — full API surface
-- [`docs/getting-started/test-streaming.md`]({% link getting-started/test-streaming.md %}) — step-by-step self-test
+- [`docs/architecture/agent-mode.md`]({% link docs/architecture/agent-mode.md %}) — agent mode overview
+- [`docs/reference/api-reference.md`]({% link docs/reference/api-reference.md %}) — full API surface
+- [`docs/getting-started/test-streaming.md`]({% link docs/getting-started/test-streaming.md %}) — step-by-step self-test
 
 ## Milestones
 

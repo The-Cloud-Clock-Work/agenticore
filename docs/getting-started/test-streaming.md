@@ -106,7 +106,7 @@ curl -sN http://localhost:8200/v1/chat/completions -H 'Content-Type: application
   -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"/stream-status"}]}'
 ```
 
-See the full [slash token reference]({% link reference/sse-streaming.md %}#slash-tokens-visibility-toggles).
+See the full [slash token reference]({% link docs/reference/sse-streaming.md %}#slash-tokens-visibility-toggles).
 
 ## 6. Auditable verification
 
@@ -142,7 +142,7 @@ You'll get a markdown report like:
 - ✓ redis_tool_result_count_matches_transcript
 ```
 
-Artifacts land in `/tmp/sse-audit/<run-id>/` for later review. See [SSE Streaming reference]({% link reference/sse-streaming.md %}#auditing-a-live-agent) for details.
+Artifacts land in `/tmp/sse-audit/<run-id>/` for later review. See [SSE Streaming reference]({% link docs/reference/sse-streaming.md %}#auditing-a-live-agent) for details.
 
 ## Propagating to all agents
 
@@ -182,4 +182,4 @@ Common causes:
 - `event_relay.py` missing from the agentihooks PVC — agentihooks sync hasn't completed
 - `settings.json` doesn't wire the hooks — initializer didn't run
 
-See the [fail modes table]({% link reference/sse-streaming.md %}#fail-modes-and-diagnostics) for the full matrix.
+See the [fail modes table]({% link docs/reference/sse-streaming.md %}#fail-modes-and-diagnostics) for the full matrix.
