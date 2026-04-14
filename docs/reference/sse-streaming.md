@@ -250,3 +250,42 @@ See [`tests/smoke/verify_streaming_pipeline.sh`](https://github.com/The-Cloud-Cl
 - [`docs/architecture/agent-mode.md`]({% link architecture/agent-mode.md %}) — agent mode overview
 - [`docs/reference/api-reference.md`]({% link reference/api-reference.md %}) — full API surface
 - [`docs/getting-started/test-streaming.md`]({% link getting-started/test-streaming.md %}) — step-by-step self-test
+
+## Milestones
+
+### 2026-04-14 — 95% green in LibreChat (`b88b3e8`)
+
+Validated end-to-end on `llm.dev.homeofanton.com` via LibreChat against
+`anton-agent`, `finops-agent`, `notebooklm-agent`:
+
+- `/show-all`, `/hide-all`, `/show-thinking`, `/hide-thinking`, `/show-tools`,
+  `/hide-tools`, `/stream-status` all return inline meta SSE without spawning
+  a Claude subprocess. Toggle is sticky per `AGENTIHUB_AGENT` in Redis (no TTL)
+  with a file fallback.
+- Multi-turn aware: token detection runs against the **last user message**,
+  not the flattened history, so slash commands work on turn 2+.
+- Thinking renders in LibreChat's reasoning panel via `delta.reasoning_content`
+  (separate from assistant text), with `x_agenticore_event_type=thinking` for
+  custom clients.
+- Tool calls render as fenced ` ```tool_use:NAME ` blocks (no longer OpenAI
+  `delta.tool_calls` schema) so chat clients don't try to client-execute them
+  and fail with "Tool not found". Tool results render as ` ```tool_result `
+  blocks paired below the call.
+
+**Known gap (the remaining 5%)**: thinking arrives in one delta at the
+**end** of the turn, not progressively token-by-token while the model
+thinks. Root cause: agenticore currently spawns claude with
+`--output-format json`, which buffers the full response. The agentihooks
+event_relay reads the transcript JSONL on `PostToolUse`/`Stop` hooks, but
+the transcript is only written when each turn completes, so thinking lands
+as one chunk. To get true per-token thinking streaming we must switch the
+agent_mode pipeline to `--output-format stream-json` and parse claude's
+stdout in `execute_streaming` directly, dispatching deltas as they arrive
+on the pipe. That is a separate, larger change — pending web research on
+the exact `stream-json` event shape in current Claude Code releases.
+
+Pipeline images at this milestone:
+```
+ghcr.io/the-cloud-clock-work/agenticore:dev-b88b3e8
+ghcr.io/the-cloud-clock-work/agenticore:dev   (floating)
+```
