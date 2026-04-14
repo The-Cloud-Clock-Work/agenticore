@@ -1,6 +1,6 @@
 # Agenticore
 
-Production-grade Claude Code runner and orchestrator. Submit a task, get a PR.
+**Two modes, one binary.** Run a fleet of Claude Code agents that clone repos and ship PRs — or expose any customized Claude Code agent as a real-time, OpenAI-compatible chat completion endpoint with **token-by-token thinking and tool deltas**. Flip between modes with one environment variable.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/The-Cloud-Clock-Work/agenticore/blob/main/LICENSE)
 [![Tests](https://github.com/The-Cloud-Clock-Work/agenticore/actions/workflows/test.yml/badge.svg)](https://github.com/The-Cloud-Clock-Work/agenticore/actions/workflows/test.yml)
@@ -10,14 +10,80 @@ Production-grade Claude Code runner and orchestrator. Submit a task, get a PR.
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
 
 ```
+                          ┌─── AGENT_MODE=false (default) ────────────┐
+                          │  FLEET MODE — Orchestrator                 │
+                          │  Submit a task, get a PR                   │
+                          │                                            │
+   MCP / REST / CLI ─────►│  clone repo ──► bespoke worktree           │
+                          │       │              │                     │
+                          │       └──► claude -p "<task>" ──► auto-PR  │
+                          │                              └──► OTEL     │
+                          │  KEDA-scaled fleet • work-stealing queue   │
+   ┌─────────────┐        └────────────────────────────────────────────┘
+   │ agenticore  │
+   │   binary    │
+   └─────────────┘        ┌─── AGENT_MODE=true ────────────────────────┐
+                          │  AGENT MODE — Customized agent endpoint    │
+                          │  Drop-in OpenAI chat completion server     │
+                          │                                            │
+   OpenAI-compatible ────►│  load agent package (system prompt, MCP    │
+   chat clients           │    servers, hooks, skills, identity)       │
+   (LibreChat,            │                                            │
+    OpenWebUI,            │  POST /v1/chat/completions stream=true     │
+    LiteLLM,              │       │                                    │
+    custom UI,            │       └─► live SSE deltas:                 │
+    raw curl -N)          │            thinking_delta (token-by-token) │
+                          │            tool_use + tool_result          │
+                          │            assistant text                  │
+                          │                                            │
+                          │  Sticky slash toggles per agent            │
+                          │  Fully auditable — wire/disk/Redis layers  │
+                          └────────────────────────────────────────────┘
+```
+
+---
+
+## Pick a mode
+
+| | **Fleet mode** _(default)_ | **Agent mode** _(`AGENT_MODE=true`)_ |
+|---|---|---|
+| **What it does** | Accepts coding tasks, clones repos, runs Claude Code in bespoke worktrees, opens PRs | Loads a pre-configured Claude Code agent package and exposes it as a chat completion endpoint |
+| **API surface** | `/jobs` REST · `run_task` MCP tool · `agenticore run` CLI | `/v1/chat/completions` — fully OpenAI-compatible, streaming and non-streaming |
+| **Lifecycle** | Per-job clone + worktree, discarded after PR | Long-lived agent identity loaded once at container startup |
+| **Scaling** | KEDA on Redis queue depth — N pods steal jobs from one queue | One StatefulSet per agent identity; scale horizontally per agent |
+| **Output** | A pull request, an OTEL trace, a job result in Redis | Live SSE deltas as `chat.completion.chunk` JSON, full transcript on disk |
+| **Drop-in for** | CI/CD pipelines, MCP-aware editors, internal "fix this" bots | LibreChat, OpenWebUI, LiteLLM model routing, any OpenAI SDK client |
+| **Best for** | "We use Claude Code to refactor / fix / generate PRs across many repos" | "We want our chat clients to talk to a customized Claude agent over the OpenAI protocol" |
+
+Both modes share the **same binary**, the **same Docker image**, the **same Helm chart**, the same profile system, the same Redis+file fallback, and the same OTEL trace pipeline. **You don't pick at install time. You pick at runtime with one environment variable.**
+
+---
+
+## Why agenticore
+
+You have Claude Code. You want it to do work for you programmatically. You have two shapes the work tends to take:
+
+1. **Headless coding tasks across repos** — "fix the auth bug", "add tests for the parser", "refactor this module". You want a fleet that accepts these, clones the right repo, runs Claude in a clean worktree, and opens a PR. → **Fleet mode**.
+
+2. **A customized Claude agent your other tools can talk to** — a personal assistant, a domain expert, a finops bot, a docs writer — exposed as an OpenAI-compatible endpoint so LibreChat, OpenWebUI, your LiteLLM router, or any OpenAI SDK client can drop it in as a "model". With **real-time streaming** of the agent's thinking, tool calls, and answers — not buffered, not batched, not faked. → **Agent mode**.
+
+Agenticore is one binary that does both. Profiles, hooks, MCP whitelists, Redis state, OTEL traces, Helm chart — all shared between the two modes. Your operations team learns one thing.
+
+---
+
+# 🟦 FLEET MODE
+
+> Submit a task, get a PR. The original positioning.
+
+```
 MCP Client / REST Client / CLI
             │
             ▼
-    ┌── Agenticore ──────────────────────────────────────────────┐
+    ┌── Agenticore (Fleet Mode) ─────────────────────────────────┐
     │   Auth · Router · Job Queue                                │
     │                                                            │
-    │   Clone repo ──► Bespoke worktree ──► claude -p "task"  │
-    │   (cached)       (locked branch)    (cwd = worktree)     │
+    │   Clone repo ──► Bespoke worktree ──► claude -p "task"     │
+    │   (cached)       (locked branch)      (cwd = worktree)     │
     │                                         │                  │
     │                                         ▼                  │
     │                                   Auto-PR (gh)             │
@@ -28,19 +94,204 @@ MCP Client / REST Client / CLI
                     → Langfuse / PostgreSQL
 ```
 
----
-
-Agenticore is a **thin orchestration layer** on top of Claude Code:
-
 - Accepts tasks from **MCP clients, REST, or CLI** — same API surface, one port
 - **Clones and caches repos**, serializes concurrent access with distributed locks
 - Creates **bespoke worktrees** — locked before Claude starts, deterministic branch names
 - **Applies execution profiles** — installed into `~/.claude/` at startup via agentihooks
 - Spawns `claude -p "<task>"` in the worktree and **opens a PR when it succeeds**
 - Ships **full OTEL traces** (prompts, tool calls, token counts) to Langfuse / PostgreSQL
-- Runs standalone, in Docker, or on **Kubernetes** (Helm chart, KEDA autoscaling, graceful drain)
+- **KEDA autoscaling** on Redis queue depth + **graceful drain** on pod shutdown
+
+### Quickstart
+
+```bash
+# Set credentials
+export ANTHROPIC_AUTH_TOKEN=sk-ant-...
+export GITHUB_TOKEN=ghp_...
+
+# Start the server
+agenticore serve
+
+# Submit a task and wait for the PR URL
+agenticore run "fix the null pointer in auth.py" \
+  --repo https://github.com/org/repo \
+  --wait
+```
+
+### REST
+
+```bash
+# Submit a job (async — returns immediately with job ID)
+curl -X POST http://localhost:8200/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"task":"fix the auth bug","repo_url":"https://github.com/org/repo"}'
+
+# Submit and wait
+curl -X POST http://localhost:8200/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"task":"fix the auth bug","repo_url":"https://github.com/org/repo","wait":true}'
+
+# Inspect
+curl http://localhost:8200/jobs/{job_id}
+curl "http://localhost:8200/jobs?limit=10&status=running"
+curl -X DELETE http://localhost:8200/jobs/{job_id}
+```
+
+### MCP tools (fleet mode)
+
+| Tool | Description |
+|------|-------------|
+| `run_task` | Submit a task for Claude Code execution |
+| `get_job` | Get status, output, and PR URL for a job |
+| `list_jobs` | List recent jobs |
+| `cancel_job` | Cancel a running or queued job |
+| `list_profiles` | List available execution profiles |
+| `plan_task` | Create a read-only implementation plan |
+| `execute_plan` | Execute a ready plan as a coding job |
+| `list_worktrees` | List all worktrees with age, size, branch, push status |
+| `cleanup_worktrees` | Remove specific worktrees (unlock + delete) |
+
+Connect any MCP client at `http://localhost:8200/mcp` (Streamable HTTP) or `/sse` (legacy SSE).
 
 ---
+
+# 🟩 AGENT MODE
+
+> One environment variable. Now you have a customized Claude agent talking the OpenAI protocol with real-time thinking + tool streaming.
+
+```
+        AGENT_MODE=true + AGENT_MODE_PACKAGE_DIR=./my-agent-package
+                                        │
+                                        ▼
+  ┌── Agenticore (Agent Mode) ──────────────────────────────────────┐
+  │                                                                 │
+  │   Load package once at startup:                                 │
+  │     ├─ system.md (identity, instructions)                       │
+  │     ├─ .claude/ (settings, hooks, skills, agents)               │
+  │     └─ .mcp.json (tool servers this agent can call)             │
+  │                                                                 │
+  │   POST /v1/chat/completions stream=true                         │
+  │     │                                                           │
+  │     ├─ strip slash tokens (server-side, deterministic)          │
+  │     ├─ load sticky visibility config from Redis                 │
+  │     ├─ spawn claude --output-format stream-json                 │
+  │     │                  --include-partial-messages               │
+  │     ├─ read claude stdout line-by-line                          │
+  │     │     thinking_delta  → delta.reasoning_content (live)      │
+  │     │     text_delta      → delta.content (live)                │
+  │     │     tool_use_block  → ```tool_use:NAME fenced block       │
+  │     │     tool_result     → ```tool_result fenced block         │
+  │     └─ flush each chunk to the open HTTP connection             │
+  │                                                                 │
+  └─────────────────────────────────────────────────────────────────┘
+```
+
+**Drop-in for any OpenAI-compatible client.** Because the endpoint speaks `/v1/chat/completions` and emits standard `chat.completion.chunk` JSON over SSE, you can register an agenticore-backed agent as an "OpenAI custom model" inside:
+
+- **LibreChat** — add as a custom OpenAI endpoint, pick from the model dropdown
+- **OpenWebUI** — same pattern
+- **LiteLLM** — register as `openai/<agent>` with `api_base=http://<agent>:8200/v1`, then route any LiteLLM client at it
+- **OpenAI SDK** (Python, JS, Go, Rust) — `OpenAI(base_url="http://<agent>:8200/v1")` and call `chat.completions.create(...)` exactly like you would against `api.openai.com`
+- **`curl -N`** — raw SSE works fine
+
+### Killer features
+
+- **Real-time SSE streaming, fully auditable, fully traceable.** Thinking blocks stream **token-by-token** as the model generates them. Tool calls and results stream **live** as the agent invokes them. Assistant text streams progressively. Nothing is buffered to the end of the turn. The streaming hot path reads claude's stdout directly via `--output-format stream-json --verbose --include-partial-messages` — no transcript polling, no Redis indirection, no JSONL flush race.
+- **Thinking renders in `delta.reasoning_content`** — separate reasoning panel in reasoning-aware clients (LibreChat, OpenWebUI), with `x_agenticore_event_type="thinking"` for custom clients that want explicit tagging.
+- **Tool calls render as fenced markdown blocks** — ` ```tool_use:NAME ` paired with ` ```tool_result ` below it. Deliberately **not** OpenAI's `delta.tool_calls` schema, which would make chat clients try to client-execute the tool and fail with "Tool not found".
+- **Sticky per-agent visibility toggles** intercepted server-side, before claude ever sees the prompt:
+  - `/show-thinking` / `/hide-thinking`
+  - `/show-tools` / `/hide-tools`
+  - `/show-all` / `/hide-all`
+  - `/stream-status` (returns the current config inline as a meta SSE event)
+- **Multi-turn aware** — toggle detection runs against the **last user message**, not the flattened history, so slash commands work on turn 2+. **Toggle-only requests** (e.g. just `/show-all`) return inline status without spawning claude — zero token cost.
+- **Three-layer observation** — every visible event reaches (1) the client over the wire, (2) claude's transcript JSONL on disk, and (3) optionally the Redis bus (non-streaming path) for cross-process subscribers. Cross-validate all three with `tests/smoke/verify_streaming_pipeline.sh <agent>`.
+- **Async completion queue** for fire-and-forget — `wait=false` pushes to Redis, a worker picks it up, poll `GET /completions/{uuid}`.
+- **Session continuity** — resume a conversation across requests via the external correlation UUID.
+- **Redis+file fallback** — works without Redis (inline execution, file-based state).
+
+### Quickstart
+
+```bash
+# Start the server in agent mode pointing at your agent package
+AGENT_MODE=true \
+AGENT_MODE_PACKAGE_DIR=./my-agent-package \
+AGENTICORE_TRANSPORT=sse \
+agenticore serve
+
+# Toggle visibility once (sticky per agent — persists in Redis)
+curl -sN http://localhost:8200/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"/show-all"}]}'
+
+# Now have a real conversation — watch thinking tokens + tool calls stream live
+curl -sN http://localhost:8200/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"sonnet","stream":true,"messages":[
+        {"role":"user","content":"is 17077 prime? think hard, then list any files in /tmp"}
+      ]}'
+
+# Non-streaming JSON (no slash tokens needed)
+curl -X POST http://localhost:8200/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"sonnet","messages":[{"role":"user","content":"hello"}]}'
+```
+
+### Drop into LibreChat
+
+```yaml
+# librechat.yaml
+endpoints:
+  custom:
+    - name: "Agenticore Agents"
+      apiKey: "${LITELLM_API_KEY}"
+      baseURL: "http://litellm.your-cluster.svc:4000/v1"
+      models:
+        fetch: true
+      titleConvo: true
+```
+
+Register the agent in LiteLLM as a model pointing at the agenticore pod:
+
+```bash
+# Via LiteLLM admin (or the litellm_tools MCP)
+model_name: my-agent
+litellm_params:
+  model: openai/my-agent
+  api_base: http://my-agent.namespace.svc:8200/v1
+```
+
+Now `my-agent` shows up in LibreChat's model picker. Token-by-token thinking renders in the reasoning panel. Tool calls stream live as fenced markdown blocks.
+
+### Drop into the OpenAI SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://my-agent.namespace.svc:8200/v1", api_key="n/a")
+
+stream = client.chat.completions.create(
+    model="sonnet",
+    stream=True,
+    messages=[
+        {"role": "user", "content": "/show-all explain how an OS scheduler works step by step"},
+    ],
+)
+for chunk in stream:
+    delta = chunk.choices[0].delta
+    if reasoning := getattr(delta, "reasoning_content", None) or delta.model_dump().get("reasoning_content"):
+        print(f"[think] {reasoning}", end="", flush=True)
+    elif delta.content:
+        print(delta.content, end="", flush=True)
+```
+
+Full reference: **[SSE Streaming docs](docs/reference/sse-streaming.md)** · **[Self-test walkthrough](docs/getting-started/test-streaming.md)** · **[Agent Mode architecture](docs/architecture/agent-mode.md)**
+
+---
+
+# Shared infrastructure (both modes)
+
+Everything below applies to **both** Fleet mode and Agent mode. Same Docker image, same Helm chart, same env vars, same Redis schema.
 
 ## Install
 
@@ -56,207 +307,9 @@ cd agenticore
 pip install -e .
 ```
 
----
-
-## Quickstart
-
-```bash
-# 1. Set your credentials
-export ANTHROPIC_AUTH_TOKEN=sk-ant-...
-export GITHUB_TOKEN=ghp_...
-
-# 2. Start the server
-agenticore serve
-
-# 3. Submit a task
-agenticore run "fix the null pointer in auth.py" \
-  --repo https://github.com/org/repo \
-  --wait
-```
-
----
-
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `agenticore run "<task>" --repo <url>` | Submit a task (returns job ID immediately) |
-| `agenticore run "<task>" --repo <url> --wait` | Submit and wait for completion |
-| `agenticore jobs` | List recent jobs |
-| `agenticore job <id>` | Get job details, output, and PR URL |
-| `agenticore cancel <id>` | Cancel a running job |
-| `agenticore profiles` | List available execution profiles |
-| `agenticore serve` | Start the server |
-| `agenticore status` | Check server health |
-| `agenticore version` | Show version |
-| `agenticore update` | Update to latest version |
-| `agenticore init-shared-fs` | Initialise shared filesystem (Kubernetes) |
-| `agenticore drain` | Drain pod before shutdown (Kubernetes) |
-| `agenticore agents` | Interactive TUI — K8S pods + local agent packages from agentihub |
-| `agenticore agents --headless <action>` | Headless mode: `list`, `chat`, `job`, `sync`, `health`, `local` (JSON output) |
-| `agenticore agents --agentihub-dir <path>` | Override agentihub directory for local agent discovery |
-| `agenticore hooks sync [--target T]` | Clone/fetch repos and rebuild profiles (`all`, `agentihooks`, `bundle`, `agentihub`) |
-| `agenticore agent <flags>` | Build, run, and manage the local container / dev compose stack |
-| `agenticore push --main` | Build and push Docker image to a registry |
-
-```bash
-# Submit a task
-agenticore run "fix the null pointer in auth.py" \
-  --repo https://github.com/org/repo \
-  --profile code
-
-# Wait for result and see PR URL
-agenticore run "add unit tests for the parser" \
-  --repo https://github.com/org/repo \
-  --wait
-
-# Check a specific job
-agenticore job a1b2c3d4-e5f6-7890-abcd-ef1234567890
-```
-
----
-
-## MCP Tools
-
-Connect any MCP-compatible client and use these tools:
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `run_task` | `task`, `repo_url`, `profile`, `base_ref`, `wait`, `session_id`, `create_repo` | Submit a task for Claude Code execution |
-| `get_job` | `job_id` | Get status, output, and PR URL for a job |
-| `list_jobs` | `limit`, `status` | List recent jobs |
-| `cancel_job` | `job_id` | Cancel a running or queued job |
-| `list_profiles` | — | List available execution profiles |
-| `plan_task` | `task`, `repo_url`, `wait` | Create a read-only implementation plan |
-| `execute_plan` | `plan_id`, `repo_url`, `profile`, `wait` | Execute a ready plan as a coding job |
-| `list_worktrees` | — | List all worktrees with age, size, branch, push status |
-| `cleanup_worktrees` | `paths` | Remove specific worktrees (unlock + delete) |
-
-All tools return the same JSON structure as the REST endpoints.
-
----
-
-## REST API
-
-```bash
-# Submit a job (async — returns immediately with job ID)
-curl -X POST http://localhost:8200/jobs \
-  -H "Content-Type: application/json" \
-  -d '{"task": "fix the auth bug", "repo_url": "https://github.com/org/repo"}'
-
-# Submit and wait for completion
-curl -X POST http://localhost:8200/jobs \
-  -H "Content-Type: application/json" \
-  -d '{"task": "fix the auth bug", "repo_url": "https://github.com/org/repo", "wait": true}'
-
-# Get job status, output, and PR URL
-curl http://localhost:8200/jobs/{job_id}
-
-# List jobs (with optional filters)
-curl "http://localhost:8200/jobs?limit=10&status=running"
-
-# Cancel a job
-curl -X DELETE http://localhost:8200/jobs/{job_id}
-
-# List profiles
-curl http://localhost:8200/profiles
-
-# Health check (no auth required)
-curl http://localhost:8200/health
-
-# Trigger repo sync on demand (all repos)
-curl -X POST http://localhost:8200/admin/sync
-
-# Sync a specific repo
-curl -X POST "http://localhost:8200/admin/sync?target=agentihub"
-```
-
----
-
-## Connecting MCP Clients
-
-Agenticore exposes two MCP transports on the same port:
-
-| Transport | Endpoint | Use Case |
-|-----------|----------|----------|
-| Streamable HTTP | `/mcp` | `type: "http"` — Claude Code, Claude Desktop, most clients |
-| SSE | `/sse` | Legacy SSE clients |
-| stdio | stdin/stdout | Direct Claude Code subprocess integration |
-
-### Claude Code CLI / Claude Desktop
-
-Add to your project's `.mcp.json` or `~/.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "agenticore": {
-      "type": "http",
-      "url": "http://localhost:8200/mcp"
-    }
-  }
-}
-```
-
-### With API Key Authentication
-
-```json
-{
-  "mcpServers": {
-    "agenticore": {
-      "type": "http",
-      "url": "http://your-server:8200/mcp",
-      "headers": {
-        "X-API-Key": "your-secret-key"
-      }
-    }
-  }
-}
-```
-
-### stdio (Claude Code subprocess)
-
-```json
-{
-  "mcpServers": {
-    "agenticore": {
-      "command": "python",
-      "args": ["-m", "agenticore"]
-    }
-  }
-}
-```
-
----
-
-## Authentication
-
-Authentication is **optional**. When disabled, all endpoints are public.
-
-### API Keys
-
-```bash
-# Via environment variable (comma-separated for multiple keys)
-AGENTICORE_API_KEYS="key-1,key-2" agenticore serve
-```
-
-Pass the key in any of these ways:
-
-| Method | Example |
-|--------|---------|
-| Header | `curl -H "X-Api-Key: key-1" http://localhost:8200/jobs` |
-| Query param | `curl "http://localhost:8200/jobs?api_key=key-1"` |
-| Bearer token | `curl -H "Authorization: Bearer key-1" http://localhost:8200/jobs` |
-
-The `/health` endpoint is always public regardless of auth settings.
-
----
-
 ## Profiles
 
-Profiles are **directory packages** that configure how Claude Code runs. Each profile
-is a self-contained `.claude/` tree installed into `~/.claude/` at container startup
-by `agentihooks global`. Claude Code reads from `~/.claude/` by default.
+Profiles are **directory packages** that configure how Claude Code runs. Each profile is a self-contained `.claude/` tree installed into `~/.claude/` at container startup by `agentihooks global`. Claude Code reads from `~/.claude/` by default.
 
 ```
 <profiles-dir>/{name}/
@@ -269,195 +322,51 @@ by `agentihooks global`. Claude Code reads from `~/.claude/` by default.
 └── .mcp.json            ← MCP server config merged into the job
 ```
 
-### Profile discovery
-
-Profiles are **not bundled with Agenticore**. They live in two places:
-
-| Source | Path | Set via |
-|--------|------|---------|
-| agentihooks integration | `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/` | `AGENTICORE_AGENTIHOOKS_PATH` env var |
-| User profiles | `~/.agenticore/profiles/` | Always checked |
-
-Later sources override earlier ones when names collide.
-
-### Profile inheritance
-
-```yaml
-# ~/.agenticore/profiles/code-strict/profile.yml
-name: code-strict
-extends: code          # inherits all settings from 'code'
-
-claude:
-  max_turns: 20
-  effort: high
-```
-
-Child values override parent defaults. `.claude/` files are layered (child overlays
-parent) during materialization.
-
-### What Agenticore does with a profile at job start
-
-1. Resolves the profile path (for tracking/audit)
-2. For `extends` profiles: merges chain into a per-job directory for `.mcp.json`
-3. Injects `.mcp.json` into the job CWD (merging with any existing `.mcp.json`)
-4. Translates `profile.yml` `claude:` fields into CLI flags:
-   `--model sonnet --max-turns 80 --permission-mode bypassPermissions …`
-
-Full profile reference: [Profile System docs](docs/architecture/profile-system.md)
-
----
-
-## Agent Mode
-
-Agent Mode transforms Agenticore from a job orchestrator into a **purpose-built
-agent container**. Where standard mode clones repos and creates PRs, Agent Mode
-runs a pre-configured **package** — a directory with a system prompt, MCP
-servers, hooks, and skills — and exposes it as a completions API.
-
-Packages follow the same `.claude/` directory convention as agentihub packages.
-The difference is lifecycle: profiles are materialized per-job and discarded;
-packages are mounted at container startup and define the agent's permanent
-identity.
-
-```
-Standard Mode:  Request → clone repo → bespoke worktree → materialize profile → claude → PR
-Agent Mode:     Request → load package → claude -p "task" → result (+ notifications)
-```
-
-### Key features
-
-- **Real-time SSE streaming — fully auditable, traceable agents.**
-  `stream=true` on `/v1/chat/completions` delivers **thinking blocks token-by-token**,
-  tool calls, tool results, and assistant text as live SSE deltas on the same
-  open HTTP connection. The streaming hot path reads claude's stdout directly
-  via `--output-format stream-json --include-partial-messages` — no transcript
-  polling, no Redis indirection, no flush race. Any OpenAI-compatible chat
-  client (LibreChat, OpenWebUI, custom UI, raw `curl -N`) can watch the agent
-  reason through a problem, call tools, and produce the answer **as it
-  happens**. Thinking renders in `delta.reasoning_content` (separate
-  reasoning panel in reasoning-aware clients); tool calls render as fenced
-  ` ```tool_use:NAME ` markdown blocks paired with ` ```tool_result ` blocks
-  below them. Sticky per-agent visibility toggles via `/show-thinking`,
-  `/show-tools`, `/show-all`, `/hide-*`, `/stream-status` — intercepted
-  server-side before claude ever sees the prompt, so they are deterministic
-  and the LLM cannot misinterpret or refuse them. Cross-validate the whole
-  pipeline against the wire, the transcript, and Redis with
-  `tests/smoke/verify_streaming_pipeline.sh <agent>`. See
-  [SSE Streaming reference](docs/reference/sse-streaming.md) and
-  [test it yourself](docs/getting-started/test-streaming.md).
-- **Async completion queue** — `wait=false` pushes to a Redis queue; a worker
-  process picks it up. Poll `GET /completions/{uuid}` for the result.
-- **Session continuity** — Conversations can be resumed across requests using
-  the external correlation UUID.
-- **Redis+file fallback** — Same pattern as the job store. Everything works
-  without Redis (inline execution, file-based state).
-
-### Quick start
-
-```bash
-# Start the server in agent mode
-AGENT_MODE=true AGENT_MODE_PACKAGE_DIR=./my-package \
-  AGENTICORE_TRANSPORT=sse agenticore serve
-
-# Stream a conversation with live thinking + tool deltas
-curl -sN http://localhost:8200/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"/show-all"}]}'
-
-curl -sN http://localhost:8200/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"list files in /tmp then summarize"}]}'
-
-# Or submit async and poll
-curl -X POST http://localhost:8200/completions \
-  -H "Content-Type: application/json" \
-  -d '{"message":"Analyze the auth module","uuid":"req-1","wait":false}'
-curl http://localhost:8200/completions/req-1
-```
-
-Full reference: [Agent Mode docs](docs/architecture/agent-mode.md)
-
----
+Profiles support inheritance via `extends:` and live in `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/` or `~/.agenticore/profiles/`. Full reference: [Profile System docs](docs/architecture/profile-system.md).
 
 ## Helm (Kubernetes)
 
-Agenticore ships a production-ready Helm chart published to GHCR. The chart
-deploys a **StatefulSet** with a **shared RWX PVC** (NFS / EFS / Azure Files / Ceph)
-so all pods share the same repo cache and job state, with **KEDA autoscaling**
-based on Redis queue depth and **graceful drain** on pod shutdown.
+Production-ready Helm chart published to GHCR. Deploys a **StatefulSet** with a **shared RWX PVC** (NFS / EFS / Azure Files / Ceph) so all pods share the same repo cache and job state, with **KEDA autoscaling** on Redis queue depth and **graceful drain** on pod shutdown.
 
 ```
 Internet ──► LoadBalancer :8200
                     │
      ┌──────────────▼──────────────────────────┐
-     │  Agenticore StatefulSet (0..N pods)      │
-     │  Work-stealing from Redis queue          │
+     │  Agenticore StatefulSet (0..N pods)     │
+     │  Work-stealing from Redis queue         │
      └──────────┬──────────────────────────────┘
                 │                │
          ┌──────▼───────┐  ┌─────▼───────────┐
-         │  Redis        │  │  Shared RWX PVC  │
-         │  jobs · locks │  │  /shared/        │
-         │  KEDA queue   │  │  ├─ repos/       │
-         └───────────────┘  │  ├─ jobs/        │
-                            │  └─ job-state/   │
-         KEDA ScaledObject  └─────────────────┘
+         │  Redis       │  │  Shared RWX PVC │
+         │  jobs · locks│  │  /shared/       │
+         │  KEDA queue  │  │  ├─ repos/      │
+         └──────────────┘  │  ├─ jobs/       │
+                           │  └─ job-state/  │
+         KEDA ScaledObject └─────────────────┘
          watches Redis queue
 ```
 
-### Install
-
 ```bash
-# 1. Create the Kubernetes Secret (once per cluster)
+# Create the secret
 kubectl create secret generic agenticore-secrets \
   --from-literal=redis-url="redis://:password@redis:6379" \
-  --from-literal=redis-address="redis:6379" \
   --from-literal=anthropic-api-key="sk-ant-..." \
   --from-literal=github-token="ghp_..."
 
-# 2. Install the chart
+# Install (fleet mode)
 helm install agenticore \
   oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
   --set storage.className=your-rwx-storage-class
-```
 
-### Key values
-
-| Value | Default | Description |
-|-------|---------|-------------|
-| `storage.className` | `nfs-client` | RWX storage class (required) |
-| `storage.size` | `100Gi` | PVC size |
-| `replicas` | `2` | Static replica count (ignored when KEDA enabled) |
-| `image.tag` | `latest` | Container image tag |
-| `config.agentihooksProfile` | `coding` | Active profile (set by agentihooks) |
-| `config.maxParallelJobs` | `3` | Max Claude subprocesses per pod |
-| `keda.enabled` | `false` | Enable KEDA autoscaling |
-| `keda.minReplicas` | `1` | KEDA min replicas |
-| `keda.maxReplicas` | `10` | KEDA max replicas |
-| `ingress.enabled` | `false` | Enable Ingress resource |
-| `ingress.host` | `agenticore.example.com` | Ingress hostname |
-
-### Autoscaling with KEDA
-
-```bash
-helm upgrade agenticore \
+# Install (agent mode)
+helm install my-agent \
   oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
-  --set keda.enabled=true \
-  --set keda.redisAddress=redis:6379 \
-  --set keda.maxReplicas=20
+  --set storage.className=your-rwx-storage-class \
+  --set agentMode.enabled=true \
+  --set agentMode.agentName=my-agent
 ```
 
-A `ScaledObject` watches the Redis job queue and adds one pod per 5 pending jobs.
-
-### Graceful drain
-
-StatefulSet pods run `agenticore drain --timeout 270` as a PreStop hook. Drain:
-1. Marks the pod as draining in Redis (new jobs route elsewhere)
-2. Waits for all in-progress jobs to finish
-3. Exits cleanly — Kubernetes then sends SIGTERM
-
-Full Kubernetes guide: [Kubernetes Deployment](docs/deployment/kubernetes.md)
-
----
+Full Kubernetes guide: [Kubernetes Deployment](docs/deployment/kubernetes.md).
 
 ## Docker
 
@@ -466,149 +375,116 @@ Full Kubernetes guide: [Kubernetes Deployment](docs/deployment/kubernetes.md)
 cp .env.example .env
 docker compose up --build -d
 
-# Production — Agenticore only (point at your managed services)
-docker run -d \
-  -p 8200:8200 \
+# Production (fleet mode) — Agenticore only
+docker run -d -p 8200:8200 \
   -e AGENTICORE_TRANSPORT=sse \
-  -e AGENTICORE_HOST=0.0.0.0 \
   -e ANTHROPIC_AUTH_TOKEN=sk-ant-... \
   -e REDIS_URL=redis://your-redis:6379/0 \
   -e GITHUB_TOKEN=ghp_... \
   tccw/agenticore
+
+# Production (agent mode)
+docker run -d -p 8200:8200 \
+  -e AGENT_MODE=true \
+  -e AGENTIHUB_AGENT=my-agent \
+  -e AGENTICORE_TRANSPORT=sse \
+  -e ANTHROPIC_AUTH_TOKEN=sk-ant-... \
+  -e REDIS_URL=redis://your-redis:6379/0 \
+  tccw/agenticore
 ```
-
----
-
-## Local Development
-
-`docker-compose.dev.yml` emulates a Kubernetes deployment on your machine — same
-Dockerfile, same entrypoint, same profile materialisation via agentihooks. A shared
-named volume at `/shared` mirrors the K8s RWX PVC, and `HOME=/shared` makes the
-entrypoint write `.claude/` config, profiles, and bashrc into it.
-
-**Requirements:**
-
-- A `.env` file in the project root (or `$HOME`). See
-  [Docker Compose docs](docs/deployment/docker-compose.md#dev-compose-docker-composeyml)
-  for the full variable reference.
-- Docker with Compose v2.
-
-**Quick start:**
-
-```bash
-# Start the dev stack
-agenticore agent --compose-up
-
-# Shell into the running container
-agenticore agent --compose-enter
-
-# Follow logs
-agenticore agent --compose-logs
-
-# Tear down
-agenticore agent --compose-down
-```
-
-**Shell aliases** — run `bash automation/alias_setup.sh` to install `ac_*` shortcuts:
-
-| Alias | Command |
-|-------|---------|
-| `ac_build_agent` | `agenticore agent --build` |
-| `ac_run_agent` | `agenticore agent --run` |
-| `ac_enter_agent` | `agenticore agent --enter` |
-| `ac_stop_agent` | `agenticore agent --stop` |
-| `ac_logs_agent` | `agenticore agent --logs` |
-| `ac_compose_up` | `agenticore agent --compose-up` |
-| `ac_compose_down` | `agenticore agent --compose-down` |
-| `ac_compose_enter` | `agenticore agent --compose-enter` |
-| `ac_compose_logs` | `agenticore agent --compose-logs` |
-| `ac_push_main` | `agenticore push --main` |
-
-Full CLI reference: [CLI Commands](docs/reference/cli-commands.md).
-Full compose details: [Docker Compose](docs/deployment/docker-compose.md).
-
----
-
-## Key Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AGENTICORE_TRANSPORT` | `stdio` | `sse` for HTTP server, `stdio` for MCP pipe |
-| `AGENTICORE_HOST` | `127.0.0.1` | Bind address |
-| `AGENTICORE_PORT` | `8200` | Server port |
-| `AGENTICORE_API_KEYS` | _(empty)_ | Comma-separated API keys (optional) |
-| `ANTHROPIC_AUTH_TOKEN` | _(empty)_ | Anthropic API key passed to Claude |
-| `REDIS_URL` | _(empty)_ | Redis URL — omit for file-based fallback |
-| `GITHUB_TOKEN` | _(empty)_ | GitHub token for auto-PR |
-| `AGENTIHOOKS_PROFILE` | `coding` | Active profile (set by agentihooks) |
-| `AGENTICORE_CLAUDE_TIMEOUT` | `3600` | Max job runtime in seconds |
-| `AGENTICORE_AGENTIHOOKS_PATH` | _(empty)_ | Explicit path to agentihooks repo (skips cloning) |
-| `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Git URL to clone agentihooks from (supports `GITHUB_TOKEN`) |
-| `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `300` | Agentihooks hot-reload interval in seconds (`0` disables) |
-| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | _(empty)_ | Git URL to clone the agentihooks bundle repo |
-| `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | `300` | Bundle hot-reload interval in seconds (`0` disables) |
-| `AGENTIHOOKS_PROFILE` | `coding` | Profile name for `agentihooks init` |
-| `AGENTICORE_AGENTIHUB_URL` | _(empty)_ | Git URL for agentihub repo (agent mode) |
-| `AGENTICORE_AGENTIHUB_PATH` | _(empty)_ | Explicit path to agentihub repo (skips cloning) |
-| `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | `300` | Agentihub hot-reload interval in seconds (`0` disables) |
-| `AGENTIHUB_AGENT` | _(empty)_ | Agent name to load in agent mode (matches `agents/{name}/`) |
-| `AGENTICORE_SHARED_FS_ROOT` | _(empty)_ | Shared FS root (Kubernetes mode) |
-| `CLAUDE_CODE_HOME_DIR` | `$HOME` | Home dir root — Claude uses `$CLAUDE_CODE_HOME_DIR/.claude/` |
-
-Full reference: [Configuration docs](docs/reference/configuration.md)
-
----
 
 ## Authentication
 
-Agenticore resolves Claude credentials in order:
+Authentication is **optional**. When disabled, all endpoints are public.
 
-1. **`CLAUDE_CODE_OAUTH_TOKEN`** — Long-lived OAuth token (set as a K8s secret or env var). When present, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are removed so Claude Code talks directly to Anthropic.
-2. **Static env** — `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL` as configured (typically pointing at a LiteLLM proxy).
+```bash
+# API keys — comma-separated for multiple
+AGENTICORE_API_KEYS="key-1,key-2" agenticore serve
+```
 
-GitHub token resolution:
+Pass the key via `X-Api-Key` header, `?api_key=...` query param, or `Authorization: Bearer ...`. The `/health` endpoint is always public.
 
-1. **GitHub App** — `GITHUB_APP_ID` + private key + `GITHUB_APP_INSTALLATION_ID` (short-lived, auto-rotated).
-2. **Static `GITHUB_TOKEN`** — PAT (classic or fine-grained).
-3. **None** — public repos only, no PRs.
-
----
+Claude credentials resolved in order: `CLAUDE_CODE_OAUTH_TOKEN` → `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL`. GitHub credentials: GitHub App (`GITHUB_APP_ID` + key + installation ID) → static `GITHUB_TOKEN` → none (public repos only).
 
 ## OTEL Observability
 
-Every job produces a Langfuse trace with spans for each Claude turn, including
-prompts, tool calls, and token counts.
+Every job (fleet mode) and every completion (agent mode) produces a Langfuse trace with spans for each Claude turn including prompts, tool calls, and token counts.
 
 ```bash
-# Enable in .env
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 LANGFUSE_HOST=https://cloud.langfuse.com
-
 AGENTICORE_OTEL_ENABLED=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 ```
 
-The bundled `docker-compose.yml` includes an OTEL Collector pre-wired to push
-traces to both Langfuse (SDK) and PostgreSQL (raw spans).
+The bundled `docker-compose.yml` includes an OTEL Collector pre-wired to push traces to Langfuse and PostgreSQL. Full setup: [OTEL Pipeline docs](docs/deployment/otel-pipeline.md).
 
-Full setup: [OTEL Pipeline docs](docs/deployment/otel-pipeline.md)
+## Key environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENT_MODE` | `false` | **The mode switch.** `true` enables agent mode |
+| `AGENT_MODE_PACKAGE_DIR` | _(empty)_ | Path to the agent package (agent mode only) |
+| `AGENTIHUB_AGENT` | _(empty)_ | Agent name to load from agentihub (agent mode) |
+| `AGENTICORE_TRANSPORT` | `stdio` | `sse` for HTTP server, `stdio` for MCP pipe |
+| `AGENTICORE_HOST` | `127.0.0.1` | Bind address |
+| `AGENTICORE_PORT` | `8200` | Server port |
+| `AGENTICORE_API_KEYS` | _(empty)_ | Comma-separated API keys (optional) |
+| `ANTHROPIC_AUTH_TOKEN` | _(empty)_ | Anthropic API key (or use `CLAUDE_CODE_OAUTH_TOKEN`) |
+| `REDIS_URL` | _(empty)_ | Redis URL — omit for file-based fallback |
+| `GITHUB_TOKEN` | _(empty)_ | GitHub token for auto-PR (fleet mode) |
+| `AGENTIHOOKS_PROFILE` | `coding` | Active profile (fleet mode) |
+| `AGENTICORE_CLAUDE_TIMEOUT` | `3600` | Max claude runtime in seconds |
+| `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Git URL to clone agentihooks from |
+| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | _(empty)_ | Git URL to clone the bundle |
+| `AGENTICORE_AGENTIHUB_URL` | _(empty)_ | Git URL for agentihub repo (agent mode) |
+| `AGENTICORE_SHARED_FS_ROOT` | _(empty)_ | Shared FS root (Kubernetes mode) |
+
+Full reference: [Configuration docs](docs/reference/configuration.md).
+
+## CLI commands
+
+| Command | Description |
+|---------|-------------|
+| `agenticore serve` | Start the server (fleet or agent mode based on env) |
+| `agenticore run "<task>" --repo <url> [--wait]` | Submit a task (fleet mode) |
+| `agenticore jobs` / `agenticore job <id>` | List / inspect jobs |
+| `agenticore cancel <id>` | Cancel a running job |
+| `agenticore profiles` | List execution profiles |
+| `agenticore agents` | Interactive TUI — K8s pods + local agent packages |
+| `agenticore agents --headless <action>` | Headless: `list`, `chat`, `job`, `sync`, `health`, `local` |
+| `agenticore hooks sync [--target T]` | Clone/fetch profile sources |
+| `agenticore agent --compose-up` | Bring up the local dev stack |
+| `agenticore drain` | Drain pod before shutdown (Kubernetes) |
+| `agenticore status` / `version` / `update` | Server health, version, self-update |
+
+Full CLI reference: [CLI Commands](docs/reference/cli-commands.md).
 
 ---
 
 ## Documentation
 
+### Get started
 - [Quickstart](docs/getting-started/quickstart.md)
 - [Connecting Clients](docs/getting-started/connecting-clients.md)
+- [SSE Streaming self-test](docs/getting-started/test-streaming.md)
+
+### Architecture
 - [Profile System](docs/architecture/profile-system.md)
 - [Agent Mode](docs/architecture/agent-mode.md)
-- [Architecture Internals](docs/architecture/internals.md)
+- [Internals](docs/architecture/internals.md)
 - [Job Execution](docs/architecture/job-execution.md)
-- [Kubernetes Deployment](docs/deployment/kubernetes.md)
+
+### Deployment
+- [Kubernetes](docs/deployment/kubernetes.md)
 - [Docker Compose](docs/deployment/docker-compose.md)
 - [OTEL Pipeline](docs/deployment/otel-pipeline.md)
-- [CLI Reference](docs/reference/cli-commands.md)
+
+### Reference
+- [SSE Streaming](docs/reference/sse-streaming.md) — full chunk schema, slash tokens, fail-mode diagnostics
 - [API Reference](docs/reference/api-reference.md)
+- [CLI Reference](docs/reference/cli-commands.md)
 - [Configuration](docs/reference/configuration.md)
 
 ---
@@ -625,3 +501,5 @@ pytest tests/unit -v -m unit --cov=agenticore
 ruff check agenticore/ tests/
 ruff format --check agenticore/ tests/
 ```
+
+PRs welcome. The `feat/*` branches in the repo show recent work — the most recent landed feature is the token-by-token SSE streaming layer (`feat/stream-json-direct` → `dev` → `main` at `f440e3c`, released as `v1.3.0`).
