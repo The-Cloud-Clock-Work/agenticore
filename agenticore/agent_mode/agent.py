@@ -69,7 +69,11 @@ def build_claude_cmd(
     am = cfg.agent_mode
 
     cmd = [cfg.claude.binary, "-p"]
-    cmd.extend(["--output-format", output_format or am.output_format])
+    resolved_fmt = output_format or am.output_format
+    cmd.extend(["--output-format", resolved_fmt])
+    if resolved_fmt == "stream-json":
+        cmd.append("--verbose")
+        cmd.append("--include-partial-messages")
     cmd.extend(["--model", model or am.model])
     cmd.extend(["--max-turns", str(max_turns or am.max_turns)])
     cmd.extend(["--permission-mode", permission_mode or am.permission_mode])
@@ -415,18 +419,20 @@ class AgentExecutor:
     ):
         """Streaming variant of execute(). Yields SSE chunk strings.
 
-        Spawns the Claude subprocess, then concurrently tails the per-uuid
-        Redis Stream of hook events while the subprocess runs. Each visible
-        event is mapped to an OpenAI delta chunk and yielded immediately.
-        On done sentinel (or process exit), drains stdout, digests the
-        result, and yields a final stop chunk + [DONE].
+        Reads claude's stdout as line-delimited stream-json events
+        (produced by --output-format stream-json --verbose
+        --include-partial-messages) and dispatches them directly to
+        SSE formatters, so thinking / text / tool calls arrive
+        progressively as the model emits them. No Redis bus.
         """
-        from agenticore.agent_mode.event_tailer import tail_event_stream
         from agenticore.agent_mode.openai_compat import (
             format_done,
-            format_event_as_sse,
             format_role_open_chunk,
             format_stop_chunk,
+            format_text_delta,
+            format_thinking_delta,
+            format_tool_result_delta,
+            format_tool_use_delta,
         )
         from agenticore.agent_mode.session_registry import (
             mark_session_complete,
@@ -434,19 +440,12 @@ class AgentExecutor:
             register_session,
         )
         from agenticore.agent_mode.state import save_state
+        from agenticore.agent_mode.stream_config import is_visible
         from agenticore.runner import build_subprocess_env
 
         cfg = get_config()
         am = cfg.agent_mode
 
-        # Streaming calls need a transcript file for the event_relay hook to parse,
-        # so we DON'T pass --no-session-persistence. Pass an empty session id to
-        # build_claude_cmd so it adds neither --resume nor --session-id; claude
-        # opens a fresh session and writes the JSONL transcript normally.
-        # register_session(stateless=True) gives us a unique mapping for state
-        # tracking even though we don't forward its random claude_session_id
-        # to the CLI (that UUID would trigger a --resume of a non-existent
-        # session and silently produce no output).
         register_session(external_uuid, stateless=True)
         save_state(external_uuid, wait=True, meta=meta)
 
@@ -459,6 +458,7 @@ class AgentExecutor:
             system_prompt=system_prompt,
             append_system_prompt=append_system_prompt,
             permission_mode=permission_mode,
+            output_format="stream-json",
             effort=effort,
             max_budget_usd=max_budget_usd,
             fallback_model=fallback_model,
@@ -469,7 +469,6 @@ class AgentExecutor:
         env = build_subprocess_env()
         env["AGENTICORE_CORRELATION_ID"] = external_uuid
         env["AGENTICORE_CLAUDE_SESSION_ID"] = ""
-        env["AGENTICORE_EVENT_STREAM"] = "1"
 
         cwd = Path(am.package_dir)
         if not cwd.exists():
@@ -498,13 +497,124 @@ class AgentExecutor:
 
         yield format_role_open_chunk(mdl, rid)
 
+        # Tool-use accumulators: block_index -> {id, name, partial_json}
+        tool_blocks: dict[int, dict] = {}
+        usage: dict = {}
+        final_is_error = False
+
+        async def _readline() -> Optional[bytes]:
+            try:
+                return await asyncio.wait_for(proc.stdout.readline(), timeout=resolved_timeout)
+            except asyncio.TimeoutError:
+                return None
+
         try:
-            async for event in tail_event_stream(external_uuid, stream_cfg, proc, resolved_timeout):
-                if event.get("event_type") == "done":
+            while True:
+                line = await _readline()
+                if line is None:
                     break
-                chunk = format_event_as_sse(event, mdl, rid)
-                if chunk:
-                    yield chunk
+                if not line:
+                    if proc.returncode is not None:
+                        break
+                    continue
+                try:
+                    evt = json.loads(line.decode("utf-8", errors="replace"))
+                except Exception:
+                    continue
+
+                etype = evt.get("type")
+
+                if etype == "stream_event":
+                    se = evt.get("event", {}) or {}
+                    se_type = se.get("type")
+
+                    if se_type == "content_block_start":
+                        idx = se.get("index", 0)
+                        block = se.get("content_block", {}) or {}
+                        if block.get("type") == "tool_use":
+                            tool_blocks[idx] = {
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "partial_json": "",
+                            }
+                        continue
+
+                    if se_type == "content_block_delta":
+                        idx = se.get("index", 0)
+                        delta = se.get("delta", {}) or {}
+                        dtype = delta.get("type")
+
+                        if dtype == "thinking_delta":
+                            if is_visible("thinking", stream_cfg):
+                                yield format_thinking_delta(delta.get("thinking", ""), mdl, rid)
+                            continue
+
+                        if dtype == "text_delta":
+                            if is_visible("assistant_text", stream_cfg):
+                                yield format_text_delta(delta.get("text", ""), mdl, rid)
+                            continue
+
+                        if dtype == "input_json_delta":
+                            tb = tool_blocks.get(idx)
+                            if tb is not None:
+                                tb["partial_json"] += delta.get("partial_json", "")
+                            continue
+
+                        continue
+
+                    if se_type == "content_block_stop":
+                        idx = se.get("index", 0)
+                        tb = tool_blocks.pop(idx, None)
+                        if tb is not None and is_visible("tool_use", stream_cfg):
+                            try:
+                                parsed_input = json.loads(tb["partial_json"]) if tb["partial_json"] else {}
+                            except Exception:
+                                parsed_input = {"_raw": tb["partial_json"]}
+                            tu_payload = json.dumps(
+                                {
+                                    "id": tb["id"],
+                                    "name": tb["name"],
+                                    "input": parsed_input,
+                                }
+                            )
+                            yield format_tool_use_delta(tu_payload, mdl, rid)
+                        continue
+
+                    continue
+
+                if etype == "user":
+                    msg = evt.get("message", {}) or {}
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        for blk in content:
+                            if not isinstance(blk, dict):
+                                continue
+                            if blk.get("type") == "tool_result" and is_visible("tool_result", stream_cfg):
+                                out = blk.get("content", "")
+                                if isinstance(out, list):
+                                    parts = []
+                                    for item in out:
+                                        if isinstance(item, dict) and item.get("type") == "text":
+                                            parts.append(item.get("text", ""))
+                                        else:
+                                            parts.append(str(item))
+                                    out = "\n".join(parts)
+                                tr_payload = json.dumps(
+                                    {
+                                        "tool_use_id": blk.get("tool_use_id", ""),
+                                        "is_error": bool(blk.get("is_error", False)),
+                                        "output": out,
+                                    }
+                                )
+                                yield format_tool_result_delta(tr_payload, mdl, rid)
+                    continue
+
+                if etype == "result":
+                    usage = evt.get("usage", {}) or {}
+                    final_is_error = bool(evt.get("is_error", False)) or evt.get("subtype") == "error"
+                    continue
+
+                continue
         except asyncio.CancelledError:
             try:
                 proc.terminate()
@@ -513,24 +623,24 @@ class AgentExecutor:
             raise
 
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=max(5, resolved_timeout))
+            await asyncio.wait_for(proc.wait(), timeout=max(5, resolved_timeout))
         except asyncio.TimeoutError:
             try:
                 proc.kill()
             except Exception:
                 pass
-            stdout_bytes, _ = b"", b""
 
-        out_text = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
-        result = digest_claude_output(out_text)
+        if proc.returncode and proc.returncode != 0:
+            final_is_error = True
 
-        if proc.returncode and proc.returncode != 0 and not result["is_error"]:
-            result["is_error"] = True
-
-        if result["is_error"]:
+        if final_is_error:
             mark_session_failed(external_uuid)
         else:
             mark_session_complete(external_uuid)
 
-        yield format_stop_chunk(result.get("usage", {}), mdl, rid)
+        stop_usage = {
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+        }
+        yield format_stop_chunk(stop_usage, mdl, rid)
         yield format_done()
