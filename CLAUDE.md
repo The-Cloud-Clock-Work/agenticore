@@ -139,3 +139,39 @@ Phase 2 (--live):   agent self-reports visible servers
 Phase 3 (--live):   per-call subtraction — BEFORE/AFTER ~/.claude.json data proof
 Result: 24/24 ALL PASS on anton-agent (2026-04-08)
 ```
+
+## Real-Time SSE Streaming (Agent Mode)
+
+Every agenticore-backed agent is a **fully auditable, traceable, real-time observable agent**. Any chat client (LibreChat, OpenWebUI, raw `curl -N`) holds one open HTTP connection to `/v1/chat/completions` with `stream=true` and watches the agent's reasoning, tool calls, tool results, and final answer flow as live OpenAI-format SSE chunks — token-by-token, as the model produces them.
+
+**Streaming hot path** (`agenticore/agent_mode/agent.py::execute_streaming`):
+1. Strip slash tokens (server-side, deterministic — claude never sees them); load sticky visibility config from `agenticore:stream_config:{AGENTIHUB_AGENT}`
+2. Spawn `claude -p ... --output-format stream-json --verbose --include-partial-messages`
+3. Read `proc.stdout` line-by-line in an async loop; parse each JSONL `stream_event`:
+   - `thinking_delta` → `format_thinking_delta` → `delta.reasoning_content` (rendered in reasoning panel)
+   - `text_delta` → `format_text_delta` → `delta.content`
+   - `content_block_start(tool_use)` + `input_json_delta` → accumulate args, emit fenced ` ```tool_use:NAME ` block on `content_block_stop`
+   - `tool_result` (next user message) → fenced ` ```tool_result ` block paired below the call
+4. Filter every event through `is_visible(event_type, stream_cfg)` before yielding
+5. On `result` event: capture usage tokens, emit stop chunk + `data: [DONE]`
+
+No transcript polling, no Redis event bus in the streaming path. The Redis bus (`agenticore:events:{uuid}` via `agentihooks/hooks/observability/event_relay.py`) is preserved for the non-streaming `execute()` path and any cross-process observability subscribers.
+
+**Slash tokens** — intercepted in `stream_config.get_for_request` against the **last user message** (multi-turn aware, stripped before claude sees them):
+- `/show-thinking` / `/hide-thinking` — toggle thinking visibility
+- `/show-tools` / `/hide-tools` — toggle tool_use + tool_result visibility
+- `/show-all` / `/hide-all` — toggle all
+- `/stream-status` — return current visibility as inline meta SSE (no subprocess spawn)
+
+When a request is **toggle-only** (slash tokens with empty cleaned message), agenticore returns the resolved config inline as a `stream_config` meta event without spawning claude — see `server.py::post_openai_chat_completions` `if found_tokens and not last_clean.strip()`.
+
+**Sticky storage**: `agenticore:stream_config:{AGENTIHUB_AGENT}` Redis hash, no TTL, file fallback `~/.agenticore/stream_config/{agent_id}.json`. Defaults: `assistant_text` only; thinking and tools are opt-in.
+
+**Auditing**: `tests/smoke/verify_streaming_pipeline.sh <agent>` runs a deterministic conversation against a live pod, cross-validates events across four observation layers (client SSE, Redis stream, pod logs, claude transcript), and writes timestamped artifacts to `/tmp/sse-audit/<run-id>/` for later review. Replay past runs with `--replay <run-id>`.
+
+**Reference docs**:
+- `docs/reference/sse-streaming.md` — full SSE chunk schema, client filter examples, fail mode diagnostics, milestones
+- `docs/getting-started/test-streaming.md` — step-by-step self-test from a fresh terminal
+- `tests/unit/test_agent.py::TestExecuteStreamingParser` — parser unit tests with fake stream-json shim
+
+**LiteLLM / LibreChat integration**: agents are onboarded as openai-compatible models pointing at `http://<agent>.anton-dev.svc:8200/v1`. The `librechat-dev` LiteLLM unit's models allowlist controls which agents appear in LibreChat's model picker.

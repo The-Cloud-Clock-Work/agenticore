@@ -326,12 +326,25 @@ Agent Mode:     Request → load package → claude -p "task" → result (+ noti
 
 ### Key features
 
-- **Real-time SSE streaming** — `stream=true` on `/v1/chat/completions`
-  delivers thinking blocks, tool calls, tool results, and assistant text as
-  live SSE deltas on the same open HTTP connection. Sticky per-agent
-  visibility toggles via `/show-thinking`, `/show-tools`, `/show-all`,
-  `/hide-*`. See [SSE Streaming reference](docs/reference/sse-streaming.md)
-  and [test it yourself](docs/getting-started/test-streaming.md).
+- **Real-time SSE streaming — fully auditable, traceable agents.**
+  `stream=true` on `/v1/chat/completions` delivers **thinking blocks token-by-token**,
+  tool calls, tool results, and assistant text as live SSE deltas on the same
+  open HTTP connection. The streaming hot path reads claude's stdout directly
+  via `--output-format stream-json --include-partial-messages` — no transcript
+  polling, no Redis indirection, no flush race. Any OpenAI-compatible chat
+  client (LibreChat, OpenWebUI, custom UI, raw `curl -N`) can watch the agent
+  reason through a problem, call tools, and produce the answer **as it
+  happens**. Thinking renders in `delta.reasoning_content` (separate
+  reasoning panel in reasoning-aware clients); tool calls render as fenced
+  ` ```tool_use:NAME ` markdown blocks paired with ` ```tool_result ` blocks
+  below them. Sticky per-agent visibility toggles via `/show-thinking`,
+  `/show-tools`, `/show-all`, `/hide-*`, `/stream-status` — intercepted
+  server-side before claude ever sees the prompt, so they are deterministic
+  and the LLM cannot misinterpret or refuse them. Cross-validate the whole
+  pipeline against the wire, the transcript, and Redis with
+  `tests/smoke/verify_streaming_pipeline.sh <agent>`. See
+  [SSE Streaming reference](docs/reference/sse-streaming.md) and
+  [test it yourself](docs/getting-started/test-streaming.md).
 - **Async completion queue** — `wait=false` pushes to a Redis queue; a worker
   process picks it up. Poll `GET /completions/{uuid}` for the result.
 - **Session continuity** — Conversations can be resumed across requests using

@@ -5,7 +5,9 @@ nav_order: 4
 
 # SSE Streaming
 
-Real-time event streaming for the `/v1/chat/completions` endpoint when `stream=true`. Thinking blocks, tool calls, tool results, and assistant text arrive as live SSE deltas on the same open HTTP connection as the agent produces them — not batched at the end.
+Real-time event streaming for the `/v1/chat/completions` endpoint when `stream=true`. **Thinking blocks, tool calls, tool results, and assistant text arrive token-by-token** as live SSE deltas on the same open HTTP connection — not batched at the end of the turn.
+
+This turns every agenticore-backed agent into a **fully auditable and traceable agent**: any chat client (LibreChat, OpenWebUI, custom UI, raw `curl -N`) can watch the agent's reasoning, tool invocations, tool results, and final answer **as they happen**, in OpenAI-compatible SSE chunks, with deterministic visibility controls. Every event the model produces is observable on the wire, on disk (transcript), and in Redis (when needed for cross-process consumers) — three independent layers that can be cross-validated via the bundled audit script.
 
 ## TL;DR
 
@@ -28,13 +30,18 @@ curl -sN http://localhost:8200/v1/chat/completions \
 When you `POST /v1/chat/completions` with `stream: true`, agenticore:
 
 1. Intercepts any slash tokens in the prompt (see below), strips them, persists the visibility config per agent
-2. Spawns the Claude subprocess in background (does not block on completion)
-3. Returns a `StreamingResponse` that tails `agenticore:events:{uuid}` on Redis via XREAD
-4. As agentihooks hooks fire inside the subprocess, they XADD structured events to that Redis stream
-5. Each visible event is mapped to an OpenAI-compatible delta chunk and yielded to the client immediately
-6. Stream closes with `data: [DONE]` when the subprocess exits
+2. Spawns the Claude subprocess with `--output-format stream-json --verbose --include-partial-messages` so claude emits one raw API event per stdout line as the model generates each token
+3. Reads `proc.stdout` line-by-line in an async loop, parses each JSONL event, and dispatches:
+   - `thinking_delta` → `delta.reasoning_content` (rendered in the client's reasoning panel)
+   - `text_delta` → `delta.content` (assistant text)
+   - `content_block_start` + `input_json_delta` → accumulates tool_use args until `content_block_stop`, then emits a fenced ` ```tool_use:NAME ` markdown block
+   - `tool_result` (returned in the next user-role message) → fenced ` ```tool_result ` block paired below the call
+4. Filters every event through the sticky visibility config (`is_visible`) before yielding
+5. On `result` event: captures usage tokens, yields a stop chunk, then `data: [DONE]`
 
-Non-streaming (`stream: false`) is unchanged — still returns a single `chat.completion` JSON object.
+No transcript polling, no Redis event bus, no JSONL flush race — the streaming hot path reads claude's stdout pipe directly. Thinking tokens reach the client in the same instant the model emits them.
+
+Non-streaming (`stream: false`) is unchanged — still returns a single `chat.completion` JSON object built from the buffered final result.
 
 ## Slash tokens (visibility toggles)
 
@@ -72,27 +79,31 @@ data: {"id":"...","object":"chat.completion.chunk","model":"sonnet",
        "choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
 ```
 
-### Thinking delta
+### Thinking delta (streamed token-by-token)
+Uses `delta.reasoning_content` so OpenAI-compatible reasoning-aware clients (LibreChat, OpenWebUI, etc.) render thinking in a dedicated reasoning panel separate from the assistant text.
 ```
 data: {"choices":[{"index":0,
-  "delta":{"content":"Let me break this down..."},
+  "delta":{"reasoning_content":"Let me break"},
   "finish_reason":null,
   "x_agenticore_event_type":"thinking"}]}
 ```
 
-### Tool use delta (maps to OpenAI `tool_calls` schema)
+### Tool use delta (rendered as fenced markdown)
+Emitted once per tool call when the input JSON is fully assembled. Uses `delta.content` with a ` ```tool_use:NAME ` fence so chat clients render it inline as a code block. We deliberately do **not** use OpenAI's `delta.tool_calls` schema — that would tell the client to execute the function locally, and clients without agenticore's tool registry fail with "Tool not found".
 ```
 data: {"choices":[{"index":0,
-  "delta":{"tool_calls":[{"index":0,"id":"toolu_01...","type":"function",
-    "function":{"name":"Bash","arguments":"{\"command\":\"ls /tmp\"}"}}]},
+  "delta":{"content":"\n\n```tool_use:Bash\n{\n  \"command\": \"ls /tmp\"\n}\n```\n"},
   "finish_reason":null,
-  "x_agenticore_event_type":"tool_use"}]}
+  "x_agenticore_event_type":"tool_use",
+  "x_agenticore_tool_name":"Bash",
+  "x_agenticore_tool_use_id":"toolu_01..."}]}
 ```
 
-### Tool result delta (custom — OpenAI has no native tool_result delta)
+### Tool result delta
+Wrapped in a ` ```tool_result ` fenced block (or ` ```tool_result:error `) so it visually pairs with the preceding `tool_use` block.
 ```
 data: {"choices":[{"index":0,
-  "delta":{"content":"file1.txt\nfile2.log\n"},
+  "delta":{"content":"\n```tool_result\nfile1.txt\nfile2.log\n```\n"},
   "finish_reason":null,
   "x_agenticore_event_type":"tool_result",
   "x_agenticore_tool_use_id":"toolu_01...",
@@ -145,9 +156,11 @@ while (true) {
     const delta = choice.delta ?? {};
 
     if (eventType === 'thinking') {
-      renderThinkingPanel(delta.content);
+      // delta.reasoning_content is the thinking token (token-by-token)
+      renderThinkingPanel(delta.reasoning_content);
     } else if (eventType === 'tool_use') {
-      renderToolCall(delta.tool_calls[0]);
+      // delta.content holds the fenced ```tool_use:NAME block
+      renderToolCall(delta.content, choice.x_agenticore_tool_name);
     } else if (eventType === 'tool_result') {
       renderToolResult(delta.content, choice.x_agenticore_tool_use_id);
     } else if (delta.content) {
@@ -180,15 +193,17 @@ stream = client.chat.completions.create(
 for chunk in stream:
     choice = chunk.choices[0]
     event_type = getattr(choice, "x_agenticore_event_type", None)
+    delta = choice.delta
     if event_type == "thinking":
-        print(f"[thinking] {choice.delta.content}")
+        # reasoning_content is a custom field; pull it off the raw model_dump
+        thought = getattr(delta, "reasoning_content", None) or delta.model_dump().get("reasoning_content", "")
+        print(f"[thinking] {thought}", end="", flush=True)
     elif event_type == "tool_use":
-        call = choice.delta.tool_calls[0]
-        print(f"[tool {call.function.name}] {call.function.arguments}")
+        print(f"[tool] {delta.content}")
     elif event_type == "tool_result":
-        print(f"[result] {choice.delta.content[:200]}")
-    elif choice.delta.content:
-        print(choice.delta.content, end="", flush=True)
+        print(f"[result] {delta.content[:200]}")
+    elif delta.content:
+        print(delta.content, end="", flush=True)
 ```
 
 ## Pipeline architecture
@@ -200,22 +215,26 @@ HTTP client ─POST /v1/chat/completions stream=true─► agenticore
                                                        │     (strip slash tokens, load sticky state)
                                                        │
                                                        ├─ AgentExecutor.execute_streaming
-                                                       │     ├─ spawn claude subprocess
-                                                       │     │     env: AGENTICORE_CORRELATION_ID, AGENTICORE_EVENT_STREAM=1
-                                                       │     └─ tail Redis stream agenticore:events:{uuid}
-                                                       │           via XREAD BLOCK
+                                                       │     ├─ spawn claude with --output-format stream-json
+                                                       │     │                    --verbose --include-partial-messages
+                                                       │     ├─ async loop: read proc.stdout line-by-line
+                                                       │     │     parse each JSONL stream_event
+                                                       │     │     dispatch to format_*_delta
+                                                       │     │     filter through is_visible(event_type, stream_cfg)
+                                                       │     └─ on `result` event: emit stop chunk + [DONE]
                                                        │
-                                                       └─ StreamingResponse(generator) ◄── held open, flushed per chunk
-
-Meanwhile inside the subprocess:
-  Claude runs → hook fires on PostToolUse / Stop / Notification →
-    agentihooks/hooks/observability/event_relay.py →
-      parse hook payload + transcript JSONL →
-        XADD agenticore:events:{correlation_id} MAXLEN 2000
+                                                       └─ StreamingResponse(generator) ◄── held open, flushed per token
 ```
 
-Event stream key: `agenticore:events:{correlation_uuid}` (TTL 1h after completion).
-Sticky config key: `agenticore:stream_config:{AGENTIHUB_AGENT}` (no TTL).
+Three observation surfaces are populated for every streaming call:
+
+1. **Wire**: every visible token reaches the HTTP client as an OpenAI-format SSE chunk
+2. **Disk**: claude's transcript JSONL is still written to `~/.claude/projects/<encoded>/<session>.jsonl` for the post-mortem audit trail (see audit script below)
+3. **Redis** *(non-streaming path only)*: agentihooks `event_relay.py` continues to XADD events to `agenticore:events:{correlation_uuid}` (MAXLEN 2000, TTL 1h after `done` sentinel) for cross-process consumers like the brain bus
+
+The streaming hot path bypasses Redis entirely — there is no XADD/XREAD round-trip in the critical path. The Redis bus is preserved for the non-streaming `execute()` path and any fleet-wide observability subscribers that want to tail multiple agents at once.
+
+Sticky config key: `agenticore:stream_config:{AGENTIHUB_AGENT}` (no TTL, file fallback at `~/.agenticore/stream_config/{agent_id}.json`).
 
 ## Auditing a live agent
 
@@ -253,39 +272,31 @@ See [`tests/smoke/verify_streaming_pipeline.sh`](https://github.com/The-Cloud-Cl
 
 ## Milestones
 
-### 2026-04-14 — 95% green in LibreChat (`b88b3e8`)
+### 2026-04-14 — 100% green: token-by-token thinking via stream-json (`d72c201`)
 
-Validated end-to-end on `llm.dev.homeofanton.com` via LibreChat against
-`anton-agent`, `finops-agent`, `notebooklm-agent`:
+`feat/stream-json-direct` merged into `dev`. The streaming hot path now reads claude's stdout directly with `--output-format stream-json --verbose --include-partial-messages`, dispatching `thinking_delta` / `text_delta` / `tool_use` / `tool_result` events to SSE formatters as they arrive on the pipe. Validated 6/6 in LibreChat against `streaming-test`:
 
-- `/show-all`, `/hide-all`, `/show-thinking`, `/hide-thinking`, `/show-tools`,
-  `/hide-tools`, `/stream-status` all return inline meta SSE without spawning
-  a Claude subprocess. Toggle is sticky per `AGENTIHUB_AGENT` in Redis (no TTL)
-  with a file fallback.
-- Multi-turn aware: token detection runs against the **last user message**,
-  not the flattened history, so slash commands work on turn 2+.
-- Thinking renders in LibreChat's reasoning panel via `delta.reasoning_content`
-  (separate from assistant text), with `x_agenticore_event_type=thinking` for
-  custom clients.
-- Tool calls render as fenced ` ```tool_use:NAME ` blocks (no longer OpenAI
-  `delta.tool_calls` schema) so chat clients don't try to client-execute them
-  and fail with "Tool not found". Tool results render as ` ```tool_result `
-  blocks paired below the call.
+1. `/show-all` → inline `{"show_thinking":true,"show_tools":true,"show_text":true}` meta
+2. `/stream-status` → same inline meta on a multi-turn conversation (turn 2+)
+3. `is 17077 prime? think hard` → thinking renders **token-by-token** in LibreChat's reasoning panel as the model generates
+4. `run bash: ls -lh /tmp` → tool_use + tool_result fenced blocks stream live, then assistant summary
+5. `/hide-tools` then `run bash: date` → tool blocks suppressed, only the assistant text reaches the client
+6. Sticky toggles persist across turns and across pod restarts (Redis-backed)
 
-**Known gap (the remaining 5%)**: thinking arrives in one delta at the
-**end** of the turn, not progressively token-by-token while the model
-thinks. Root cause: agenticore currently spawns claude with
-`--output-format json`, which buffers the full response. The agentihooks
-event_relay reads the transcript JSONL on `PostToolUse`/`Stop` hooks, but
-the transcript is only written when each turn completes, so thinking lands
-as one chunk. To get true per-token thinking streaming we must switch the
-agent_mode pipeline to `--output-format stream-json` and parse claude's
-stdout in `execute_streaming` directly, dispatching deltas as they arrive
-on the pipe. That is a separate, larger change — pending web research on
-the exact `stream-json` event shape in current Claude Code releases.
+What this unlocks: every agenticore-backed agent is now a **fully auditable, traceable, real-time observable agent**. A chat client holds a single open HTTP connection and watches the agent's reasoning, tool calls, tool results, and final answer flow through in OpenAI-compatible SSE chunks, with deterministic per-agent visibility controls and zero LLM-side ambiguity (slash tokens are stripped server-side before claude ever sees them).
 
 Pipeline images at this milestone:
 ```
-ghcr.io/the-cloud-clock-work/agenticore:dev-b88b3e8
+ghcr.io/the-cloud-clock-work/agenticore:dev-d72c201
 ghcr.io/the-cloud-clock-work/agenticore:dev   (floating)
 ```
+
+### 2026-04-14 — 95% green in LibreChat (`b88b3e8`)
+
+Validated end-to-end on `llm.dev.homeofanton.com` via LibreChat against `anton-agent`, `finops-agent`, `notebooklm-agent`:
+
+- All seven slash tokens intercepted server-side, sticky per agent, multi-turn aware, no Claude spawn.
+- Thinking rendered in LibreChat's reasoning panel via `delta.reasoning_content`.
+- Tool calls + results rendered as fenced markdown blocks (not OpenAI `delta.tool_calls`).
+
+Known gap at this milestone: thinking arrived in one delta at the end of the turn, not progressively token-by-token, because the pipeline still used the transcript-JSONL hook + Redis relay path. Closed by the `d72c201` milestone above.
