@@ -18,7 +18,7 @@ jobs:
       - name: Install test deps
         run: pip install httpx pytest pytest-timeout langfuse
 
-      # ── Probe Anthropic endpoints (BASE → FALLBACK → fail) ──────────────
+      # ── Probe Anthropic endpoints (BASE → FALLBACK → skip) ─────────────
       - name: Probe Anthropic endpoints
         id: anthropic
         env:
@@ -38,6 +38,7 @@ jobs:
             echo "BASE endpoint reachable"
             echo "selected=base" >> "$GITHUB_OUTPUT"
             echo "url=${BASE_URL}" >> "$GITHUB_OUTPUT"
+            echo "reachable=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -49,14 +50,16 @@ jobs:
             echo "FALLBACK endpoint reachable"
             echo "selected=fallback" >> "$GITHUB_OUTPUT"
             echo "url=${FALLBACK_URL}" >> "$GITHUB_OUTPUT"
+            echo "reachable=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "::error::Both Anthropic endpoints unreachable (BASE: ${HTTP_CODE})"
-          exit 1
+          echo "::warning::Both Anthropic endpoints unreachable — skipping smoke test"
+          echo "reachable=false" >> "$GITHUB_OUTPUT"
 
       - name: Resolve API key
         id: resolve_key
+        if: steps.anthropic.outputs.reachable == 'true'
         env:
           TOKEN_BASE: ${{ secrets.ANTHROPIC_TOKEN_BASE }}
           TOKEN_FALLBACK: ${{ secrets.ANTHROPIC_TOKEN_FALLBACK }}
@@ -68,6 +71,7 @@ jobs:
           fi
 
       - name: Create .env
+        if: steps.anthropic.outputs.reachable == 'true'
         run: |
           cp .env.example .env
           cat >> .env <<EOF
@@ -89,9 +93,11 @@ jobs:
           fi
 
       - name: Start Docker stack
+        if: steps.anthropic.outputs.reachable == 'true'
         run: docker compose up --build -d
 
       - name: Wait for services
+        if: steps.anthropic.outputs.reachable == 'true'
         run: |
           echo "Waiting for Redis..."
           for i in $(seq 1 30); do
@@ -110,6 +116,7 @@ jobs:
           echo "All services ready"
 
       - name: Run smoke test
+        if: steps.anthropic.outputs.reachable == 'true'
         env:
           SMOKE_AGENTICORE_URL: http://localhost:8200
           SMOKE_DATASET_REPO: https://github.com/The-Cloud-Clock-Work/bridge-smoke-dataset
@@ -161,5 +168,5 @@ jobs:
         run: docker compose logs agenticore 2>&1 | tail -100
 
       - name: Teardown
-        if: always()
+        if: always() && steps.anthropic.outputs.reachable == 'true'
         run: docker compose down -v

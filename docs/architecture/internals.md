@@ -165,6 +165,7 @@ on the lock falls through safely.
 {AGENTICORE_WORKTREE_ROOT}/
 ├── {job_id_1}/                       ← bespoke worktree (ephemeral, NOT locked)
 └── {job_id_2}/                       ← bespoke worktree (ephemeral, NOT locked)
+```
 
 Worktrees are created under `AGENTICORE_WORKTREE_ROOT` (configurable, default `~/.agenticore/worktrees/`). In Kubernetes, this is an emptyDir volume at `/app/worktrees` — local disk, not NFS. Created with
 deterministic branch names (`agenticore-{job_id[:8]}`). Ephemeral worktrees are NOT locked (no need — they live on local disk and are cleaned up automatically). The `cleanup_worktrees`

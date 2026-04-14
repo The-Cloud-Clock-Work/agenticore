@@ -906,6 +906,7 @@ class TestAgentExecutor:
 
 # ─── execute_streaming stream-json parser tests ──────────────────────────────
 
+
 class _FakeStdout:
     """Minimal async readline-able stream for mocking proc.stdout."""
 
