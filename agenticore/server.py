@@ -962,7 +962,16 @@ def _build_rest_app():
                         yield format_done()
 
                     return StreamingResponse(status_gen(), media_type="text/event-stream")
-                return JSONResponse({"stream_config": stream_cfg, "agent_id": agent_id})
+                import json as _json
+
+                status_text = _json.dumps(stream_cfg)
+                return JSONResponse(
+                    build_openai_response(
+                        {"result": status_text, "usage": {}},
+                        model_name or "agenticore-agent",
+                        request_uuid,
+                    )
+                )
 
             from agenticore.runner import _get_job_semaphore
 
