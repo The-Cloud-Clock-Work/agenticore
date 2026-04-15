@@ -112,13 +112,10 @@ def format_thinking_delta(text: str, model: str, request_uuid: str) -> str:
 def format_tool_use_delta(tool_use_json: str, model: str, request_uuid: str) -> str:
     """Streaming delta for tool_use blocks.
 
-    Emits as plain delta.content (markdown-fenced) instead of OpenAI's
-    delta.tool_calls schema. Reason: chat clients like LibreChat treat
-    delta.tool_calls as a request to execute the function client-side and
-    fail with 'Tool not found' because they don't have agenticore's tool
-    registry. We're not asking the client to execute anything — we're
-    showing the operator what the agent is doing — so a code block is the
-    right surface."""
+    Routed through delta.reasoning_content so LibreChat folds tool calls
+    into the same collapsible 'Thoughts' panel as thinking — keeps the
+    main chat window clean when the agent calls many tools in a row.
+    """
     try:
         data = json.loads(tool_use_json) if isinstance(tool_use_json, str) else tool_use_json
     except Exception:
@@ -129,12 +126,12 @@ def format_tool_use_delta(tool_use_json: str, model: str, request_uuid: str) -> 
         args_pretty = json.dumps(inp, indent=2, ensure_ascii=False)
     except Exception:
         args_pretty = str(inp)
-    rendered = f"\n\n```tool_use:{name}\n{args_pretty}\n```\n"
+    rendered = f"\n\n▶ tool_use: {name}\n```json\n{args_pretty}\n```\n"
     env = _chunk_envelope(model, request_uuid)
     env["choices"] = [
         {
             "index": 0,
-            "delta": {"content": rendered},
+            "delta": {"reasoning_content": rendered},
             "finish_reason": None,
             "x_agenticore_event_type": "tool_use",
             "x_agenticore_tool_name": name,
@@ -145,8 +142,11 @@ def format_tool_use_delta(tool_use_json: str, model: str, request_uuid: str) -> 
 
 
 def format_tool_result_delta(tool_result_json: str, model: str, request_uuid: str) -> str:
-    """Streaming delta for tool_result blocks. Rendered as a fenced block so
-    chat clients show it inline below the tool_use block."""
+    """Streaming delta for tool_result blocks.
+
+    Same channel as tool_use (delta.reasoning_content) so the result folds
+    into the collapsible panel directly below its tool call.
+    """
     try:
         data = json.loads(tool_result_json) if isinstance(tool_result_json, str) else tool_result_json
     except Exception:
@@ -158,13 +158,13 @@ def format_tool_result_delta(tool_result_json: str, model: str, request_uuid: st
         except Exception:
             output = str(output)
     is_error = bool(data.get("is_error", False))
-    fence = "tool_result:error" if is_error else "tool_result"
-    rendered = f"\n```{fence}\n{output}\n```\n"
+    label = "◉ tool_result (error)" if is_error else "◉ tool_result"
+    rendered = f"\n{label}\n```\n{output}\n```\n"
     env = _chunk_envelope(model, request_uuid)
     env["choices"] = [
         {
             "index": 0,
-            "delta": {"content": rendered},
+            "delta": {"reasoning_content": rendered},
             "finish_reason": None,
             "x_agenticore_event_type": "tool_result",
             "x_agenticore_tool_use_id": data.get("tool_use_id", ""),
