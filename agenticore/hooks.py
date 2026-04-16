@@ -87,7 +87,7 @@ def _install_dir() -> Path:
     return hooks or Path.home() / ".agenticore" / "agentihooks"
 
 
-def _clone_or_fetch(url: str, dest: Path) -> None:
+def _clone_or_fetch(url: str, dest: Path, branch: str = "") -> None:
     """Clone or update agentihooks repo, flock/Redis-protected."""
     t0 = time.monotonic()
     dest.mkdir(parents=True, exist_ok=True)
@@ -98,10 +98,15 @@ def _clone_or_fetch(url: str, dest: Path) -> None:
         with git_askpass_env(token) as extra_env:
             if (dest / ".git").exists():
                 _run_git(["git", "-C", str(dest), "fetch", "--all", "--prune"], extra_env=extra_env)
-                _run_git(["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"], extra_env=extra_env)
+                ref = f"origin/{branch}" if branch else "origin/HEAD"
+                _run_git(["git", "-C", str(dest), "reset", "--hard", ref], extra_env=extra_env)
                 _run_git(["git", "-C", str(dest), "clean", "-fdx", "-e", "*.env"], extra_env=extra_env)
             else:
-                _run_git(["git", "clone", url, str(dest)], extra_env=extra_env)
+                cmd = ["git", "clone"]
+                if branch:
+                    cmd += ["--branch", branch]
+                cmd += [url, str(dest)]
+                _run_git(cmd, extra_env=extra_env)
 
     if get_config().repos.shared_fs_root:
         _with_redis_lock(_scoped_lock_key("agenticore:lock:agentihooks"), _do)
@@ -115,7 +120,7 @@ def _clone_or_fetch(url: str, dest: Path) -> None:
     logger.info("_clone_or_fetch agentihooks done in %.2fs", time.monotonic() - t0)
 
 
-def start_sync_watcher(url: str, dest: Path, interval: int) -> Optional[threading.Thread]:
+def start_sync_watcher(url: str, dest: Path, interval: int, branch: str = "") -> Optional[threading.Thread]:
     """Start a daemon thread that periodically git-fetches + rebuilds agentihooks.
 
     Returns the started Thread, or None in dev mode.
@@ -132,7 +137,7 @@ def start_sync_watcher(url: str, dest: Path, interval: int) -> Optional[threadin
         while True:
             time.sleep(interval)
             try:
-                _clone_or_fetch(url, dest)
+                _clone_or_fetch(url, dest, branch)
                 ref = _get_head_ref(dest)
                 logger.info("agentihooks hot-reload complete (%s)", dest)
                 mgmt.info("hot-reload agentihooks OK ref=%s", ref)
@@ -147,7 +152,7 @@ def start_sync_watcher(url: str, dest: Path, interval: int) -> Optional[threadin
     return t
 
 
-def start_bundle_watcher(url: str, dest: Path, interval: int) -> Optional[threading.Thread]:
+def start_bundle_watcher(url: str, dest: Path, interval: int, branch: str = "") -> Optional[threading.Thread]:
     """Daemon thread that periodically re-fetches the agentihooks bundle repo."""
     if get_config().dev_mode:
         logger.info("dev mode: skipping bundle watcher")
@@ -161,7 +166,7 @@ def start_bundle_watcher(url: str, dest: Path, interval: int) -> Optional[thread
         while True:
             time.sleep(interval)
             try:
-                _clone_or_fetch_bundle(url, dest)
+                _clone_or_fetch_bundle(url, dest, branch)
                 ref = _get_head_ref(dest)
                 logger.info("agentihooks-bundle hot-reload complete (%s)", dest)
                 mgmt.info("hot-reload agentihooks-bundle OK ref=%s", ref)
@@ -176,7 +181,7 @@ def start_bundle_watcher(url: str, dest: Path, interval: int) -> Optional[thread
     return t
 
 
-def start_agentihub_watcher(url: str, dest: Path, interval: int) -> Optional[threading.Thread]:
+def start_agentihub_watcher(url: str, dest: Path, interval: int, branch: str = "") -> Optional[threading.Thread]:
     """Daemon thread that periodically re-fetches the agentihub repo."""
     if get_config().dev_mode:
         logger.info("dev mode: skipping agentihub watcher")
@@ -190,7 +195,7 @@ def start_agentihub_watcher(url: str, dest: Path, interval: int) -> Optional[thr
         while True:
             time.sleep(interval)
             try:
-                _clone_or_fetch_agentihub(url, dest)
+                _clone_or_fetch_agentihub(url, dest, branch)
                 ref = _get_head_ref(dest)
                 logger.info("agentihub hot-reload complete (%s)", dest)
                 mgmt.info("hot-reload agentihub OK ref=%s", ref)
@@ -211,7 +216,7 @@ def _agentihub_install_dir() -> Path:
     return hub or Path.home() / ".agenticore" / "agentihub"
 
 
-def _clone_or_fetch_agentihub(url: str, dest: Path) -> None:
+def _clone_or_fetch_agentihub(url: str, dest: Path, branch: str = "") -> None:
     """Clone or update agentihub repo (no profile build — agent mode handles provisioning)."""
     t0 = time.monotonic()
     dest.mkdir(parents=True, exist_ok=True)
@@ -222,10 +227,15 @@ def _clone_or_fetch_agentihub(url: str, dest: Path) -> None:
         with git_askpass_env(token) as extra_env:
             if (dest / ".git").exists():
                 _run_git(["git", "-C", str(dest), "fetch", "--all", "--prune"], extra_env=extra_env)
-                _run_git(["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"], extra_env=extra_env)
+                ref = f"origin/{branch}" if branch else "origin/HEAD"
+                _run_git(["git", "-C", str(dest), "reset", "--hard", ref], extra_env=extra_env)
                 _run_git(["git", "-C", str(dest), "clean", "-fdx"], extra_env=extra_env)
             else:
-                _run_git(["git", "clone", url, str(dest)], extra_env=extra_env)
+                cmd = ["git", "clone"]
+                if branch:
+                    cmd += ["--branch", branch]
+                cmd += [url, str(dest)]
+                _run_git(cmd, extra_env=extra_env)
 
     if get_config().repos.shared_fs_root:
         _with_redis_lock(_scoped_lock_key("agenticore:lock:agentihub"), _do)
@@ -260,9 +270,9 @@ def sync_agentihub(url: str = "") -> Optional[Path]:
             return Path(explicit)
         return None
     dest = _agentihub_install_dir()
-    _clone_or_fetch_agentihub(url, dest)
+    _clone_or_fetch_agentihub(url, dest, cfg.agentihub_branch)
     os.environ["AGENTICORE_AGENTIHUB_PATH"] = str(dest)
-    logger.info("AGENTICORE_AGENTIHUB_PATH → %s", dest)
+    logger.info("AGENTICORE_AGENTIHUB_PATH → %s (branch=%s)", dest, cfg.agentihub_branch or "HEAD")
     return dest
 
 
@@ -272,7 +282,7 @@ def _bundle_dir() -> Path:
     return bundle or Path.home() / ".agenticore" / "agentihooks-bundle"
 
 
-def _clone_or_fetch_bundle(url: str, dest: Path) -> None:
+def _clone_or_fetch_bundle(url: str, dest: Path, branch: str = "") -> None:
     """Clone or update agentihooks bundle repo, with GitHub App auth."""
     t0 = time.monotonic()
     dest.mkdir(parents=True, exist_ok=True)
@@ -283,9 +293,14 @@ def _clone_or_fetch_bundle(url: str, dest: Path) -> None:
         with git_askpass_env(token) as extra_env:
             if (dest / ".git").exists():
                 _run_git(["git", "-C", str(dest), "fetch", "--all", "--prune"], extra_env=extra_env)
-                _run_git(["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"], extra_env=extra_env)
+                ref = f"origin/{branch}" if branch else "origin/HEAD"
+                _run_git(["git", "-C", str(dest), "reset", "--hard", ref], extra_env=extra_env)
             else:
-                _run_git(["git", "clone", url, str(dest)], extra_env=extra_env)
+                cmd = ["git", "clone"]
+                if branch:
+                    cmd += ["--branch", branch]
+                cmd += [url, str(dest)]
+                _run_git(cmd, extra_env=extra_env)
 
     if get_config().repos.shared_fs_root:
         _with_redis_lock(_scoped_lock_key("agenticore:lock:agentihooks-bundle"), _do)
@@ -321,9 +336,9 @@ def sync_agentihooks(url: str = "") -> Optional[Path]:
             return Path(explicit)
         return None
     dest = _install_dir()
-    _clone_or_fetch(url, dest)
+    _clone_or_fetch(url, dest, cfg.agentihooks_branch)
     os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(dest)
-    logger.info("AGENTICORE_AGENTIHOOKS_PATH → %s", dest)
+    logger.info("AGENTICORE_AGENTIHOOKS_PATH → %s (branch=%s)", dest, cfg.agentihooks_branch or "HEAD")
     return dest
 
 
@@ -343,8 +358,8 @@ def sync_bundle() -> Optional[Path]:
     if not url:
         return None
     dest = _bundle_dir()
-    _clone_or_fetch_bundle(url, dest)
-    logger.info("agentihooks bundle synced → %s", dest)
+    _clone_or_fetch_bundle(url, dest, cfg.agentihooks_bundle_branch)
+    logger.info("agentihooks bundle synced → %s (branch=%s)", dest, cfg.agentihooks_bundle_branch or "HEAD")
     return dest
 
 

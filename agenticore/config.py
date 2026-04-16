@@ -140,6 +140,9 @@ class Config:
     agentihub_url: str = ""
     agentihub_path: str = ""
     agentihub_sync_interval: int = 300
+    agentihooks_branch: str = ""  # AGENTICORE_AGENTIHOOKS_BRANCH — empty = remote HEAD
+    agentihub_branch: str = ""  # AGENTICORE_AGENTIHUB_BRANCH — empty = remote HEAD
+    agentihooks_bundle_branch: str = ""  # AGENTICORE_AGENTIHOOKS_BUNDLE_BRANCH — empty = remote HEAD
     dev_mode: bool = False  # AGENTICORE_DEV_MODE — skip cloning, use mounted paths
 
 
@@ -349,6 +352,11 @@ def load_config(config_path: Optional[str] = None) -> Config:
     agentihub_sync_interval = _env_int(
         "AGENTICORE_AGENTIHUB_SYNC_INTERVAL", str(raw.get("agentihub_sync_interval", 300))
     )
+    agentihooks_branch = _env("AGENTICORE_AGENTIHOOKS_BRANCH", raw.get("agentihooks_branch", ""))
+    agentihub_branch = _env("AGENTICORE_AGENTIHUB_BRANCH", raw.get("agentihub_branch", ""))
+    agentihooks_bundle_branch = _env(
+        "AGENTICORE_AGENTIHOOKS_BUNDLE_BRANCH", raw.get("agentihooks_bundle_branch", "")
+    )
     dev_mode = _env("AGENTICORE_DEV_MODE", raw.get("dev_mode", "")).lower() in ("true", "1", "yes")
 
     return Config(
@@ -371,6 +379,9 @@ def load_config(config_path: Optional[str] = None) -> Config:
         agentihub_url=agentihub_url,
         agentihub_path=agentihub_path,
         agentihub_sync_interval=agentihub_sync_interval,
+        agentihooks_branch=agentihooks_branch,
+        agentihub_branch=agentihub_branch,
+        agentihooks_bundle_branch=agentihooks_bundle_branch,
         dev_mode=dev_mode,
     )
 
