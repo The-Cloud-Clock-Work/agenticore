@@ -1243,11 +1243,11 @@ def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optio
     if hooks_path and cfg.agentihooks_url and cfg.agentihooks_sync_interval > 0:
         from agenticore.hooks import start_sync_watcher
 
-        start_sync_watcher(cfg.agentihooks_url, hooks_path, cfg.agentihooks_sync_interval)
+        start_sync_watcher(cfg.agentihooks_url, hooks_path, cfg.agentihooks_sync_interval, cfg.agentihooks_branch)
     if bundle_path and cfg.agentihooks_bundle_url and cfg.agentihooks_bundle_sync_interval > 0:
         from agenticore.hooks import start_bundle_watcher
 
-        start_bundle_watcher(cfg.agentihooks_bundle_url, bundle_path, cfg.agentihooks_bundle_sync_interval)
+        start_bundle_watcher(cfg.agentihooks_bundle_url, bundle_path, cfg.agentihooks_bundle_sync_interval, cfg.agentihooks_bundle_branch)
 
 
 def _start_agentihub_watcher_if_needed(cfg, hub_path: Optional[Path]) -> None:
@@ -1257,7 +1257,7 @@ def _start_agentihub_watcher_if_needed(cfg, hub_path: Optional[Path]) -> None:
     if cfg.agentihub_sync_interval > 0:
         from agenticore.hooks import start_agentihub_watcher
 
-        start_agentihub_watcher(cfg.agentihub_url, hub_path, cfg.agentihub_sync_interval)
+        start_agentihub_watcher(cfg.agentihub_url, hub_path, cfg.agentihub_sync_interval, cfg.agentihub_branch)
 
 
 def _auto_register_with_bridge(cfg):
