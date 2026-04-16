@@ -103,9 +103,13 @@ def build_claude_cmd(
     if fallback_model:
         cmd.extend(["--fallback-model", fallback_model])
     if allowed_tools:
-        cmd.extend(["--allowedTools"] + [t.strip() for t in allowed_tools.split(",") if t.strip()])
+        parsed = [t.strip() for t in allowed_tools.split(",") if t.strip()]
+        if parsed:
+            cmd.extend(["--allowedTools"] + parsed)
     if disallowed_tools:
-        cmd.extend(["--disallowedTools"] + [t.strip() for t in disallowed_tools.split(",") if t.strip()])
+        parsed = [t.strip() for t in disallowed_tools.split(",") if t.strip()]
+        if parsed:
+            cmd.extend(["--disallowedTools"] + parsed)
 
     # Session handling: stateless → one-shot; resume → continue existing; else → create persistent
     if stateless:

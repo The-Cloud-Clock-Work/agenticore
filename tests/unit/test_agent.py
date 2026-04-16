@@ -267,13 +267,9 @@ class TestBuildClaudeCmd:
 
     @patch.dict(os.environ, _BASE_ENV)
     def test_allowed_tools_all_empty_after_split(self):
-        """When allowed_tools is only commas, --allowedTools appears but with no tool args."""
+        """When allowed_tools is only commas, --allowedTools is omitted entirely."""
         cmd = build_claude_cmd("task", allowed_tools=",")
-        # The `if allowed_tools:` guard passes for "," (truthy string),
-        # but split/filter produces no items, so only the flag is added.
-        idx = cmd.index("--allowedTools")
-        # Next element should be the message (no tool args inserted)
-        assert cmd[idx + 1] == "task"
+        assert "--allowedTools" not in cmd
 
 
 # ── digest_claude_output ──────────────────────────────────────────────────

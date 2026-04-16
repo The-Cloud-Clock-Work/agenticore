@@ -359,7 +359,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
     agentihooks_bundle_branch = _env(
         "AGENTICORE_AGENTIHOOKS_BUNDLE_BRANCH", raw.get("agentihooks_bundle_branch", "")
     )
-    dev_mode = _env("AGENTICORE_DEV_MODE", raw.get("dev_mode", "")).lower() in ("true", "1", "yes")
+    dev_mode = _env_bool("AGENTICORE_DEV_MODE", str(raw.get("dev_mode", "false")))
 
     return Config(
         repos=repos,
