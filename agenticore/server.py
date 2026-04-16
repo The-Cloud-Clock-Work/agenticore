@@ -795,6 +795,11 @@ def _build_rest_app():
     if cfg.agent_mode.enabled:
 
         async def post_completions(request: Request):
+            import logging as _dep_log
+
+            _dep_log.getLogger("agenticore.deprecation").warning(
+                "POST /completions is deprecated — migrate to /v1/chat/completions"
+            )
             from agenticore.agent_mode import stream_config as sc
 
             body = await request.json()
