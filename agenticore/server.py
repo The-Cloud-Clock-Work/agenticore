@@ -901,7 +901,10 @@ def _build_rest_app():
             return JSONResponse({"success": True, "completion": completion.to_dict()})
 
         async def post_openai_chat_completions(request: Request):
+            from uuid import uuid4 as _uuid4
+
             from agenticore.agent_mode.agent import AgentExecutor
+            from agenticore.agent_mode.conversation_key import resolve_conversation_key
             from agenticore.agent_mode.openai_compat import (
                 build_openai_error,
                 build_openai_response,
@@ -911,8 +914,14 @@ def _build_rest_app():
                 format_role_open_chunk,
                 format_status_meta,
                 format_stop_chunk,
+                last_user_message,
+            )
+            from agenticore.agent_mode.session_registry import (
+                register_session,
+                update_session_claude_id,
             )
             from agenticore.agent_mode import stream_config as sc
+            from agenticore.config import get_config
 
             body = await request.json()
             messages = body.get("messages")
@@ -921,7 +930,6 @@ def _build_rest_app():
                 return JSONResponse(err, status_code=code)
 
             stream = body.get("stream", False)
-            raw_message = flatten_messages(messages)
             headers = {k.decode(): v.decode() for k, v in request.scope.get("headers", [])}
             request_uuid = extract_request_id(headers, body)
             raw_model = body.get("model", "")
@@ -940,13 +948,11 @@ def _build_rest_app():
                 model_name = ""
 
             agent_id = os.environ.get("AGENTIHUB_AGENT", "default")
-            last_user_msg = ""
-            for _m in reversed(messages or []):
-                if _m.get("role") == "user":
-                    _c = _m.get("content", "")
-                    last_user_msg = _c if isinstance(_c, str) else str(_c)
-                    break
+
+            # Stream visibility: slash tokens from last user message
+            last_user_msg = last_user_message(messages)
             last_clean, stream_cfg, found_tokens = sc.get_for_request(agent_id, last_user_msg)
+            raw_message = flatten_messages(messages)
             if found_tokens:
                 clean_message, _ = sc.strip_tokens(raw_message)
             else:
@@ -980,27 +986,50 @@ def _build_rest_app():
                 err, code = build_openai_error("at capacity", 503)
                 return JSONResponse(err, status_code=code)
 
+            # Conversation persistence: resolve sticky key from request
+            cfg = get_config()
+            conv_key, tier, _user = resolve_conversation_key(
+                headers, body, agent_id, hash_fallback=cfg.agent_mode.conv_hash_fallback
+            )
+            is_stateless = tier == "ephemeral"
+
+            claude_session_id = ""
+            resume_mode = False
+            if not is_stateless:
+                mapping = register_session(conv_key, stateless=False)
+                claude_session_id = mapping.claude_session_id
+                if claude_session_id:
+                    resume_mode = True
+                else:
+                    claude_session_id = str(_uuid4())
+                    update_session_claude_id(conv_key, claude_session_id)
+
+            message_to_send = last_user_message(messages) if resume_mode else clean_message
+
             executor = AgentExecutor()
 
             if stream:
                 gen = executor.execute_streaming(
-                    message=clean_message,
-                    external_uuid=request_uuid,
+                    message=message_to_send,
+                    external_uuid=conv_key if not is_stateless else request_uuid,
                     stream_cfg=stream_cfg,
                     model=model_name,
                     timeout=body.get("timeout", 0),
                     disable_mcp_servers=body.get("disable_mcp_servers"),
                     request_uuid=request_uuid,
                     sse_model_name=model_name or "agenticore-agent",
+                    claude_session_id=claude_session_id,
+                    stateless=is_stateless,
+                    resume=resume_mode,
                 )
                 return StreamingResponse(gen, media_type="text/event-stream")
 
             async with sem:
                 result = await executor.execute(
-                    message=clean_message,
-                    external_uuid=request_uuid,
+                    message=message_to_send,
+                    external_uuid=conv_key if not is_stateless else request_uuid,
                     wait=True,
-                    stateless=True,
+                    stateless=is_stateless,
                     model=model_name,
                     timeout=body.get("timeout", 0),
                     disable_mcp_servers=body.get("disable_mcp_servers"),

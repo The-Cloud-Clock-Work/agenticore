@@ -177,8 +177,8 @@ class TestSseFormatters:
         tu = json.dumps({"id": "tu_1", "name": "Bash", "input": {"command": "ls"}})
         s = format_tool_use_delta(tu, "sonnet", "rid-4")
         d = _parse_sse_chunk(s)
-        content = d["choices"][0]["delta"]["content"]
-        assert "tool_use:Bash" in content
+        content = d["choices"][0]["delta"]["reasoning_content"]
+        assert "tool_use: Bash" in content
         assert "ls" in content
         assert d["choices"][0]["x_agenticore_event_type"] == "tool_use"
         assert d["choices"][0]["x_agenticore_tool_name"] == "Bash"
@@ -187,16 +187,16 @@ class TestSseFormatters:
     def test_tool_use_delta_handles_garbage(self):
         s = format_tool_use_delta("not json", "sonnet", "rid-4b")
         d = _parse_sse_chunk(s)
-        content = d["choices"][0]["delta"]["content"]
-        assert "tool_use:tool" in content
+        content = d["choices"][0]["delta"]["reasoning_content"]
+        assert "tool_use: tool" in content
 
     def test_tool_result_delta(self):
         tr = json.dumps({"tool_use_id": "tu_1", "is_error": False, "output": "rows: 5"})
         s = format_tool_result_delta(tr, "sonnet", "rid-5")
         d = _parse_sse_chunk(s)
-        content = d["choices"][0]["delta"]["content"]
+        content = d["choices"][0]["delta"]["reasoning_content"]
         assert "rows: 5" in content
-        assert "```tool_result" in content
+        assert "tool_result" in content
         assert d["choices"][0]["x_agenticore_event_type"] == "tool_result"
         assert d["choices"][0]["x_agenticore_tool_use_id"] == "tu_1"
         assert d["choices"][0]["x_agenticore_is_error"] is False
@@ -258,7 +258,7 @@ class TestFormatEventAsSse:
             "r",
         )
         d = _parse_sse_chunk(s)
-        assert "tool_use:B" in d["choices"][0]["delta"]["content"]
+        assert "tool_use: B" in d["choices"][0]["delta"]["reasoning_content"]
 
     def test_tool_result(self):
         s = format_event_as_sse(
@@ -267,7 +267,7 @@ class TestFormatEventAsSse:
             "r",
         )
         d = _parse_sse_chunk(s)
-        assert "ok" in d["choices"][0]["delta"]["content"]
+        assert "ok" in d["choices"][0]["delta"]["reasoning_content"]
 
     def test_unknown_returns_none(self):
         assert format_event_as_sse({"event_type": "garbage", "content": ""}, "m", "r") is None
