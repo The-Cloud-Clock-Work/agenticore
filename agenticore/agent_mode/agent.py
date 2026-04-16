@@ -325,7 +325,7 @@ class AgentExecutor:
 
                 if result["is_error"]:
                     mark_session_failed(external_uuid)
-                else:
+                elif stateless:
                     mark_session_complete(external_uuid)
 
                 result.pop("_stderr", None)
@@ -648,7 +648,7 @@ class AgentExecutor:
 
         if final_is_error:
             mark_session_failed(external_uuid)
-        else:
+        elif stateless:
             mark_session_complete(external_uuid)
 
         stop_usage = {

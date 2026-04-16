@@ -537,8 +537,9 @@ class TestAgentExecutor:
         assert "AGENTICORE_CLAUDE_SESSION_ID" in captured_env
 
     @pytest.mark.asyncio
-    async def test_execute_marks_session_complete(self, _agent_env):
-        """Successful execution marks session as completed."""
+    @pytest.mark.asyncio
+    async def test_execute_stateless_marks_session_complete(self, _agent_env):
+        """Stateless execution marks session as completed."""
         from agenticore.agent_mode.session_registry import resolve_external_uuid
 
         output = json.dumps({"result": "ok"})
@@ -546,11 +547,27 @@ class TestAgentExecutor:
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
             executor = AgentExecutor()
-            await executor.execute(message="test", external_uuid="complete-uuid", wait=True)
+            await executor.execute(message="test", external_uuid="complete-uuid", wait=True, stateless=True)
 
         mapping = resolve_external_uuid("complete-uuid")
         assert mapping is not None
         assert mapping.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_execute_persistent_keeps_session_active(self, _agent_env):
+        """Persistent execution keeps session active for multi-turn."""
+        from agenticore.agent_mode.session_registry import resolve_external_uuid
+
+        output = json.dumps({"result": "ok"})
+        mock_proc = _mock_subprocess(output)
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            executor = AgentExecutor()
+            await executor.execute(message="test", external_uuid="persist-uuid", wait=True, stateless=False)
+
+        mapping = resolve_external_uuid("persist-uuid")
+        assert mapping is not None
+        assert mapping.status == "active"
 
     @pytest.mark.asyncio
     async def test_execute_marks_session_failed(self, _agent_env):
