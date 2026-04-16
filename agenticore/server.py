@@ -814,7 +814,7 @@ def _build_rest_app():
                 from agenticore.runner import _get_job_semaphore
 
                 sem = _get_job_semaphore()
-                if sem.locked() and sem._value == 0:
+                if sem.locked():
                     return JSONResponse(
                         {"success": False, "error": "at capacity", "retry": True},
                         status_code=503,
@@ -982,7 +982,7 @@ def _build_rest_app():
             from agenticore.runner import _get_job_semaphore
 
             sem = _get_job_semaphore()
-            if sem.locked() and sem._value == 0:
+            if sem.locked():
                 err, code = build_openai_error("at capacity", 503)
                 return JSONResponse(err, status_code=code)
 
