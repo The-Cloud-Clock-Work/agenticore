@@ -18,10 +18,34 @@ from agenticore.agent_mode.openai_compat import (
     format_thinking_delta,
     format_tool_result_delta,
     format_tool_use_delta,
+    last_user_message,
 )
 
 
 @pytest.mark.unit
+class TestLastUserMessage:
+    def test_single_user(self):
+        assert last_user_message([{"role": "user", "content": "hi"}]) == "hi"
+
+    def test_multi_turn(self):
+        msgs = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "resp"},
+            {"role": "user", "content": "second"},
+        ]
+        assert last_user_message(msgs) == "second"
+
+    def test_no_user_message(self):
+        assert last_user_message([{"role": "system", "content": "sys"}]) == ""
+
+    def test_empty(self):
+        assert last_user_message([]) == ""
+
+    def test_non_string_content(self):
+        msgs = [{"role": "user", "content": ["block1"]}]
+        assert last_user_message(msgs) == "['block1']"
+
+
 class TestFlattenMessages:
     def test_single_user_message(self):
         msgs = [{"role": "user", "content": "Hello agent"}]

@@ -987,11 +987,15 @@ def _build_rest_app():
                 return JSONResponse(err, status_code=code)
 
             # Conversation persistence: resolve sticky key from request
+            import logging as _logging
+
+            _conv_log = _logging.getLogger("agenticore.conversation")
             cfg = get_config()
             conv_key, tier, _user = resolve_conversation_key(
                 headers, body, agent_id, hash_fallback=cfg.agent_mode.conv_hash_fallback
             )
             is_stateless = tier == "ephemeral"
+            _conv_log.info("conv_key=%s tier=%s agent=%s stateless=%s", conv_key, tier, agent_id, is_stateless)
 
             claude_session_id = ""
             resume_mode = False
