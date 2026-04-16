@@ -1002,24 +1002,23 @@ def _build_rest_app():
             is_stateless = tier == "ephemeral"
             _conv_log.info("conv_key=%s tier=%s agent=%s stateless=%s", conv_key, tier, agent_id, is_stateless)
 
-            claude_session_id = ""
-            resume_mode = False
-            if not is_stateless:
-                mapping = register_session(conv_key, stateless=False)
-                claude_session_id = mapping.claude_session_id
-                if claude_session_id:
-                    resume_mode = True
-                else:
-                    claude_session_id = str(_uuid4())
-                    update_session_claude_id(conv_key, claude_session_id)
-
-            message_to_send = last_user_message(messages) if resume_mode else clean_message
-
             executor = AgentExecutor()
 
             if stream:
+                claude_session_id = ""
+                resume_mode = False
+                if not is_stateless:
+                    mapping = register_session(conv_key, stateless=False)
+                    claude_session_id = mapping.claude_session_id
+                    if claude_session_id:
+                        resume_mode = True
+                    else:
+                        claude_session_id = str(_uuid4())
+                        update_session_claude_id(conv_key, claude_session_id)
+
+                stream_message = last_user_message(messages) if resume_mode else clean_message
                 gen = executor.execute_streaming(
-                    message=message_to_send,
+                    message=stream_message,
                     external_uuid=conv_key if not is_stateless else request_uuid,
                     stream_cfg=stream_cfg,
                     model=model_name,
@@ -1033,9 +1032,10 @@ def _build_rest_app():
                 )
                 return StreamingResponse(gen, media_type="text/event-stream")
 
+            # Non-streaming: let execute() handle session registration internally
             async with sem:
                 result = await executor.execute(
-                    message=message_to_send,
+                    message=clean_message,
                     external_uuid=conv_key if not is_stateless else request_uuid,
                     wait=True,
                     stateless=is_stateless,
