@@ -98,6 +98,7 @@ class AgentModeConfig:
     timeout: int = 3600
     max_retry_attempts: int = 3
     session_ttl: int = 86400
+    conv_hash_fallback: bool = True
     append_system_prompt: bool = True
     completion_queue_enabled: bool = True
     max_queue_workers: int = 1
@@ -316,6 +317,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         timeout=_env_int("AGENT_MODE_TIMEOUT", "3600"),
         max_retry_attempts=_env_int("AGENT_MODE_MAX_RETRIES", "3"),
         session_ttl=_env_int("AGENT_MODE_SESSION_TTL", "86400"),
+        conv_hash_fallback=_env_bool("AGENTICORE_CONV_HASH_FALLBACK", "true"),
         append_system_prompt=_env_bool("AGENT_MODE_APPEND_SYSTEM_PROMPT", "true"),
         completion_queue_enabled=_env_bool("AGENT_MODE_QUEUE_ENABLED", "true"),
         max_queue_workers=_env_int("AGENT_MODE_MAX_QUEUE_WORKERS", "1"),

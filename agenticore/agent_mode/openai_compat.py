@@ -29,6 +29,15 @@ def flatten_messages(messages: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def last_user_message(messages: list[dict]) -> str:
+    """Extract the content of the last user message from the messages array."""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            return content if isinstance(content, str) else str(content)
+    return ""
+
+
 def build_openai_response(result: dict, model: str, request_uuid: str) -> dict:
     """Build an OpenAI-compatible chat completion response from agent result."""
     usage = result.get("usage", {})

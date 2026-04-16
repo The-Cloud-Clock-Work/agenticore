@@ -67,11 +67,19 @@ class TestBuildClaudeCmd:
 
     @patch.dict(os.environ, _BASE_ENV)
     def test_resume_mode(self):
-        cmd = build_claude_cmd("continue", claude_session_id="sid-2", stateless=False)
+        cmd = build_claude_cmd("continue", claude_session_id="sid-2", stateless=False, resume=True)
         assert "--resume" in cmd
         assert "sid-2" in cmd
         assert "--session-id" not in cmd
         assert "--no-session-persistence" not in cmd
+
+    @patch.dict(os.environ, _BASE_ENV)
+    def test_first_turn_persistent(self):
+        cmd = build_claude_cmd("hello", claude_session_id="sid-3", stateless=False, resume=False)
+        assert "--session-id" in cmd
+        assert "sid-3" in cmd
+        assert "--no-session-persistence" not in cmd
+        assert "--resume" not in cmd
 
     @patch.dict(os.environ, _BASE_ENV)
     def test_model_override(self):
@@ -1011,7 +1019,7 @@ class TestExecuteStreamingParser:
         merged = "".join(chunks)
         assert "reasoning_content" in merged
         assert "let me think" in merged
-        assert "tool_use:Bash" in merged
+        assert "tool_use: Bash" in merged
         assert "file1" in merged
         assert "Done." in merged
         assert "[DONE]" in merged

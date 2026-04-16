@@ -48,6 +48,7 @@ def build_claude_cmd(
     *,
     claude_session_id: str = "",
     stateless: bool = False,
+    resume: bool = False,
     model: str = "",
     max_turns: int = 0,
     system_prompt: str = "",
@@ -106,12 +107,14 @@ def build_claude_cmd(
     if disallowed_tools:
         cmd.extend(["--disallowedTools"] + [t.strip() for t in disallowed_tools.split(",") if t.strip()])
 
-    # Session handling
+    # Session handling: stateless → one-shot; resume → continue existing; else → create persistent
     if stateless:
         cmd.extend(["--session-id", claude_session_id])
         cmd.append("--no-session-persistence")
-    elif claude_session_id:
+    elif resume and claude_session_id:
         cmd.extend(["--resume", claude_session_id])
+    elif claude_session_id:
+        cmd.extend(["--session-id", claude_session_id])
 
     cmd.append(message)
     return cmd
@@ -243,6 +246,7 @@ class AgentExecutor:
             message,
             claude_session_id=claude_session_id,
             stateless=stateless,
+            resume=not stateless and bool(claude_session_id),
             model=model,
             max_turns=max_turns,
             system_prompt=system_prompt,
@@ -301,7 +305,8 @@ class AgentExecutor:
                         cmd = build_claude_cmd(
                             retry_msg,
                             claude_session_id=claude_session_id,
-                            stateless=False,  # resume for retry
+                            stateless=False,
+                            resume=bool(claude_session_id),
                             model=model,
                             max_turns=max_turns,
                             system_prompt=system_prompt,
@@ -416,6 +421,9 @@ class AgentExecutor:
         disable_mcp_servers: Optional[list] = None,
         request_uuid: str = "",
         sse_model_name: str = "",
+        claude_session_id: str = "",
+        stateless: bool = True,
+        resume: bool = False,
     ):
         """Streaming variant of execute(). Yields SSE chunk strings.
 
@@ -446,13 +454,14 @@ class AgentExecutor:
         cfg = get_config()
         am = cfg.agent_mode
 
-        register_session(external_uuid, stateless=True)
+        register_session(external_uuid, stateless=stateless)
         save_state(external_uuid, wait=True, meta=meta)
 
         cmd = build_claude_cmd(
             message,
-            claude_session_id="",
-            stateless=False,
+            claude_session_id=claude_session_id,
+            stateless=stateless,
+            resume=resume,
             model=model,
             max_turns=max_turns,
             system_prompt=system_prompt,
@@ -468,7 +477,7 @@ class AgentExecutor:
 
         env = build_subprocess_env()
         env["AGENTICORE_CORRELATION_ID"] = external_uuid
-        env["AGENTICORE_CLAUDE_SESSION_ID"] = ""
+        env["AGENTICORE_CLAUDE_SESSION_ID"] = claude_session_id
 
         cwd = Path(am.package_dir)
         if not cwd.exists():
