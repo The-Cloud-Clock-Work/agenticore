@@ -49,10 +49,12 @@ You will see chunks arrive as the agent works:
 data: {...,"delta":{"role":"assistant"},...}                           # stream opened
 
 data: {...,"x_agenticore_event_type":"tool_use",
-       "delta":{"tool_calls":[{"function":{"name":"Bash",...}}]}}       # agent calls Bash
+       "delta":{"reasoning_content":"```tool_use:Bash\n{\"command\":\"ls /tmp\"}\n```"}}
+                                                                        # agent calls Bash
 
 data: {...,"x_agenticore_event_type":"tool_result",
-       "delta":{"content":"file1\nfile2\n..."}}                         # shell output streams back
+       "delta":{"reasoning_content":"```tool_result\nfile1\nfile2\n```"}}
+                                                                        # shell output streams back
 
 data: {...,"delta":{"content":"I see two files: ..."}}                  # agent's reply
 
@@ -83,9 +85,11 @@ for line in sys.stdin:
     elif ch.get("finish_reason") == "stop": print(f"[stop] usage={d.get(\"usage\")}")
     elif et == "thinking": print(f"[thinking] {delta.get(\"content\",\"\")[:200]}")
     elif et == "tool_use":
-        tc = delta["tool_calls"][0]["function"]
-        print(f"[tool_use] {tc[\"name\"]}({tc.get(\"arguments\",\"\")[:100]})")
-    elif et == "tool_result": print(f"[tool_result] {delta.get(\"content\",\"\")[:200]}")
+        rc = delta.get("reasoning_content", "")
+        print(f"[tool_use] {rc[:200]}")
+    elif et == "tool_result":
+        rc = delta.get("reasoning_content", "")
+        print(f"[tool_result] {rc[:200]}")
     elif "content" in delta: print(f"[text] {delta[\"content\"]}")
 '
 ```
