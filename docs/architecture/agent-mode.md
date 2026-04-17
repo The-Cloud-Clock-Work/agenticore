@@ -29,7 +29,7 @@ Standard Mode (profiles):
   Request → clone repo → materialize profile → claude --worktree → PR
 
 Agent Mode (packages):
-  Request → load package → claude -p "task" → result (+ notifications)
+  Request → conversation_key resolver → load package → claude -p "task" → SSE / result
 ```
 
 Both use the same `.claude/` directory convention. Both use the same
@@ -55,67 +55,68 @@ agent provisioning.
 ## Architecture Overview
 
 ```
-                   POST /completions
-                         │
-                   ┌─────▼─────┐
-                   │  server.py │
-                   │  (REST +   │
-                   │   MCP)     │
-                   └─────┬─────┘
-                         │
-              ┌──────────┴──────────┐
-              │ wait=true           │ wait=false
-              │                     │
-              ▼                     ▼
-     ┌────────────────┐    ┌───────────────┐
-     │ AgentExecutor   │    │ Completion     │
-     │ (inline, sync)  │    │ Queue          │
-     │                 │    │ (Redis LPUSH)  │
-     └────────┬───────┘    └───────┬───────┘
-              │                     │
-              │              ┌──────▼──────┐
-              │              │   Worker     │
-              │              │   (BRPOP)    │
-              │              │ AgentExecutor│
-              │              └──────┬──────┘
-              │                     │
-              └──────────┬──────────┘
-                         │
-                    ┌────▼────┐
-                    │  Claude  │
-                    │  Code    │
-                    │  (subprocess)
-                    └────┬────┘
-                         │
-              ┌──────────┼──────────┐
-              │          │          │
-              ▼          ▼          ▼
-         PostToolUse  Thinking  Notification
-              │          │          │
-              └──────────┼──────────┘
-                         │
-                    hook_notifier.py
-                         │
-                    POST callback_url
-                    (notification streaming)
+POST /v1/chat/completions
+        │
+        ▼
+conversation_key resolver          ← 4-tier: header → body → content_hash → ephemeral
+        │
+        ▼
+session_registry lookup            ← Redis: conv:{agent_id}:{user}:{key}
+  first turn  →  --session-id <new-uuid>
+  subsequent  →  --resume <claude_session_id>
+        │
+        ▼
+AgentExecutor.execute_streaming()
+        │
+        ▼
+spawn claude -p \
+  --output-format stream-json \
+  --verbose \
+  --include-partial-messages
+        │
+  read proc.stdout line-by-line
+        │
+  parse stream-json events:
+    thinking_delta    → reasoning_content SSE chunk
+    text_delta        → content SSE chunk
+    tool_use          → fenced ```tool_use block
+    tool_result       → fenced ```tool_result block
+    result            → stop chunk + usage
+        │
+        ▼
+OpenAI-format SSE chunks → client
 ```
+
+Non-streaming requests (`stream=false`) use `AgentExecutor.execute()`, which
+reads the final `result` event from the subprocess and returns a single JSON
+response. The Redis event bus (`agenticore:events:{uuid}` via
+`event_relay.py`) is preserved for non-streaming observability subscribers
+only — it is **not** in the streaming hot path.
 
 ## Two Execution Modes
 
-### Synchronous (`wait=true`)
+### Streaming (`stream=true`, default for OpenAI-compat clients)
 
-The caller blocks until Claude finishes. The server spawns
-`AgentExecutor.execute()` directly and returns the full result — cost, turns,
-session ID, tool uses — in the response body. This is the simple path: request
-in, result out.
+The caller opens a persistent HTTP connection to `POST /v1/chat/completions`
+and receives OpenAI-format SSE chunks as the model produces them. Agenticore
+spawns Claude with `--output-format stream-json --verbose
+--include-partial-messages` and reads `proc.stdout` line-by-line, translating
+each JSONL event into an SSE chunk.
 
-### Asynchronous (`wait=false`)
+This is the primary path for LibreChat, OpenWebUI, and any OpenAI-compat
+chat client.
+
+### Synchronous (`wait=true`, legacy completions API)
+
+The caller blocks on `POST /completions` until Claude finishes. The server
+spawns `AgentExecutor.execute()` directly and returns the full result — cost,
+turns, session ID, tool uses — in the response body.
+
+### Asynchronous (`wait=false`, legacy completions API)
 
 The caller gets a `202 Queued` immediately with a `poll_url`. The request is
 serialized and pushed onto a Redis list (`agenticore:cq`). A separate **worker
 process** (`python -m agenticore.agent_mode`) pops requests and processes them.
-During execution, real-time events (tool calls, thinking, status changes) are
-streamed to a `callback_url` via HTTP POST.
 
 ```
 Caller                    Redis Queue              Worker
@@ -129,19 +130,59 @@ Caller                    Redis Queue              Worker
   │                           │   AgentExecutor       │
   │                           │   spawns Claude       │
   │                           │                       │
-  │◄── POST callback (status: started) ──────────────│
-  │◄── POST callback (tool_call: Write) ─────────────│  ← via hook
-  │◄── POST callback (thinking: "analyzing...") ─────│  ← via hook
-  │◄── POST callback (status: completed) ────────────│
-  │◄── POST callback (result: {...}) ────────────────│
-  │                           │                       │
   │── GET /completions/{uuid} │                       │
   │◄── {status, result, ...}  │                       │
 ```
 
 When Redis is unavailable, the async path degrades gracefully: the completion
-is executed inline as a background task (same as the old `asyncio.create_task`
-behavior, but now with proper state tracking).
+is executed inline as a background task with proper state tracking.
+
+## Conversation Persistence
+
+Agenticore maintains sticky Claude sessions across multi-turn conversations
+without requiring clients to manage session IDs explicitly.
+
+### 4-Tier Key Resolver (`conversation_key.py`)
+
+For every request, `resolve_conversation_key()` derives a stable storage key
+from the request headers and body, in priority order:
+
+| Tier | Source | Example |
+|------|--------|---------|
+| `header` | `x-conversation-id`, `x-librechat-conversation-id`, `x-openwebui-chat-id` | LibreChat injects automatically |
+| `body` | `metadata.conversation_id` or `body.user` (if UUID) | A2A callers, raw API |
+| `content_hash` | SHA-256 of system prompt + first user message (first 16 hex chars) | Stateless curl clients |
+| `ephemeral` | Random UUID — no session persistence | Single-turn requests |
+
+The composed storage key format is `conv:{agent_id}:{user_hint}:{key}`, where
+`user_hint` is extracted from `x-user-id` / `x-openwebui-user-id` headers or
+the `user` body field.
+
+### Session Lifecycle
+
+On the first turn for a key, Agenticore generates a new Claude session UUID and
+passes `--session-id <uuid>` to the subprocess. On subsequent turns it passes
+`--resume <claude_session_id>` so Claude picks up the transcript. The Claude
+session ID is stored in `session_registry` keyed on the conversation key.
+
+```
+Turn 1:  resolve conv_key → no session → spawn claude --session-id <new-uuid>
+         → capture session_id from result event → store in registry
+
+Turn 2+: resolve conv_key → lookup session_id → spawn claude --resume <session_id>
+         → stream continues the existing session
+```
+
+When `tier == "ephemeral"` the request is treated as stateless — no session is
+registered and each turn spawns a fresh Claude process.
+
+### Redis Storage
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `conv:{agent_id}:{user}:{key}` | HASH | `claude_session_id`, `created_at`, `last_used` |
+
+File fallback: `~/.agenticore/sessions/{conv_key_hash}.json`.
 
 ## Completion Lifecycle
 
@@ -154,7 +195,7 @@ behavior, but now with proper state tracking).
              │
          ┌───▼────┐
          │ running │ ── update_completion(status="running")
-         └───┬────┘    ── notify(status: "started")
+         └───┬────┘
              │
       Claude executes
              │
@@ -178,7 +219,6 @@ behavior, but now with proper state tracking).
 | `duration_ms` | int | Wall-clock execution time |
 | `num_turns` | int | Agentic turns used |
 | `is_error` | bool | Whether result is an error |
-| `callback_url` | string | Webhook for notifications |
 | `request_params` | dict | Full executor kwargs (for worker replay) |
 | `created_at` | string | ISO 8601 timestamp |
 | `started_at` | string | ISO 8601 timestamp |
@@ -187,57 +227,26 @@ behavior, but now with proper state tracking).
 Stored as Redis hashes (`agenticore:completion:{uuid}`) with file fallback
 (`~/.agenticore/completions/{uuid}.json`). Same Redis+file pattern as `jobs.py`.
 
-## Notification Streaming
+## Stream Visibility (Slash Tokens)
 
-Notifications deliver real-time events to a `callback_url` during execution.
-Three event types, each independently toggleable:
+The streaming path supports per-session visibility toggles via slash tokens
+embedded in the last user message. Tokens are stripped server-side before
+Claude sees them.
 
-| Event Type | Source | Payload |
-|------------|--------|---------|
-| `status` | Worker process | `{status: "started\|completed\|failed"}` |
-| `tool_call` | Claude Code `PostToolUse` hook | `{tool_name, file_path, description}` |
-| `thinking` | Claude Code `Notification` hook | `{content: "..."}` |
-| `result` | Worker process (final) | `{result, cost_usd, duration_ms, ...}` |
+| Token | Effect |
+|-------|--------|
+| `/show-thinking` / `/hide-thinking` | Toggle extended thinking chunks |
+| `/show-tools` / `/hide-tools` | Toggle `tool_use` + `tool_result` blocks |
+| `/show-all` / `/hide-all` | Toggle all non-text content |
+| `/stream-status` | Return current visibility config inline (no Claude spawn) |
 
-**Notification envelope:**
+Visibility config is stored in Redis at `agenticore:stream_config:{agent_id}`
+(file fallback `~/.agenticore/stream_config/{agent_id}.json`). Defaults:
+all content types visible (`show_all`).
 
-```json
-{
-    "correlation_id": "uuid-123",
-    "event_type": "tool_call",
-    "timestamp": "2026-03-03T12:00:00Z",
-    "data": {"tool_name": "Write", "file_path": "/src/app.py"}
-}
-```
-
-**Configuration per request:**
-
-```json
-{
-    "callback_url": "https://chat-app.example.com/webhook",
-    "notifications": {"status": true, "tool_call": true, "thinking": false}
-}
-```
-
-Notification preferences are stored per-correlation-ID (Redis hash +
-file fallback) and can be toggled mid-execution via `PATCH
-/completions/{uuid}/notifications`.
-
-### Hook-Based Delivery
-
-Tool call and thinking notifications come from **inside** the Claude subprocess
-via Claude Code hooks. The `hook_notifier.py` script:
-
-1. Is installed into the package's `.claude/hooks/` at startup by `initializer.py`
-2. Is wired into `.claude/settings.json` for three hook events:
-   `PostToolUse`, `Notification`
-3. Runs inside Claude's sandbox — **zero agenticore imports**, stdlib-only HTTP
-4. Reads notification config from Redis (or file fallback)
-5. Maps hook event to notification type, checks if enabled, POSTs to callback
-6. Best-effort: catches all exceptions, exits 0 always
-
-This design means notifications work even when the agent container has no
-direct code path from Claude back to the server — the hook is self-contained.
+When a request contains only slash tokens with no other message content,
+Agenticore returns the resolved config as a `stream_config` meta SSE event
+without spawning Claude.
 
 ## Package Directory
 
@@ -250,33 +259,47 @@ convention as agentihub packages:
 ├── system.md             # System prompt (appended or replaced)
 ├── .claude/
 │   ├── settings.json     # Permissions, hooks, tool allowlists
-│   ├── hooks/
-│   │   └── notifier.py   # ← installed by initializer.py at startup
+│   ├── hooks/            # Claude Code hooks (PostToolUse, etc.)
 │   ├── agents/           # Custom subagents
 │   └── skills/           # Custom slash commands
 ├── .mcp.json             # MCP server definitions
 └── runners/              # Numbered startup scripts (00-install.sh, etc.)
 ```
 
-At container startup, `initializer.py` runs five steps:
+At container startup, `initializer.py` runs four steps:
 
 1. **Clone** package repo if `PACKAGE_REPO_URL` is set
 2. **Validate** package directory exists
 3. **Run** startup scripts from `runners/`
 4. **Cache** system prompt from `system.md`
-5. **Install** notification hook into `.claude/hooks/`
 
 ## API Surface
 
-### POST /completions
+### POST /v1/chat/completions (OpenAI-compat, primary)
+
+```json
+{
+    "model": "sonnet",
+    "messages": [
+        {"role": "user", "content": "Fix the login bug"}
+    ],
+    "stream": true,
+    "user": "user-uuid-here",
+    "metadata": {"conversation_id": "conv-abc123"},
+    "disable_mcp_servers": ["tools-notifications"]
+}
+```
+
+Returns OpenAI-format SSE when `stream=true`, or a single JSON response when
+`stream=false`. Conversation key is resolved from headers/body automatically.
+
+### POST /completions (legacy, async/sync)
 
 ```json
 {
     "message": "Fix the login bug",
     "uuid": "correlation-123",
     "wait": false,
-    "callback_url": "https://app.example.com/webhook",
-    "notifications": {"status": true, "tool_call": true},
     "stateless": true,
     "model": "sonnet",
     "max_turns": 80,
@@ -320,14 +343,6 @@ Poll for completion status and result.
 
 List completions with optional `?status=` filter and `?limit=` param.
 
-### PATCH /completions/{uuid}/notifications
-
-Toggle notification types mid-execution.
-
-```json
-{"tool_call": false, "thinking": true}
-```
-
 ### MCP Tool: agent_completions
 
 Same parameters as POST /completions, available as an MCP tool for AI clients.
@@ -342,7 +357,7 @@ python -m agenticore.agent_mode
 
 It runs a BRPOP loop against `agenticore:cq`, processes one completion at a
 time (configurable via `AGENT_MODE_MAX_QUEUE_WORKERS`), and delivers results
-to both the completion store and the callback URL.
+to the completion store.
 
 **Docker Compose sidecar:**
 
@@ -366,8 +381,10 @@ worker:
 |-----|------|-----|-------------|
 | `agenticore:cq` | LIST | none | Completion queue (FIFO) |
 | `agenticore:completion:{uuid}` | HASH | session_ttl | Completion state + result |
-| `agenticore:notification:{uuid}` | HASH | session_ttl | Notification preferences |
-| `agenticore:agent_state:{uuid}` | HASH | session_ttl | Hook context (existing) |
+| `agenticore:events:{uuid}` | STREAM | session_ttl | Observability event bus (non-streaming path) |
+| `agenticore:agent_state:{uuid}` | HASH | session_ttl | Hook context |
+| `agenticore:stream_config:{agent_id}` | HASH | none | Stream visibility preferences |
+| `conv:{agent_id}:{user}:{key}` | HASH | session_ttl | Conversation → Claude session mapping |
 
 ## File Fallback Matrix
 
@@ -375,8 +392,8 @@ worker:
 |-----------|-------|---------------|-------------------|
 | Queue | LPUSH/BRPOP `agenticore:cq` | N/A | Inline execution |
 | Completion Store | HASH `completion:{uuid}` | `~/.agenticore/completions/{uuid}.json` | File-only CRUD |
-| Notification Config | HASH `notification:{uuid}` | `~/.agenticore/notification_configs.json` | File-only |
-| Hook Config Read | Redis HGETALL | `notification_configs.json` | File-only |
+| Stream Config | HASH `stream_config:{agent_id}` | `~/.agenticore/stream_config/{agent_id}.json` | File-only |
+| Conversation Sessions | HASH `conv:{agent_id}:*` | `~/.agenticore/sessions/*.json` | File-only |
 
 ## Configuration
 
@@ -389,11 +406,10 @@ worker:
 | `AGENT_MODE_TIMEOUT` | `3600` | Max execution time (seconds) |
 | `AGENT_MODE_SESSION_TTL` | `86400` | Redis key TTL |
 | `AGENT_MODE_QUEUE_ENABLED` | `true` | Enable completion queue |
-| `AGENT_MODE_NOTIFICATION_TIMEOUT` | `5` | HTTP delivery timeout (seconds) |
 | `AGENT_MODE_MAX_QUEUE_WORKERS` | `1` | Max concurrent worker tasks |
-| `AGENT_MODE_DEFAULT_NOTIFICATIONS` | `status` | Default notification types |
 | `AGENT_MODE_PERMISSION_MODE` | `bypassPermissions` | Claude permission mode |
 | `AGENT_MODE_APPEND_SYSTEM_PROMPT` | `true` | Append vs replace system.md |
+| `AGENT_MODE_CONV_HASH_FALLBACK` | `true` | Enable content-hash tier in key resolver |
 | `PACKAGE_REPO_URL` | _(empty)_ | Git URL to clone package from |
 | `PACKAGE_REPO_BRANCH` | `main` | Branch to clone |
 
@@ -401,15 +417,17 @@ worker:
 
 | Module | Purpose |
 |--------|---------|
-| `agent_mode/agent.py` | `AgentExecutor` — builds CLI command, runs subprocess, parses output |
+| `agent_mode/agent.py` | `AgentExecutor` — builds CLI command, runs subprocess, streams stdout |
 | `agent_mode/completions.py` | `Completion` dataclass, Redis+file CRUD, queue LPUSH/BRPOP |
-| `agent_mode/notifications.py` | `NotificationConfig` management, HTTP delivery |
+| `agent_mode/conversation_key.py` | 4-tier conversation key resolver for sticky session routing |
+| `agent_mode/openai_compat.py` | OpenAI SSE chunk formatters, message flattening, request ID extraction |
+| `agent_mode/stream_config.py` | Stream visibility config (thinking/tools/all), slash token parsing, Redis storage |
 | `agent_mode/worker.py` | Standalone queue worker, `_process_completion()`, inline fallback |
-| `agent_mode/hook_notifier.py` | Self-contained Claude Code hook (stdlib-only) |
-| `agent_mode/initializer.py` | Package validation, startup scripts, hook installation |
+| `agent_mode/initializer.py` | Package validation, startup scripts |
 | `agent_mode/state.py` | Per-request state for hooks (uuid, wait mode, meta) |
-| `agent_mode/session_registry.py` | Claude session ID ↔ external UUID mapping |
+| `agent_mode/session_registry.py` | Conversation key ↔ Claude session ID mapping |
 | `agent_mode/session_manager.py` | Retry detection and composition |
+| `agent_mode/event_tailer.py` | Non-streaming observability: tails Redis event bus |
 
 ## Relationship to Standard Mode
 
@@ -420,12 +438,12 @@ Agent Mode and Standard Mode are **complementary**, not competing:
 | **Identity** | The repo | The package |
 | **Config source** | agentihooks profiles | agentihub packages (provisioned by initializer.py) |
 | **Lifecycle** | Per-job (materialize → execute → discard) | Per-container (mount → startup → serve) |
-| **Output** | PR on a repo | Completion result (text, cost, metadata) |
+| **Output** | PR on a repo | SSE stream or completion result |
 | **Execution** | `claude --worktree -p "task"` | `claude -p "task"` (no worktree) |
-| **State** | Job store (`jobs.py`) | Completion store (`completions.py`) |
-| **Async delivery** | Poll `GET /jobs/{id}` | Poll or callback webhook |
-| **Real-time events** | None | Notification streaming |
-| **API path** | `/jobs` | `/completions` |
+| **State** | Job store (`jobs.py`) | Completion store + session registry |
+| **Async delivery** | Poll `GET /jobs/{id}` | Poll `GET /completions/{uuid}` |
+| **Real-time events** | None | OpenAI-compat SSE stream |
+| **API path** | `/jobs` | `/completions`, `/v1/chat/completions` |
 | **MCP tool** | `run_task` | `agent_completions` |
 
 Both share the same server process, same config system, same Redis+file

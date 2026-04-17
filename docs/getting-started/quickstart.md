@@ -117,8 +117,64 @@ agenticore job <job_id>
 curl http://localhost:8200/jobs/<job_id>
 ```
 
+## Agent Mode Quick Start
+
+When an agent pod is running (e.g. via `docker compose up` or on Kubernetes), it exposes an OpenAI-compatible `/v1/chat/completions` endpoint. You can chat with it directly using `curl`.
+
+### Streaming conversation
+
+```bash
+curl -sN http://localhost:8200/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "sonnet",
+    "stream": true,
+    "messages": [{"role": "user", "content": "List the files in /tmp and tell me what you see."}]
+  }'
+```
+
+Chunks arrive as `data: {...}` SSE lines. Thinking blocks arrive in `delta.reasoning_content`; tool events arrive as fenced markdown blocks (`` ```tool_use:Bash `` / `` ```tool_result ``) also in `delta.reasoning_content`. The final answer arrives in `delta.content`.
+
+### Conversation persistence via `X-Conversation-Id`
+
+Pass a stable conversation ID to resume a session across multiple requests:
+
+```bash
+# First turn
+curl -sN http://localhost:8200/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-Conversation-Id: my-session-42' \
+  -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"Remember: my favourite colour is blue."}]}'
+
+# Second turn — agent resumes the same Claude session
+curl -sN http://localhost:8200/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-Conversation-Id: my-session-42' \
+  -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"What is my favourite colour?"}]}'
+```
+
+When no header is supplied, agenticore falls back to a content-hash of the conversation for session matching.
+
+### Enable thinking + tool visibility
+
+By default all event types are visible (as of v1.3.1). To toggle:
+
+```bash
+# Check current config
+curl -sN http://localhost:8200/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"/stream-status"}]}'
+
+# Show all (thinking + tools + text)
+curl -sN http://localhost:8200/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"/show-all"}]}'
+```
+
+See [Test Streaming](test-streaming.md) for a full five-minute walkthrough and [Conversation Persistence](conversation-persistence.md) for the full session-resume reference.
+
 ## Next Steps
 
+- [Test Streaming](test-streaming.md) — Port-forward an agent and watch events arrive live
+- [Conversation Persistence](conversation-persistence.md) — Multi-turn sessions via X-Conversation-Id
 - [Connecting Clients](connecting-clients.md) — Set up MCP, REST, and CLI clients
 - [Configuration Reference](../reference/configuration.md) — All env vars and YAML config
 - [Profile System](../architecture/profile-system.md) — Customize execution profiles

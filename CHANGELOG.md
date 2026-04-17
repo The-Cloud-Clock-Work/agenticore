@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-04-17
+
+### Added
+- **4-tier conversation persistence** for `/v1/chat/completions` — sticky sessions via `X-Conversation-Id` header with content-hash fallback
+- **`--resume` / `--session-id` wiring** — multi-turn continuity passed through to Claude subprocess
+
+### Fixed
+- `sem.locked()` public API compatibility
+- `dev_mode` parsing from env/config
+- Dangling `--allowedTools` flag on subprocess spawn
+
+### Changed
+- `POST /completions` emits deprecation warning — use `/v1/chat/completions`
+
+### Docs
+- `conversation-persistence.md` — full session-resume reference
+- `a2a-conventions.md` — agent-to-agent communication conventions
+
+---
+
+## [1.3.1] - 2026-04-15
+
+### Fixed
+- Return valid OpenAI format for non-streaming `/stream-status` responses
+
+### Changed
+- Default stream visibility is now `show_all` — thinking and tool events on by default
+
+---
+
+## [1.3.0] - 2026-04-14
+
+### Added
+- **Real-time SSE streaming** via `--output-format stream-json`
+- **Pseudo-slash tokens** — `/show-thinking`, `/hide-thinking`, `/show-tools`, `/hide-tools`, `/show-all`, `/hide-all`, `/stream-status`
+- **`reasoning_content` routing** — tool_use and tool_result events arrive as fenced markdown blocks in `delta.reasoning_content` (renders as LibreChat collapsible panels)
+- **Sticky per-agent stream visibility config** — persisted in Redis with file fallback
+
+### Removed
+- `hook_notifier.py`, `notifications.py`, and the callback_url notification system
+
+---
+
 ## [0.11.0] - 2026-03-20
 
 ### Changed
@@ -59,5 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI/CD workflows: test, build, release, docker-publish, publish-pypi, docs-audit, smoke-test
 - Documentation site with 16 files
 
+[1.4.0]: https://github.com/The-Cloud-Clock-Work/agenticore/compare/v1.3.1...v1.4.0
+[1.3.1]: https://github.com/The-Cloud-Clock-Work/agenticore/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/The-Cloud-Clock-Work/agenticore/compare/v0.11.0...v1.3.0
 [0.1.1]: https://github.com/The-Cloud-Clock-Work/agenticore/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/The-Cloud-Clock-Work/agenticore/releases/tag/v0.1.0

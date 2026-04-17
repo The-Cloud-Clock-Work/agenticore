@@ -54,6 +54,8 @@ Request → Router → Clone repo → claude --worktree -p "task" → OTEL → P
 | `router.py` | Code fast-path + AI fallback |
 | `pr.py` | Auto-PR (git push + gh pr create) |
 | `cli.py` | CLI tool |
+| `agent_mode/conversation_key.py` | 4-tier conversation resolver |
+| `agent_mode/stream_config.py` | Slash token parsing + sticky visibility |
 
 ## MCP Tools
 
@@ -167,11 +169,31 @@ When a request is **toggle-only** (slash tokens with empty cleaned message), age
 
 **Sticky storage**: `agenticore:stream_config:{AGENTIHUB_AGENT}` Redis hash, no TTL, file fallback `~/.agenticore/stream_config/{agent_id}.json`. Defaults: `assistant_text` only; thinking and tools are opt-in.
 
-**Auditing**: `tests/smoke/verify_streaming_pipeline.sh <agent>` runs a deterministic conversation against a live pod, cross-validates events across four observation layers (client SSE, Redis stream, pod logs, claude transcript), and writes timestamped artifacts to `/tmp/sse-audit/<run-id>/` for later review. Replay past runs with `--replay <run-id>`.
+**Auditing**: `tests/smoke/verify_streaming_pipeline.sh <agent>` — deterministic conversation against live pod, cross-validates SSE + Redis + logs + transcript. `tests/smoke/test_conversation_e2e.sh` — multi-turn persistence test through LiteLLM chain.
 
-**Reference docs**:
-- `docs/reference/sse-streaming.md` — full SSE chunk schema, client filter examples, fail mode diagnostics, milestones
-- `docs/getting-started/test-streaming.md` — step-by-step self-test from a fresh terminal
-- `tests/unit/test_agent.py::TestExecuteStreamingParser` — parser unit tests with fake stream-json shim
+**Reference**: `docs/reference/sse-streaming.md` (chunk schema, fail modes), `docs/getting-started/test-streaming.md` (self-test walkthrough).
 
 **LiteLLM / LibreChat integration**: agents are onboarded as openai-compatible models pointing at `http://<agent>.anton-dev.svc:8200/v1`. The `librechat-dev` LiteLLM unit's models allowlist controls which agents appear in LibreChat's model picker.
+
+## Conversation Persistence (Agent Mode)
+
+Every agenticore-backed agent supports **multi-turn conversation continuity** across the `/v1/chat/completions` endpoint. A 4-tier conversation key resolver infers conversation identity from the request, maps it to a Claude `--resume` session, and sends only the last user message on subsequent turns (Claude has prior context in its JSONL).
+
+**4-tier resolver** (`agenticore/agent_mode/conversation_key.py`):
+1. **Header** — `X-Conversation-Id`, `X-LibreChat-Conversation-Id`, `X-OpenWebUI-Chat-Id`
+2. **Body** — `body.metadata.conversation_id` or `body.user` (UUID-shaped only)
+3. **Content hash** — `sha256(system_prompt + first_user_message)[:16]` (zero-config fallback, toggleable via `AGENTICORE_CONV_HASH_FALLBACK`)
+4. **Ephemeral** — `uuid4()` (stateless, one-shot)
+
+**Storage key**: `conv:{agent_id}:{user_hint}:{key}` — agent-scoped and user-scoped. Redis hash `agenticore:session:conv:...` with `session_ttl` TTL (default 86400s). File fallback `~/.agenticore/agent_sessions.json`.
+
+**Session lifecycle**: first turn → `--session-id <pre-picked-uuid>` creates persistent session. Subsequent turns → `--resume <uuid>`. Persistent sessions stay `active` across turns (not marked `completed` until explicitly closed or TTL expires).
+
+**LibreChat integration**: `librechat.yaml` custom endpoint injects `X-Conversation-Id: {{conversationId}}` + `X-User-Id: {{user}}`. LiteLLM forwards via `forward_client_headers_to_llm_api: true` + `allowed_client_headers` whitelist.
+
+**A2A convention**: caller sends `X-Conversation-Id: <caller-chosen-uuid>` header. See `docs/reference/a2a-conventions.md`.
+
+**Reference docs**:
+- `docs/reference/conversation-persistence.md` — full resolver spec, client config, Redis keys
+- `docs/reference/a2a-conventions.md` — agent-to-agent header convention
+- `tests/smoke/test_conversation_e2e.sh` — end-to-end test through LiteLLM chain

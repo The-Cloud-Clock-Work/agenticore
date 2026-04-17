@@ -343,18 +343,101 @@ with HTTP status `401`.
 These endpoints are available when `AGENT_MODE=true`. See
 [Agent Mode](../architecture/agent-mode.md) for the full architecture.
 
+### POST /v1/chat/completions
+
+OpenAI-compatible chat completions endpoint. Supports real-time SSE streaming,
+conversation persistence, and slash-token visibility controls.
+
+**Request headers:**
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Authorization: Bearer <key>` | yes (when auth enabled) | API key |
+| `X-Conversation-Id` | no | Sticky session ID — agent resumes this conversation |
+| `X-User-Id` | no | Caller identity for logging |
+| `X-Request-Id` | no | Idempotency / tracing token |
+
+**Request body:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `model` | string | yes | | Agent model identifier (e.g. `anton-agent`) |
+| `messages` | array | yes | | OpenAI-format message array |
+| `stream` | boolean | no | `false` | Stream SSE chunks in real time |
+| `timeout` | int | no | config default | Max execution time (seconds) |
+| `disable_mcp_servers` | array | no | `[]` | MCP server names to suppress for this call |
+| `metadata.conversation_id` | string | no | | Alternate conversation ID (lower priority than header) |
+
+**Conversation persistence — 4-tier resolver:**
+
+1. `X-Conversation-Id` header (highest priority)
+2. `metadata.conversation_id` in request body
+3. Content hash of the first user message (deterministic resume)
+4. Ephemeral — no session resume (lowest priority)
+
+**Streaming (`stream=true`):**
+
+Returns `text/event-stream`. Each SSE chunk is an OpenAI `chat.completion.chunk`
+with `delta` carrying one of:
+
+| Delta field | Event type | Description |
+|-------------|------------|-------------|
+| `content` | `text_delta` | Visible assistant text |
+| `reasoning_content` | `thinking_delta` | Model reasoning (rendered in thinking panel) |
+| `content` (fenced) | `tool_use_delta` | Tool call with args, emitted on `content_block_stop` |
+| `content` (fenced) | `tool_result_delta` | Tool result paired below the call |
+
+Stream ends with a stop chunk followed by `data: [DONE]`.
+
+**Slash tokens** — intercepted from the last user message before the model sees it:
+
+| Token | Effect |
+|-------|--------|
+| `/show-thinking` | Show model reasoning in stream |
+| `/hide-thinking` | Hide model reasoning |
+| `/show-tools` | Show tool calls and results |
+| `/hide-tools` | Hide tool calls and results |
+| `/show-all` | Show thinking + tools |
+| `/hide-all` | Hide thinking + tools |
+| `/stream-status` | Return current visibility config as inline meta SSE (no subprocess) |
+
+Visibility settings are sticky per agent (stored in Redis / file fallback, no TTL).
+Toggle-only requests (slash token with no other content) return the resolved config
+inline without spawning a Claude subprocess.
+
+**Non-streaming response:** standard OpenAI `chat.completion` object.
+
+```bash
+# Non-streaming
+curl -X POST http://localhost:8200/v1/chat/completions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "anton-agent", "messages": [{"role": "user", "content": "hello"}]}'
+
+# Streaming with sticky session
+curl -N -X POST http://localhost:8200/v1/chat/completions \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "X-Conversation-Id: my-session-123" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "anton-agent", "messages": [{"role": "user", "content": "continue"}], "stream": true}'
+```
+
+| Status | Condition |
+|--------|-----------|
+| `200` | Success (streaming or complete) |
+| `401` | Missing or invalid API key |
+| `503` | Capacity full — retry |
+
 ### MCP Tool: agent_completions
 
 Call the agent with a message. Supports both synchronous (`wait=true`) and
-asynchronous (`wait=false`) execution with optional webhook notifications.
+asynchronous (`wait=false`) execution.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `message` | string | yes | | Task/prompt for the agent |
 | `uuid` | string | yes | | External correlation ID |
 | `wait` | boolean | no | `true` | Block until completion |
-| `callback_url` | string | no | `""` | Webhook URL for notifications |
-| `notifications` | string | no | `"status"` | Comma-separated: `status,tool_call,thinking` |
 | `stateless` | boolean | no | `false` | Fresh session (no resume) |
 | `model` | string | no | config default | Claude model |
 | `max_turns` | int | no | config default | Agentic turn limit |
@@ -365,6 +448,8 @@ asynchronous (`wait=false`) execution with optional webhook notifications.
 
 ### POST /completions
 
+> **Deprecated** — use `/v1/chat/completions` instead.
+
 Submit a completion request. Maps to `agent_completions`.
 
 ```bash
@@ -373,16 +458,10 @@ curl -X POST http://localhost:8200/completions \
   -H "Content-Type: application/json" \
   -d '{"message": "fix the bug", "uuid": "req-1", "wait": true}'
 
-# Asynchronous (returns 202, delivers result to callback)
+# Asynchronous (returns 202, polls via GET /completions/{uuid})
 curl -X POST http://localhost:8200/completions \
   -H "Content-Type: application/json" \
-  -d '{
-    "message": "fix the bug",
-    "uuid": "req-1",
-    "wait": false,
-    "callback_url": "https://app.example.com/webhook",
-    "notifications": {"status": true, "tool_call": true}
-  }'
+  -d '{"message": "fix the bug", "uuid": "req-1", "wait": false}'
 ```
 
 **Response (`wait=false`):**
@@ -447,50 +526,3 @@ List completions.
 curl "http://localhost:8200/completions?status=completed&limit=5"
 ```
 
-### PATCH /completions/{uuid}/notifications
-
-Toggle notification types mid-execution.
-
-```bash
-curl -X PATCH http://localhost:8200/completions/req-1/notifications \
-  -H "Content-Type: application/json" \
-  -d '{"thinking": true, "tool_call": false}'
-```
-
-```json
-{
-    "success": true,
-    "notifications": {
-        "callback_url": "https://app.example.com/webhook",
-        "status": true,
-        "tool_call": false,
-        "thinking": true,
-        "enabled": true
-    }
-}
-```
-
-| Status | Condition |
-|--------|-----------|
-| `200` | Config updated |
-| `404` | Notification config not found |
-
-## Notification Envelope
-
-All notifications delivered to the `callback_url` follow this format:
-
-```json
-{
-    "correlation_id": "req-1",
-    "event_type": "tool_call",
-    "timestamp": "2026-03-03T12:00:05Z",
-    "data": {"tool_name": "Write", "file_path": "/src/app.py"}
-}
-```
-
-| Event Type | Description |
-|------------|-------------|
-| `status` | Lifecycle events: `started`, `completed`, `failed` |
-| `tool_call` | Claude used a tool (name, file path, description) |
-| `thinking` | Claude reasoning content |
-| `result` | Final result with full metadata |

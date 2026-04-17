@@ -162,9 +162,7 @@ class TestTier3ContentHash:
     def test_disabled_by_toggle(self):
         headers = {}
         body = {"messages": [{"role": "user", "content": "hi"}]}
-        _, tier, _ = resolve_conversation_key(
-            headers, body, AGENT, hash_fallback=False
-        )
+        _, tier, _ = resolve_conversation_key(headers, body, AGENT, hash_fallback=False)
         assert tier == "ephemeral"
 
 
