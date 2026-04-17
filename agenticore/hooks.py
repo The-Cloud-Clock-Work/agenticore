@@ -99,7 +99,9 @@ def _clone_or_fetch(url: str, dest: Path, branch: str = "") -> None:
             if (dest / ".git").exists():
                 _run_git(["git", "-C", str(dest), "fetch", "--all", "--prune"], extra_env=extra_env)
                 if branch:
-                    _run_git(["git", "-C", str(dest), "checkout", "-B", branch, f"origin/{branch}"], extra_env=extra_env)
+                    _run_git(
+                        ["git", "-C", str(dest), "checkout", "-B", branch, f"origin/{branch}"], extra_env=extra_env
+                    )
                 else:
                     _run_git(["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"], extra_env=extra_env)
                 _run_git(["git", "-C", str(dest), "clean", "-fdx", "-e", "*.env"], extra_env=extra_env)
@@ -230,7 +232,9 @@ def _clone_or_fetch_agentihub(url: str, dest: Path, branch: str = "") -> None:
             if (dest / ".git").exists():
                 _run_git(["git", "-C", str(dest), "fetch", "--all", "--prune"], extra_env=extra_env)
                 if branch:
-                    _run_git(["git", "-C", str(dest), "checkout", "-B", branch, f"origin/{branch}"], extra_env=extra_env)
+                    _run_git(
+                        ["git", "-C", str(dest), "checkout", "-B", branch, f"origin/{branch}"], extra_env=extra_env
+                    )
                 else:
                     _run_git(["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"], extra_env=extra_env)
                 _run_git(["git", "-C", str(dest), "clean", "-fdx"], extra_env=extra_env)
@@ -298,7 +302,9 @@ def _clone_or_fetch_bundle(url: str, dest: Path, branch: str = "") -> None:
             if (dest / ".git").exists():
                 _run_git(["git", "-C", str(dest), "fetch", "--all", "--prune"], extra_env=extra_env)
                 if branch:
-                    _run_git(["git", "-C", str(dest), "checkout", "-B", branch, f"origin/{branch}"], extra_env=extra_env)
+                    _run_git(
+                        ["git", "-C", str(dest), "checkout", "-B", branch, f"origin/{branch}"], extra_env=extra_env
+                    )
                 else:
                     _run_git(["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"], extra_env=extra_env)
             else:

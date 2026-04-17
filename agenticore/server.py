@@ -1285,7 +1285,9 @@ def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optio
     if bundle_path and cfg.agentihooks_bundle_url and cfg.agentihooks_bundle_sync_interval > 0:
         from agenticore.hooks import start_bundle_watcher
 
-        start_bundle_watcher(cfg.agentihooks_bundle_url, bundle_path, cfg.agentihooks_bundle_sync_interval, cfg.agentihooks_bundle_branch)
+        start_bundle_watcher(
+            cfg.agentihooks_bundle_url, bundle_path, cfg.agentihooks_bundle_sync_interval, cfg.agentihooks_bundle_branch
+        )
 
 
 def _start_agentihub_watcher_if_needed(cfg, hub_path: Optional[Path]) -> None:
