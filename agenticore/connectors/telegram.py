@@ -48,7 +48,18 @@ class ConversationStore:
         return len(self._store.get(chat_id, []))
 
 
-async def _call_completions(messages: list[dict], model: str) -> str:
+_chat_uuids: dict[int, str] = {}
+
+
+def _uuid_for_chat(chat_id: int) -> str:
+    """Stable UUID per Telegram chat — reused across messages for session continuity."""
+    if chat_id not in _chat_uuids:
+        import uuid
+        _chat_uuids[chat_id] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"telegram:{chat_id}"))
+    return _chat_uuids[chat_id]
+
+
+async def _call_completions(messages: list[dict], chat_id: int) -> str:
     """Call agenticore's own completions handler in-process."""
     from agenticore.agent_mode.agent import AgentExecutor
     from agenticore.agent_mode.openai_compat import flatten_messages
@@ -56,7 +67,11 @@ async def _call_completions(messages: list[dict], model: str) -> str:
     prompt = flatten_messages(messages)
     executor = AgentExecutor()
 
-    result = await executor.execute(message=prompt, wait=True)
+    result = await executor.execute(
+        message=prompt,
+        external_uuid=_uuid_for_chat(chat_id),
+        wait=True,
+    )
 
     if result.get("is_error"):
         raise RuntimeError(result.get("error", "Unknown agent error"))
@@ -127,7 +142,7 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
         placeholder = await message.answer("...")
 
         try:
-            response = await _call_completions(api_messages, model="")
+            response = await _call_completions(api_messages, chat_id=chat_id)
             store.append(chat_id, "assistant", response)
 
             if len(response) <= 4096:
