@@ -198,81 +198,14 @@ def _run_startup_scripts(package_dir: str) -> None:
             _log.info("  Script %s completed successfully", script.name)
 
 
-def _start_telegram_channel(package_dir: str, model: str) -> None:
-    """Start Telegram channel as a background process if configured.
+def _log_telegram_status() -> None:
+    """Log Telegram connector status. Actual startup happens in ASGI lifespan."""
+    from agenticore.connectors.telegram import is_enabled
 
-    Platform capability — any agent with TELEGRAM_BOT_TOKEN gets Telegram
-    automatically. No runner scripts needed.
-
-    Follows OpenClaw pattern: if not configured, gracefully skip (ready but
-    not connected). Credentials come from env vars (K8s secrets via ESO).
-    """
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        _log.info("Telegram: not configured (no TELEGRAM_BOT_TOKEN). Ready but not connected.")
-        return
-
-    owner_id = os.environ.get("TELEGRAM_OWNER_ID", "").strip()
-    home = Path(os.environ.get("HOME", "/shared"))
-
-    # Write channel config (bot token + access control)
-    channel_dir = home / ".claude" / "channels" / "telegram"
-    channel_dir.mkdir(parents=True, exist_ok=True)
-    (channel_dir / ".env").write_text(f"TELEGRAM_BOT_TOKEN={token}\n")
-
-    if owner_id:
-        import json
-
-        access = {
-            "dmPolicy": "allowlist",
-            "allowFrom": [owner_id],
-            "groups": {},
-            "pending": {},
-            "mentionPatterns": [],
-        }
-        (channel_dir / "access.json").write_text(json.dumps(access, indent=2))
-        approved_dir = channel_dir / "approved"
-        approved_dir.mkdir(parents=True, exist_ok=True)
-        (approved_dir / owner_id).write_text(owner_id)
-        _log.info("Telegram: allowlist locked to owner %s", owner_id)
+    if is_enabled():
+        _log.info("Telegram connector: configured (will start with ASGI server)")
     else:
-        if not (channel_dir / "access.json").exists():
-            import json
-
-            access = {
-                "dmPolicy": "pairing",
-                "allowFrom": [],
-                "groups": {},
-                "pending": {},
-                "mentionPatterns": [],
-            }
-            (channel_dir / "access.json").write_text(json.dumps(access, indent=2))
-            _log.warning("Telegram: no TELEGRAM_OWNER_ID — using pairing mode")
-
-    # Start channel from package dir (inside agentihub git repo — bypasses trust prompt)
-    pkg = Path(package_dir)
-    if not pkg.exists():
-        _log.warning("Telegram: package dir %s not found — skipping channel start", pkg)
-        return
-
-    cmd = [
-        "script",
-        "-qfec",
-        f"claude --model {model} --dangerously-skip-permissions --channels plugin:telegram@claude-plugins-official",
-        "/tmp/telegram-typescript",
-    ]
-    _log.info("Telegram: starting channel from %s (model=%s)", pkg, model)
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(pkg),
-            stdout=open("/tmp/telegram-channel.log", "w"),
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        _log.info("Telegram: channel started (PID %d)", proc.pid)
-    except Exception as e:
-        _log.warning("Telegram: failed to start channel: %s", e)
+        _log.info("Telegram: not configured (no TELEGRAM_BOT_TOKEN)")
 
 
 def _bg_run_startup_scripts(package_dir: str) -> None:
@@ -424,7 +357,7 @@ def initialize_agent_mode() -> list[threading.Thread]:
     bg_threads.append(t_relay)
 
     # Step 6: Telegram channel (already Popen/detached)
-    _start_telegram_channel(am.package_dir, am.model)
+    _log_telegram_status()
 
     _log.info("=== Agent Mode Ready (%.2fs) ===", time.monotonic() - t0)
     _log.info("  Package dir: %s", am.package_dir)
