@@ -163,6 +163,7 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
     logger.info("Telegram connector started (owner=%s)", owner_id)
 
     try:
+        await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot, allowed_updates=["message"])
     finally:
         await bot.session.close()
