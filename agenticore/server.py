@@ -10,6 +10,7 @@ Tools:
     - list_profiles — Available execution profiles
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -1143,7 +1144,17 @@ def _build_asgi_app():
     @asynccontextmanager
     async def lifespan():
         async with session_manager.run():
-            yield
+            from agenticore.connectors import telegram as tg_connector
+
+            tg_task = None
+            if tg_connector.is_enabled():
+                tg_task = asyncio.create_task(tg_connector.start_with_reconnect())
+                logger.info("Telegram connector started")
+            try:
+                yield
+            finally:
+                if tg_task and not tg_task.done():
+                    tg_task.cancel()
 
     async def combined_app(scope, receive, send):
         if scope["type"] == "lifespan":

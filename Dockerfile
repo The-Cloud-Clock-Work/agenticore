@@ -24,7 +24,7 @@ COPY pyproject.toml .
 COPY agenticore/ agenticore/
 
 ARG AGENTIHOOKS_BUST_CACHE=1
-RUN uv pip install --no-cache . && \
+RUN uv pip install --no-cache ".[telegram]" && \
     uv pip install --no-cache "agentihooks @ git+https://github.com/The-Cloud-Clock-Work/agentihooks.git"
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────
