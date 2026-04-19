@@ -139,22 +139,18 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
         else:
             api_messages = messages
 
-        placeholder = await message.answer("...")
+        await bot.send_chat_action(chat_id, "typing")
 
         try:
             response = await _call_completions(api_messages, chat_id=chat_id)
             store.append(chat_id, "assistant", response)
 
-            if len(response) <= 4096:
-                await placeholder.edit_text(response)
-            else:
-                await placeholder.edit_text(response[:4096])
-                for i in range(4096, len(response), 4096):
-                    await message.answer(response[i : i + 4096])
+            for i in range(0, len(response), 4096):
+                await message.answer(response[i : i + 4096])
 
         except Exception as e:
             logger.exception("Completions call failed")
-            await placeholder.edit_text(f"Error: {e}")
+            await message.answer(f"Error: {e}")
 
     bot = Bot(token=token)
     dp = Dispatcher()
