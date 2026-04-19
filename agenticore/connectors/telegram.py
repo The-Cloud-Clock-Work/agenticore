@@ -189,9 +189,14 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
                 audio_bytes, _ = await voice_adapter.speak(text)
                 voice_file = BufferedInputFile(audio_bytes, filename="response.ogg")
                 await bot.send_voice(chat_id, voice_file)
-            except Exception:
-                logger.warning("TTS failed, falling back to text", exc_info=True)
-                await _send_text(message, text)
+            except Exception as exc:
+                from agenticore.voice.adapter import VoiceQuotaError
+                if isinstance(exc, VoiceQuotaError):
+                    logger.error("Voice quota exceeded: %s", exc)
+                    await message.answer(f"[Voice unavailable] {exc}\n\n{text}")
+                else:
+                    logger.warning("TTS failed, falling back to text", exc_info=True)
+                    await _send_text(message, text)
         else:
             await _send_text(message, text)
 

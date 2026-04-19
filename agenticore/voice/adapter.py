@@ -12,6 +12,10 @@ import httpx
 logger = logging.getLogger("agenticore.voice")
 
 
+class VoiceQuotaError(Exception):
+    """Raised when the voice service reports quota exhaustion."""
+
+
 @runtime_checkable
 class VoiceAdapter(Protocol):
 
@@ -47,6 +51,10 @@ class HttpVoiceAdapter:
                 "store": False,
             },
         )
+        if resp.status_code == 429:
+            body = resp.json()
+            msg = body.get("message", "Voice service quota exceeded")
+            raise VoiceQuotaError(msg)
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", f"audio/{output_format}")
         return resp.content, content_type
