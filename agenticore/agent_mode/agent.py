@@ -94,6 +94,13 @@ def build_claude_cmd(
             else:
                 cmd.extend(["--system-prompt-file", str(system_md_path)])
 
+    # Inject auto-discovered capabilities
+    from agenticore.capabilities import render_capabilities_prompt
+
+    caps_prompt = render_capabilities_prompt()
+    if caps_prompt:
+        cmd.extend(["--append-system-prompt", caps_prompt])
+
     # Optional flags
     resolved_effort = effort or am.effort
     if resolved_effort:
