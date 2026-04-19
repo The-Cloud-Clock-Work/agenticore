@@ -119,7 +119,7 @@ class TestApplyTokens:
 
         c = apply_tokens(DEFAULT_CONFIG, ["/show-tools"])
         assert c["show_tools"] is True
-        assert c["show_thinking"] is False
+        assert c["show_thinking"] is True
         assert c["show_text"] is True
 
     def test_show_all(self):
