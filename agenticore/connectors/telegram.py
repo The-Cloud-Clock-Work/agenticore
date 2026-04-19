@@ -26,12 +26,8 @@ logger = logging.getLogger("agenticore.connectors.telegram")
 # ---------------------------------------------------------------------------
 # Voice command regex — intercepted before LLM, stripped from user input
 # ---------------------------------------------------------------------------
-_RE_VOICE_ON = re.compile(
-    r"\b(enable\s+voice|voice\s+on|activate\s+voice)\b", re.IGNORECASE
-)
-_RE_VOICE_OFF = re.compile(
-    r"\b(disable\s+voice|voice\s+off|deactivate\s+voice)\b", re.IGNORECASE
-)
+_RE_VOICE_ON = re.compile(r"\b(enable\s+voice|voice\s+on|activate\s+voice)\b", re.IGNORECASE)
+_RE_VOICE_OFF = re.compile(r"\b(disable\s+voice|voice\s+off|deactivate\s+voice)\b", re.IGNORECASE)
 _RE_REPEAT = re.compile(
     r"\b(send\s+(me\s+)?(that|it|the\s+(last\s+)?message)\s+again"
     r"|repeat\s+(that|it|the\s+(last\s+)?message))\b",
@@ -93,6 +89,7 @@ def _uuid_for_chat(chat_id: int) -> str:
     """Stable UUID per Telegram chat — reused across messages for session continuity."""
     if chat_id not in _chat_uuids:
         import uuid
+
         _chat_uuids[chat_id] = str(uuid.uuid5(uuid.NAMESPACE_URL, f"telegram:{chat_id}"))
     return _chat_uuids[chat_id]
 
@@ -143,6 +140,7 @@ def _is_repeat_command(text: str) -> bool:
 def _get_voice_adapter():
     """Get the voice adapter if enabled, or None."""
     from agenticore.voice import is_enabled as voice_enabled, get_adapter
+
     if voice_enabled():
         return get_adapter()
     return None
@@ -191,6 +189,7 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
                 await bot.send_voice(chat_id, voice_file)
             except Exception as exc:
                 from agenticore.voice.adapter import VoiceQuotaError
+
                 if isinstance(exc, VoiceQuotaError):
                     logger.error("Voice quota exceeded: %s", exc)
                     await message.answer(f"[Voice unavailable] {exc}\n\n{text}")
@@ -270,10 +269,7 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
         agent_id = os.environ.get("AGENTIHUB_AGENT", "default")
         voice = "on" if store.get_voice_mode(message.chat.id) else "off"
         voice_svc = "connected" if voice_adapter else "not configured"
-        await message.answer(
-            f"Messages: {count}\nAgent: {agent_id}\n"
-            f"Voice mode: {voice}\nVoice service: {voice_svc}"
-        )
+        await message.answer(f"Messages: {count}\nAgent: {agent_id}\nVoice mode: {voice}\nVoice service: {voice_svc}")
 
     @router.message(Command("voice"))
     async def cmd_voice(message: Message, command: CommandObject) -> None:

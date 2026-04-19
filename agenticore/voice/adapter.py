@@ -18,12 +18,9 @@ class VoiceQuotaError(Exception):
 
 @runtime_checkable
 class VoiceAdapter(Protocol):
+    async def transcribe(self, audio: bytes, mime_type: str = "audio/ogg") -> str: ...
 
-    async def transcribe(self, audio: bytes, mime_type: str = "audio/ogg") -> str:
-        ...
-
-    async def speak(self, text: str, output_format: str = "ogg") -> tuple[bytes, str]:
-        ...
+    async def speak(self, text: str, output_format: str = "ogg") -> tuple[bytes, str]: ...
 
 
 class HttpVoiceAdapter:
