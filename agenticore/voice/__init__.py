@@ -20,5 +20,6 @@ def get_adapter() -> "HttpVoiceAdapter":
         from agenticore.voice.adapter import HttpVoiceAdapter
 
         url = os.environ["VOICE_SERVICE_URL"]
-        _adapter = HttpVoiceAdapter(url)
+        api_key = os.environ.get("VOICE_API_KEY")
+        _adapter = HttpVoiceAdapter(url, api_key=api_key)
     return _adapter

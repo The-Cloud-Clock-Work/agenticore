@@ -29,9 +29,10 @@ class VoiceAdapter(Protocol):
 class HttpVoiceAdapter:
     """Calls a remote voice service over HTTP."""
 
-    def __init__(self, base_url: str, timeout: float = 120.0):
+    def __init__(self, base_url: str, timeout: float = 120.0, api_key: str | None = None):
         self._base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout)
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout, headers=headers)
 
     async def transcribe(self, audio: bytes, mime_type: str = "audio/ogg") -> str:
         ext = mime_type.split("/")[-1].replace("opus", "ogg")
