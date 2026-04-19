@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -99,7 +99,7 @@ class TestSyncAgentihooks:
                         result = sync_agentihooks("https://github.com/example/agentihooks")
                         assert result == tmp_path
                         assert os.environ.get("AGENTICORE_AGENTIHOOKS_PATH") == str(tmp_path)
-        mock_clone.assert_called_once_with("https://github.com/example/agentihooks", tmp_path)
+        mock_clone.assert_called_once_with("https://github.com/example/agentihooks", tmp_path, ANY)
 
     def test_url_arg_overrides_config(self, monkeypatch, tmp_path):
         """URL passed directly overrides config value."""
@@ -113,7 +113,7 @@ class TestSyncAgentihooks:
                 with patch("agenticore.hooks._install_dir", return_value=tmp_path):
                     sync_agentihooks("https://github.com/example/agentihooks")
 
-        mock_clone.assert_called_once_with("https://github.com/example/agentihooks", tmp_path)
+        mock_clone.assert_called_once_with("https://github.com/example/agentihooks", tmp_path, ANY)
 
     def test_config_url_used_when_no_arg(self, monkeypatch, tmp_path):
         """Config URL is used when no URL arg provided."""
@@ -128,7 +128,7 @@ class TestSyncAgentihooks:
                     result = sync_agentihooks()
 
         assert result == tmp_path
-        mock_clone.assert_called_once_with("https://github.com/config/repo", tmp_path)
+        mock_clone.assert_called_once_with("https://github.com/config/repo", tmp_path, ANY)
 
 
 @pytest.mark.unit
@@ -147,7 +147,7 @@ class TestSyncWatcher:
 
         calls = []
 
-        def fake_clone(url, dest):
+        def fake_clone(url, dest, branch=""):
             calls.append((url, dest))
 
         call_count = [0]
@@ -202,7 +202,7 @@ class TestBundleWatcher:
 
         calls = []
 
-        def fake_clone(url, dest):
+        def fake_clone(url, dest, branch=""):
             calls.append((url, dest))
 
         call_count = [0]
@@ -257,7 +257,7 @@ class TestAgentihubWatcher:
 
         calls = []
 
-        def fake_clone(url, dest):
+        def fake_clone(url, dest, branch=""):
             calls.append((url, dest))
 
         call_count = [0]
