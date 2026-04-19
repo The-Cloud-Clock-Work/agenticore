@@ -221,8 +221,12 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
 
         # 4. Normal flow — LLM completion
         messages = store.append(chat_id, "user", user_text)
-        if system_prompt:
-            api_messages = [{"role": "system", "content": system_prompt}] + messages
+        from agenticore.capabilities import render_capabilities_prompt
+
+        caps = render_capabilities_prompt()
+        full_system = "\n\n".join(filter(None, [system_prompt, caps]))
+        if full_system:
+            api_messages = [{"role": "system", "content": full_system}] + messages
         else:
             api_messages = messages
 
