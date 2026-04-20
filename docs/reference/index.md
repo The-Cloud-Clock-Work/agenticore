@@ -7,4 +7,4 @@ parent: Documentation
 
 # Reference
 
-CLI commands, configuration options, and API reference.
+CLI commands, configuration options, API reference, voice adapter, and Telegram connector.
