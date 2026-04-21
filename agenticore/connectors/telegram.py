@@ -199,33 +199,41 @@ class TelegramProgressSink(ProgressSink):
         # progress before the final lands.
         await self._flush(force=True)
 
-        try:
-            if self._mode == "live" and self._live_message_id is not None:
-                # Replace the live progress message with the final answer,
-                # truncated from the head if it exceeds Telegram's limit.
-                rendered = text or ""
-                if len(rendered) > self._MAX_TG_CHARS:
-                    rendered = rendered[: self._MAX_TG_CHARS - 1] + "…"
+        rendered = text or ""
+        if len(rendered) > self._MAX_TG_CHARS:
+            rendered = rendered[: self._MAX_TG_CHARS - 1] + "…"
+
+        if self._mode == "live" and self._live_message_id is not None:
+            # The live message already shows identical content (anton-profile
+            # case: model emits one text block that is BOTH the narration and
+            # the final). Editing with the same text throws "message not
+            # modified" on Telegram. Skip the edit — nothing to do.
+            if rendered == self._last_rendered:
+                return
+            try:
                 async with self._edit_lock:
                     await self._bot.edit_message_text(
                         rendered,
                         chat_id=self._chat_id,
                         message_id=self._live_message_id,
                     )
-            else:
-                # transcript mode (or no live message was created) — send
-                # as a new message, chunked at 4096 chars per Telegram.
-                for i in range(0, len(text or ""), 4096):
-                    await self._bot.send_message(self._chat_id, (text or "")[i : i + 4096])
-        except Exception as e:
-            # If edit fails (rate-limit, stale message), fall back to
-            # sending a new message so the user always sees the final.
-            logger.debug("telegram final edit failed, sending new message: %s", e)
-            try:
-                for i in range(0, len(text or ""), 4096):
-                    await self._bot.send_message(self._chat_id, (text or "")[i : i + 4096])
-            except Exception:
-                logger.exception("telegram final send failed")
+                    self._last_rendered = rendered
+                return
+            except Exception as e:
+                err = str(e)
+                # "message is not modified" is benign — narration already
+                # matches final. Do NOT send a new message.
+                if "not modified" in err.lower():
+                    return
+                logger.debug("telegram final edit failed, sending new message: %s", e)
+
+        # transcript mode, no live message, or non-benign edit failure —
+        # send the final as one or more new messages.
+        try:
+            for i in range(0, len(rendered), 4096):
+                await self._bot.send_message(self._chat_id, rendered[i : i + 4096])
+        except Exception:
+            logger.exception("telegram final send failed")
 
     async def on_error(self, message: str, code=None) -> None:
         try:
