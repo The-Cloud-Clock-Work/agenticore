@@ -151,6 +151,7 @@ class TelegramProgressSink(ProgressSink):
             return
         now = time.monotonic()
         if not force and now - self._last_edit_ts < self._EDIT_INTERVAL_S:
+            logger.info("tg.sink flush debounced (last=%.2fs ago)", now - self._last_edit_ts)
             return
         rendered = self._render_buffer()
         if rendered == self._last_rendered:
@@ -160,16 +161,18 @@ class TelegramProgressSink(ProgressSink):
                 if self._live_message_id is None:
                     msg = await self._bot.send_message(self._chat_id, rendered)
                     self._live_message_id = msg.message_id
+                    logger.info("tg.sink SEND msg_id=%s chars=%d", msg.message_id, len(rendered))
                 else:
                     await self._bot.edit_message_text(
                         rendered,
                         chat_id=self._chat_id,
                         message_id=self._live_message_id,
                     )
+                    logger.info("tg.sink EDIT msg_id=%s chars=%d", self._live_message_id, len(rendered))
                 self._last_rendered = rendered
                 self._last_edit_ts = time.monotonic()
             except Exception as e:
-                logger.debug("telegram progress flush failed (non-fatal): %s", e)
+                logger.warning("tg.sink flush failed: %s", e)
 
     # ------------------------------------------------------------------
     # ProgressSink overrides
@@ -178,17 +181,20 @@ class TelegramProgressSink(ProgressSink):
         if not text:
             return
         self._buffer += text
+        logger.info("tg.sink narration chars=%d buf_len=%d", len(text), len(self._buffer))
         await self._flush()
 
     async def on_tool_call(self, name: str, args: dict, tool_use_id: str) -> None:
         # Visibility is decided upstream by stream_cfg (show_tools). If the
         # event reaches us, render it.
         self._buffer += f"\n\n▶ {name}"
+        logger.info("tg.sink tool_call name=%s buf_len=%d", name, len(self._buffer))
         await self._flush()
 
     async def on_tool_result(self, tool_use_id: str, content: str, is_error: bool) -> None:
         marker = "◉ error" if is_error else "◉ ok"
         self._buffer += f"\n{marker}"
+        logger.info("tg.sink tool_result is_error=%s buf_len=%d", is_error, len(self._buffer))
         await self._flush()
 
     async def on_final(self, text: str) -> None:
