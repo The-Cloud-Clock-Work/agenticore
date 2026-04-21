@@ -182,7 +182,7 @@ services:
     ports: ["8200:8200"]
     volumes:
       - agenticore-shared:/shared              # mirrors K8s RWX PVC
-      - ~/dev/agentihooks:/opt/agentihooks-src # hot-reload agentihooks source
+      - ~/dev/agentihooks:/opt/agentihooks-src # dev loopback — AGENTICORE_AGENTIHOOKS_PATH=/opt/agentihooks-src triggers editable install over the PyPI version
       - ./docker/gateway-mcp.json:/shared/gateway-mcp.json:ro
     env_file: [.env]
     environment:
@@ -193,7 +193,7 @@ services:
 | Concept | Production (K8s) | Dev Compose |
 |---------|-----------------|-------------|
 | Shared storage | RWX PVC at `/shared` | Named volume `agenticore-shared` |
-| Agentihooks | Installed from git URL at runtime | Bind-mounted from `~/dev/agentihooks` |
+| Agentihooks | PyPI dependency baked into the image | PyPI in image + optional bind-mount override at `~/dev/agentihooks` (set `AGENTICORE_AGENTIHOOKS_PATH`) |
 | MCP gateway | ConfigMap mount | Bind-mounted `gateway-mcp.json` |
 | `HOME` | `/shared` | `/shared` |
 

@@ -211,14 +211,16 @@ Server start
 
 ### Hot-reload behavior
 
-All three repos use the same pattern: a daemon thread periodically runs
-`git fetch --all && git reset --hard origin/HEAD`. Each has an independent
-interval defaulting to 300 seconds. Set any `*_SYNC_INTERVAL` to `0` to
-disable its watcher.
+The two content repos (bundle + agentihub) use a daemon thread that
+periodically runs `git fetch --all && git reset --hard origin/HEAD`. Each
+has an independent interval defaulting to 300 seconds. Set any
+`*_SYNC_INTERVAL` to `0` to disable its watcher. **agentihooks itself has
+no watcher** — it is a PyPI dependency, so a pod restart is the upgrade
+path.
 
 | Repo | Watcher thread | Interval variable | Default |
 |------|---------------|-------------------|---------|
-| agentihooks | `agentihooks-watcher` | `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | 300s |
+| agentihooks | (none — PyPI dep, restart to upgrade) | `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | deprecated no-op |
 | agentihooks-bundle | `agentihooks-bundle-watcher` | `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | 300s |
 | agentihub | `agentihub-watcher` | `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | 300s |
 

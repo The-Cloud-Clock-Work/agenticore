@@ -55,7 +55,7 @@ helpme() {
   echo "    gc               Auto-commit with AI message"
   echo "    gs / gp          Git status / push"
   echo "    wkt-get [q]      List worktrees, cd into one"
-  echo "    agentipull       Force hot-reload agentihooks"
+  echo "    agentipull       Re-sync override repos + re-run agentihooks init"
   echo "    helpme           Show this help"
   echo ""
   echo "  Installed Tools:"

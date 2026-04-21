@@ -45,7 +45,7 @@ Agenticore uses two storage tiers: shared NFS for repos and state, local emptyDi
 ```
 /shared/
 ├── repos/{hash}/repo/          ← git clone cache (shared across pods)
-├── agentihooks/                ← cloned agentihooks repo (AGENTICORE_AGENTIHOOKS_URL)
+├── agentihooks/                ← only present when AGENTICORE_AGENTIHOOKS_URL override is set (default: agentihooks is a PyPI dep, no clone)
 ├── jobs/{job-id}/              ← per-job merge dir (extends profiles) / no-repo CWD
 │   ├── .claude/
 │   │   ├── settings.json
@@ -77,11 +77,16 @@ Each Claude Code process uses ~320Mi memory. Size pod limits accordingly:
 
 Set  to match your memory allocation.
 
-**Agentihooks** is cloned to `/shared/agentihooks/` at startup when `AGENTICORE_AGENTIHOOKS_URL`
-is set. All pods and job-init containers share a single clone on the RWX PVC.
-`build_profiles.py` runs after every git-fetch so profile hooks always reference
-the correct install directory. A background watcher refreshes the clone every
-`AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` seconds (default 300) — no restart needed.
+**Agentihooks** ships as a pip dependency of agenticore ([PyPI](https://pypi.org/project/agentihooks/)),
+so the CLI is available inside the container without any runtime configuration.
+Set `AGENTICORE_AGENTIHOOKS_URL` only when you want to override with a one-shot
+clone + editable install (bleeding-edge fork/branch), or set
+`AGENTICORE_AGENTIHOOKS_PATH` for a dev loopback against a mounted checkout.
+PATH wins over URL. There is no periodic re-sync — restart the pod to pick up
+a newer PyPI release (bump the floor in agenticore's `pyproject.toml`, or
+rebuild the image to pull the latest resolved version).
+`AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` is retained as a deprecated no-op for
+backwards compatibility.
 
 ---
 
