@@ -71,9 +71,12 @@ redis-standalone:
   port: 6379
 
 agentihooks:
+  # agentihooks is a PyPI dependency of agenticore. Leave url/path empty for
+  # the default PyPI install. Set path for a dev loopback to a mounted repo,
+  # or url for a one-shot clone of a bleeding-edge fork (no periodic re-sync).
   url: ""
   path: ""
-  syncInterval: 300
+  syncInterval: 300  # DEPRECATED — no-op; kept for backwards compat
   bundleUrl: ""
   bundleSyncInterval: 300
 

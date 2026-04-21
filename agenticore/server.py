@@ -1244,13 +1244,11 @@ def run_sse_server() -> None:
 
 
 def _do_sync_agentihooks(cfg) -> Optional[Path]:
-    """Clone/fetch agentihooks repo. Thread-safe. Returns install path."""
-    if cfg.dev_mode or (not cfg.agentihooks_url and not os.getenv("AGENTICORE_AGENTIHOOKS_PATH")):
-        from agenticore.hooks import sync_agentihooks
+    """Resolve agentihooks overlay (PATH/URL) or fall through to PyPI.
 
-        return sync_agentihooks()
-    if not cfg.agentihooks_url:
-        return None
+    PyPI is the default — when no override is set, returns None and the
+    agentihooks CLI is provided by the pip dependency.
+    """
     from agenticore.hooks import sync_agentihooks
 
     return sync_agentihooks()
@@ -1277,22 +1275,24 @@ def _do_sync_agentihub(cfg) -> Optional[Path]:
 
 
 def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optional[Path]) -> None:
-    """Run agentihooks init + start watchers. Must run after git syncs complete."""
+    """Run ``agentihooks init`` + start content-repo watchers.
+
+    Init always runs — agentihooks is a PyPI dependency so the CLI is on
+    PATH regardless of whether a PATH/URL overlay was applied. Only the
+    bundle watcher is started here; there is no watcher for agentihooks
+    itself since it is a versioned pip package (pod restart picks up
+    upgrades).
+    """
     from agenticore.hooks import run_agentihooks_init
 
-    if hooks_path or bundle_path:
-        pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
-        run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path, repo_dir=pkg_dir)
+    pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
+    run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path, repo_dir=pkg_dir)
 
     if cfg.dev_mode:
         logger.info("dev mode: agentihooks init complete (no watchers)")
         return
 
-    # Start watchers (daemon threads — safe to start from main thread)
-    if hooks_path and cfg.agentihooks_url and cfg.agentihooks_sync_interval > 0:
-        from agenticore.hooks import start_sync_watcher
-
-        start_sync_watcher(cfg.agentihooks_url, hooks_path, cfg.agentihooks_sync_interval, cfg.agentihooks_branch)
+    # Start content-repo watcher (daemon thread — safe from main thread).
     if bundle_path and cfg.agentihooks_bundle_url and cfg.agentihooks_bundle_sync_interval > 0:
         from agenticore.hooks import start_bundle_watcher
 

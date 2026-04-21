@@ -56,25 +56,30 @@ when names collide.
 
 **agentihooks** is the authoritative source for organisation-wide profiles. It
 owns the full profile authoring pipeline — hook wiring, MCP categories, system
-prompts, and the `build_profiles.py` generator. Set `AGENTICORE_AGENTIHOOKS_PATH`
-to the path of your cloned agentihooks repo.
+prompts, and the `build_profiles.py` generator. It ships as a **PyPI package**
+(`agentihooks`) and is a pip dependency of agenticore — so profiles are already
+available in the installed package. Set `AGENTICORE_AGENTIHOOKS_PATH` only when
+you want to overlay the PyPI install with a live local checkout for development.
 
 **User profiles** (`~/.agenticore/profiles/`) are for personal overrides and
 local experimentation. They always take highest priority.
 
 ## agentihooks Profiles
 
-In practice, profiles come from [agentihooks](https://github.com/The-Cloud-Clock-Work/agentihooks),
-which owns the full profile authoring pipeline. The `.claude/settings.json` and
-`.mcp.json` inside each profile directory are **pre-built** by agentihooks'
+Profiles come from the installed [agentihooks](https://pypi.org/project/agentihooks/)
+package, which owns the full profile authoring pipeline. The `.claude/settings.json`
+and `.mcp.json` inside each profile directory are **pre-built** by agentihooks'
 `scripts/build_profiles.py`, which merges `profiles/_base/settings.base.json`
 (hook wiring, permissions) with any per-profile overrides.
 
-In Kubernetes deployments, agentihooks is cloned to `/shared/agentihooks/` at startup
-when `AGENTICORE_AGENTIHOOKS_URL` is set. All pods share a single clone on the RWX PVC.
-`build_profiles.py` runs after every git-fetch so profile hooks always reference
-the correct install directory. A background watcher refreshes the clone every
-`AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` seconds (default 300) — no restart needed.
+In Kubernetes deployments agentihooks is installed from PyPI as part of the
+container image — **no clone, no watcher.** Pod restart picks up a new release
+(bump the agentihooks floor in agenticore's `pyproject.toml` or rebuild to pull
+a newer PyPI version). Set `AGENTICORE_AGENTIHOOKS_URL` to override with a one-
+shot clone + editable install for bleeding-edge testing; set
+`AGENTICORE_AGENTIHOOKS_PATH` for a dev loopback over a mounted checkout.
+`AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` is retained as a deprecated no-op for
+backwards compatibility.
 
 ### Agentihooks Bundle
 

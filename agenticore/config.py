@@ -136,7 +136,9 @@ class Config:
     agentihooks_url: str = ""
     agentihooks_bundle_url: str = ""
     agentihooks_bundle_path: str = ""  # AGENTICORE_AGENTIHOOKS_BUNDLE_PATH — dev mode mount
-    agentihooks_sync_interval: int = 300  # seconds between background re-syncs; 0 to disable
+    agentihooks_sync_interval: int = (
+        300  # DEPRECATED — no-op (agentihooks is a PyPI dep, restart to upgrade). Kept for YAML/env backwards compat.
+    )
     agentihooks_bundle_sync_interval: int = 300
     agentihub_url: str = ""
     agentihub_path: str = ""
