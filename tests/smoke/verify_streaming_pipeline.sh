@@ -116,13 +116,22 @@ if [[ -n "$ghcr_dev_sha" && -n "$pod_image_id" ]]; then
 fi
 log_pf "image.match = $image_match"
 
-event_relay_path="/shared/agentihooks/hooks/observability/event_relay.py"
+# agentihooks is a PyPI dependency — resolve the relay script via Python
+# import so this works under PyPI / PATH / URL install modes equally.
+event_relay_path=$($KCTL -n "$NS" exec "$POD" -c agenticore -- python -c \
+    'import agentihooks.hooks.observability.event_relay as m; print(m.__file__)' 2>/dev/null | tr -d '\r')
+if [[ -z "$event_relay_path" ]]; then
+    echo "FATAL: agentihooks.hooks.observability.event_relay not importable in pod $POD" >&2
+    log_pf "event_relay = MISSING"
+    exit 2
+fi
 relay_sha=$($KCTL -n "$NS" exec "$POD" -c agenticore -- sha256sum "$event_relay_path" 2>/dev/null | awk '{print $1}' || echo "")
 if [[ -z "$relay_sha" ]]; then
     echo "FATAL: $event_relay_path missing in pod $POD" >&2
     log_pf "event_relay = MISSING"
     exit 2
 fi
+log_pf "event_relay.path = $event_relay_path"
 log_pf "event_relay.sha256 = $relay_sha"
 
 settings_json=$($KCTL -n "$NS" exec "$POD" -c agenticore -- cat /shared/.claude/settings.json 2>/dev/null || echo "{}")

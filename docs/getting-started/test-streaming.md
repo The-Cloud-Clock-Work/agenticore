@@ -183,7 +183,7 @@ The pipeline is half-broken. Run the audit script — it will tell you which lay
 
 Common causes:
 - Pod runs an old image that predates the feature — rollout restart
-- `event_relay.py` missing from the agentihooks PVC — agentihooks sync hasn't completed
+- `event_relay.py` missing from the agentihooks install — the PyPI agentihooks version is too old, or the URL/PATH override points at a stale checkout. Check `pip show agentihooks` inside the pod
 - `settings.json` doesn't wire the hooks — initializer didn't run
 
 See the [fail modes table]({% link docs/reference/sse-streaming.md %}#fail-modes-and-diagnostics) for the full matrix.

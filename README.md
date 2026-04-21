@@ -503,4 +503,35 @@ ruff check agenticore/ tests/
 ruff format --check agenticore/ tests/
 ```
 
+### agentihooks dev loopback
+
+`agentihooks` ships as a PyPI dependency of agenticore (`agentihooks>=1.8.0` in
+`pyproject.toml`) and is pulled transitively when you `pip install agenticore`
+or build the Docker image. You do **not** need to clone it to get a working
+runtime. A pod restart is the upgrade path — no periodic re-sync watcher.
+
+When you're iterating on agentihooks itself and want the mounted checkout to
+be the live runtime, use one of the two override escape hatches:
+
+| Env var | Behaviour |
+|---|---|
+| `AGENTICORE_AGENTIHOOKS_PATH=<local path>` | At boot: `uv pip install -e <path>` overlays the PyPI version. Ideal for docker-compose / k8s dev pods with the repo bind-mounted. **Wins over URL.** |
+| `AGENTICORE_AGENTIHOOKS_URL=<git url>` (+ optional `_BRANCH`) | At boot: clone ONCE to `{SHARED_FS_ROOT}/agentihooks`, then `uv pip install -e`. For smoke-testing a fork or branch without a PyPI release. |
+| *(neither set)* | Container runs the PyPI-installed version. Default. |
+
+`docker-compose.dev.yml` wires the loopback out of the box:
+
+```yaml
+volumes:
+  - /home/iamroot/dev/agentihooks:/opt/agentihooks-src
+environment:
+  AGENTICORE_AGENTIHOOKS_PATH: /opt/agentihooks-src
+```
+
+Edit the mounted checkout → re-run the server (or let Python re-import on
+worker restart). The clone+watcher machinery from the old model is gone;
+bundle and agentihub content repos retain their watchers. See
+[`docs/reference/configuration.md`](docs/reference/configuration.md#agentihooks)
+for full env-var semantics.
+
 PRs welcome. The `feat/*` branches in the repo show recent work — the most recent landed feature is the token-by-token SSE streaming layer (`feat/stream-json-direct` → `dev` → `main` at `f440e3c`, released as `v1.3.0`).

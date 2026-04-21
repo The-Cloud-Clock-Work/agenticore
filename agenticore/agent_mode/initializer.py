@@ -12,6 +12,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 from agenticore.config import get_config
 
@@ -216,19 +217,45 @@ def _bg_run_startup_scripts(package_dir: str) -> None:
         _log.warning("Startup scripts error (non-fatal, background): %s", e)
 
 
+def _resolve_event_relay_script() -> Optional[str]:
+    """Locate the agentihooks event_relay.py regardless of install mode.
+
+    Tries the installed Python package first (PyPI / PATH / URL editable
+    install — all resolve to a real file via ``__file__``), then falls back
+    to the legacy PVC path for backwards compat with clusters still on the
+    clone-based setup.
+    """
+    try:
+        import agentihooks.hooks.observability.event_relay as _relay_mod
+
+        path = getattr(_relay_mod, "__file__", None)
+        if path and Path(path).exists():
+            return str(path)
+    except Exception as exc:
+        _log.debug("agentihooks.hooks.observability.event_relay import failed: %s", exc)
+    legacy = "/shared/agentihooks/hooks/observability/event_relay.py"
+    if Path(legacy).exists():
+        return legacy
+    return None
+
+
 def _install_event_relay_hook() -> None:
     """Wire the agentihooks event_relay.py script for SSE event streaming.
 
     Adds PostToolUse + Stop + Notification entries to ~/.claude/settings.json
-    pointing at the relay script in the agentihooks PVC mount. The script
-    self-gates on AGENTICORE_EVENT_STREAM=1 so non-streaming traffic is a no-op.
-    Idempotent — safe to call multiple times.
+    pointing at the relay script shipped with the installed agentihooks
+    package (PyPI install, editable PATH overlay, or URL-override clone all
+    resolve via ``agentihooks.hooks.observability.event_relay.__file__``).
+    The script self-gates on AGENTICORE_EVENT_STREAM=1 so non-streaming
+    traffic is a no-op. Idempotent — safe to call multiple times.
     """
     import json
 
-    relay_script = "/shared/agentihooks/hooks/observability/event_relay.py"
-    if not Path(relay_script).exists():
-        _log.info("Event relay script not found at %s — skipping wire-up", relay_script)
+    relay_script = _resolve_event_relay_script()
+    if not relay_script:
+        _log.info(
+            "Event relay script not resolvable (agentihooks import failed and no legacy PVC path) — skipping wire-up"
+        )
         return
 
     claude_home = Path(os.getenv("CLAUDE_CODE_HOME_DIR", str(Path.home())))
@@ -272,14 +299,15 @@ def _install_event_relay_hook() -> None:
 def _bg_install_event_relay_hook() -> None:
     """Wrapper for background thread — catches all exceptions.
 
-    Polls up to 60s for the relay script since agentihooks sync may not have
-    completed when the bg thread starts.
+    Polls up to 60s for the relay script to resolve. Under the default PyPI
+    install the import succeeds on the first attempt; under the URL-override
+    path the clone may still be in flight when this thread starts, so we
+    retry every 5s for a minute before giving up.
     """
     import time as _time
 
-    relay_script = Path("/shared/agentihooks/hooks/observability/event_relay.py")
     for _ in range(12):
-        if relay_script.exists():
+        if _resolve_event_relay_script():
             break
         _time.sleep(5)
     try:
