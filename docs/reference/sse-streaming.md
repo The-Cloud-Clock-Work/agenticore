@@ -53,8 +53,12 @@ These are **pseudo-slash commands** embedded in the user message. agenticore str
 | `/hide-thinking` | Exclude thinking deltas (default) |
 | `/show-tools` | Include tool_use + tool_result deltas |
 | `/hide-tools` | Exclude tool deltas (default) |
-| `/show-all` | Enable thinking + tools + text |
-| `/hide-all` | Back to assistant text only |
+| `/show-narration` | Include interleaved assistant text between tool calls (default: on) |
+| `/hide-narration` | Suppress narration; only the final answer reaches the client |
+| `/show-final` | Include the final assistant answer (default: on) |
+| `/hide-final` | Suppress the final tag (rare — used for "narration-only" UIs) |
+| `/show-all` | Enable thinking + tools + text + narration + final |
+| `/hide-all` | Back to final-answer-only (thinking + tools + narration off) |
 | `/stream-status` | Respond inline with current visibility state (no subprocess spawned) |
 
 **Sticky per agent.** The toggle is persisted to Redis at `agenticore:stream_config:{AGENTIHUB_AGENT}` with no TTL. Once you send `/show-thinking` to agent `X`, every subsequent streaming call to that agent includes thinking deltas until you send `/hide-thinking` or `/hide-all`.
@@ -110,7 +114,26 @@ data: {"choices":[{"index":0,
   "x_agenticore_is_error":false}]}
 ```
 
-### Assistant text delta
+### Narration delta — interleaved assistant text between tool calls
+Emitted for every `text_delta` that is NOT the last text block of the turn. Same `delta.content` channel as the final answer but tagged so UIs can render it distinctly (in-flight "working on it" message) from the authoritative reply.
+```
+data: {"choices":[{"index":0,
+  "delta":{"content":"Let me check the logs..."},
+  "finish_reason":null,
+  "x_agenticore_event_type":"narration"}]}
+```
+
+### Final delta — the authoritative final answer
+The last closed text block of the turn, retagged at end of turn. Exactly one `final` event fires per turn (none if the turn ends after a tool call with no trailing text).
+```
+data: {"choices":[{"index":0,
+  "delta":{"content":"I found 2 files: file1.txt, file2.log."},
+  "finish_reason":null,
+  "x_agenticore_event_type":"final"}]}
+```
+
+### Assistant text delta (legacy, untagged)
+Kept for clients that haven't migrated to the canonical narration/final distinction.
 ```
 data: {"choices":[{"index":0,
   "delta":{"content":"I see two files: ..."},

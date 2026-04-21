@@ -8,6 +8,10 @@ Optional:
   TELEGRAM_SYSTEM_PROMPT    — system prompt prepended to every conversation
   TELEGRAM_MAX_MESSAGES     — conversation history depth (default 20)
   TELEGRAM_CONVERSATION_TTL — history TTL in seconds (default 86400)
+  TELEGRAM_PROGRESS_MODE    — "live" (default, edit one message with
+                              narration → final) or "transcript"
+                              (keep narration message, send final as new
+                              message)
 
 Voice support (requires agenticore.voice adapter):
   VOICE_SERVICE_URL   — base URL of voice HTTP service (enables voice)
@@ -19,7 +23,10 @@ import io
 import logging
 import os
 import re
+import time
 from typing import Optional
+
+from agenticore.connectors.base import ProgressSink
 
 logger = logging.getLogger("agenticore.connectors.telegram")
 
@@ -94,8 +101,168 @@ def _uuid_for_chat(chat_id: int) -> str:
     return _chat_uuids[chat_id]
 
 
-async def _call_completions(messages: list[dict], chat_id: int) -> str:
-    """Call agenticore's own completions handler in-process."""
+class TelegramProgressSink(ProgressSink):
+    """ProgressSink that renders canonical agent events into Telegram messages.
+
+    The rendering strategy is controlled by TELEGRAM_PROGRESS_MODE:
+
+    - ``live`` (default) — single message is edited with narration +
+      tool-call chips while the agent runs; when on_final fires the
+      message is replaced with the authoritative final answer.
+    - ``transcript`` — the progress message remains for history; the
+      final answer is sent as a new message below it.
+
+    Narration updates are debounced to ~1 edit per second to stay inside
+    Telegram's rate limit, and each edit truncates to Telegram's 4096-
+    character message limit from the tail (most recent content visible).
+    """
+
+    _MAX_TG_CHARS = 4000  # keep 96-char headroom under 4096 for safety
+    _EDIT_INTERVAL_S = 1.0
+
+    def __init__(self, bot, chat_id: int, *, show_tools: bool = False, mode: str = "live"):
+        self._bot = bot
+        self._chat_id = chat_id
+        self._show_tools = show_tools
+        self._mode = mode if mode in ("live", "transcript") else "live"
+        self._buffer: str = ""
+        self._live_message_id: Optional[int] = None
+        self._last_edit_ts: float = 0.0
+        self._edit_lock = asyncio.Lock()
+        self._last_rendered: str = ""
+        self._final_sent = False
+        self.final_text: str = ""
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+
+    def _render_buffer(self) -> str:
+        text = self._buffer
+        if len(text) > self._MAX_TG_CHARS:
+            text = "…" + text[-(self._MAX_TG_CHARS - 1) :]
+        return text
+
+    async def _flush(self, *, force: bool = False) -> None:
+        if not self._buffer:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_edit_ts < self._EDIT_INTERVAL_S:
+            return
+        rendered = self._render_buffer()
+        if rendered == self._last_rendered:
+            return
+        async with self._edit_lock:
+            try:
+                if self._live_message_id is None:
+                    msg = await self._bot.send_message(self._chat_id, rendered)
+                    self._live_message_id = msg.message_id
+                else:
+                    await self._bot.edit_message_text(
+                        rendered,
+                        chat_id=self._chat_id,
+                        message_id=self._live_message_id,
+                    )
+                self._last_rendered = rendered
+                self._last_edit_ts = time.monotonic()
+            except Exception as e:
+                logger.debug("telegram progress flush failed (non-fatal): %s", e)
+
+    # ------------------------------------------------------------------
+    # ProgressSink overrides
+
+    async def on_narration(self, text: str) -> None:
+        if not text:
+            return
+        self._buffer += text
+        await self._flush()
+
+    async def on_tool_call(self, name: str, args: dict, tool_use_id: str) -> None:
+        if not self._show_tools:
+            return
+        self._buffer += f"\n\n▶ {name}"
+        await self._flush()
+
+    async def on_tool_result(self, tool_use_id: str, content: str, is_error: bool) -> None:
+        if not self._show_tools:
+            return
+        marker = "◉ error" if is_error else "◉ ok"
+        self._buffer += f"\n{marker}"
+        await self._flush()
+
+    async def on_final(self, text: str) -> None:
+        if self._final_sent:
+            return
+        self._final_sent = True
+        self.final_text = text or ""
+
+        # Flush any residual narration so the user sees the complete
+        # progress before the final lands.
+        await self._flush(force=True)
+
+        try:
+            if self._mode == "live" and self._live_message_id is not None:
+                # Replace the live progress message with the final answer,
+                # truncated from the head if it exceeds Telegram's limit.
+                rendered = text or ""
+                if len(rendered) > self._MAX_TG_CHARS:
+                    rendered = rendered[: self._MAX_TG_CHARS - 1] + "…"
+                async with self._edit_lock:
+                    await self._bot.edit_message_text(
+                        rendered,
+                        chat_id=self._chat_id,
+                        message_id=self._live_message_id,
+                    )
+            else:
+                # transcript mode (or no live message was created) — send
+                # as a new message, chunked at 4096 chars per Telegram.
+                for i in range(0, len(text or ""), 4096):
+                    await self._bot.send_message(self._chat_id, (text or "")[i : i + 4096])
+        except Exception as e:
+            # If edit fails (rate-limit, stale message), fall back to
+            # sending a new message so the user always sees the final.
+            logger.debug("telegram final edit failed, sending new message: %s", e)
+            try:
+                for i in range(0, len(text or ""), 4096):
+                    await self._bot.send_message(self._chat_id, (text or "")[i : i + 4096])
+            except Exception:
+                logger.exception("telegram final send failed")
+
+    async def on_error(self, message: str, code=None) -> None:
+        try:
+            await self._bot.send_message(self._chat_id, f"Error: {message}")
+        except Exception:
+            logger.exception("telegram error send failed")
+
+
+class _SilentSink(ProgressSink):
+    """Drops every event except final/error — used in voice mode where the
+    user listens to the final answer and doesn't want narration spam in
+    the chat."""
+
+    def __init__(self):
+        self.final_text: str = ""
+        self.error_text: Optional[str] = None
+
+    async def on_final(self, text: str) -> None:
+        self.final_text = text or ""
+
+    async def on_error(self, message: str, code=None) -> None:
+        self.error_text = message
+
+
+async def _call_completions(
+    messages: list[dict],
+    chat_id: int,
+    *,
+    sink: Optional[ProgressSink] = None,
+) -> str:
+    """Call agenticore's own completions handler in-process.
+
+    When a sink is supplied, canonical progress events (narration, tool
+    calls, final, usage, error) are dispatched to it as the agent works.
+    Returns the final answer string either way so the caller can TTS it
+    or log it.
+    """
     from agenticore.agent_mode.agent import AgentExecutor
     from agenticore.agent_mode.openai_compat import flatten_messages
 
@@ -106,6 +273,7 @@ async def _call_completions(messages: list[dict], chat_id: int) -> str:
         message=prompt,
         external_uuid=_uuid_for_chat(chat_id),
         wait=True,
+        sink=sink,
     )
 
     if result.get("is_error"):
@@ -180,7 +348,10 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
         for i in range(0, len(text), 4096):
             await message.answer(text[i : i + 4096])
 
-    async def _send_in_mode(message: Message, text: str, chat_id: int) -> None:
+    async def _speak_or_fallback(message: Message, text: str, chat_id: int) -> None:
+        """Send a single text response as voice (if voice mode + adapter), with
+        text fallback on TTS failure. Used from the repeat-command path and
+        from the voice-mode final dispatch in _process_and_respond."""
         if store.get_voice_mode(chat_id) and voice_adapter:
             try:
                 await bot.send_chat_action(chat_id, "record_voice")
@@ -203,6 +374,9 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
     # Core processing — shared by text and voice handlers
     # ------------------------------------------------------------------
 
+    progress_mode = os.environ.get("TELEGRAM_PROGRESS_MODE", "live")
+    show_tools_in_progress = os.environ.get("TELEGRAM_SHOW_TOOLS", "false").lower() in ("1", "true", "yes")
+
     async def _process_and_respond(message: Message, user_text: str, chat_id: int) -> None:
         # 1. Parse voice commands
         user_text, mode_changed = _parse_voice_commands(user_text, store, chat_id)
@@ -211,7 +385,7 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
         if _is_repeat_command(user_text):
             last = store.get_last_assistant(chat_id)
             if last:
-                await _send_in_mode(message, last, chat_id)
+                await _speak_or_fallback(message, last, chat_id)
             else:
                 await message.answer("No previous message to repeat.")
             return
@@ -223,7 +397,7 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
                 await message.answer(f"Voice mode: {mode}")
             return
 
-        # 4. Normal flow — LLM completion
+        # 4. Normal flow — LLM completion with live progress sink
         messages = store.append(chat_id, "user", user_text)
         from agenticore.capabilities import render_capabilities_prompt
 
@@ -236,10 +410,27 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
 
         await bot.send_chat_action(chat_id, "typing")
 
+        voice_mode = store.get_voice_mode(chat_id) and voice_adapter is not None
+        sink: ProgressSink
+        if voice_mode:
+            # Voice mode: suppress chat narration — user wants the voice
+            # reply to be the authoritative channel. Sink collects the
+            # final text and any error for us to TTS after execute returns.
+            sink = _SilentSink()
+        else:
+            sink = TelegramProgressSink(
+                bot,
+                chat_id,
+                show_tools=show_tools_in_progress,
+                mode=progress_mode,
+            )
+
         try:
-            response = await _call_completions(api_messages, chat_id=chat_id)
+            response = await _call_completions(api_messages, chat_id=chat_id, sink=sink)
             store.append(chat_id, "assistant", response)
-            await _send_in_mode(message, response, chat_id)
+            if voice_mode:
+                # Sink did not render anything in chat — do the voice TTS now.
+                await _speak_or_fallback(message, response, chat_id)
         except Exception as e:
             logger.exception("Completions call failed")
             await message.answer(f"Error: {e}")

@@ -126,14 +126,26 @@ class TestApplyTokens:
         from agenticore.agent_mode.stream_config import apply_tokens, DEFAULT_CONFIG
 
         c = apply_tokens(DEFAULT_CONFIG, ["/show-all"])
-        assert c == {"show_thinking": True, "show_tools": True, "show_text": True}
+        assert c == {
+            "show_thinking": True,
+            "show_tools": True,
+            "show_text": True,
+            "show_narration": True,
+            "show_final": True,
+        }
 
     def test_hide_all(self):
         from agenticore.agent_mode.stream_config import apply_tokens
 
         start = {"show_thinking": True, "show_tools": True, "show_text": True}
         c = apply_tokens(start, ["/hide-all"])
-        assert c == {"show_thinking": False, "show_tools": False, "show_text": True}
+        assert c == {
+            "show_thinking": False,
+            "show_tools": False,
+            "show_text": True,
+            "show_narration": False,
+            "show_final": True,
+        }
 
     def test_stream_status_no_op(self):
         from agenticore.agent_mode.stream_config import apply_tokens
@@ -170,7 +182,11 @@ class TestLoadSave:
         target = {"show_thinking": True, "show_tools": True, "show_text": False}
         save_stream_config("agent-1", target)
         loaded = load_stream_config("agent-1")
-        assert loaded == target
+        # New keys default from show_text when absent in target.
+        for k, v in target.items():
+            assert loaded[k] == v, f"{k}: expected {v}, got {loaded[k]}"
+        assert loaded["show_narration"] is False
+        assert loaded["show_final"] is False
 
     def test_per_agent_isolation(self, fake_redis, isolated_home):
         from agenticore.agent_mode.stream_config import save_stream_config, load_stream_config
@@ -191,7 +207,11 @@ class TestLoadSave:
         target = {"show_thinking": True, "show_tools": False, "show_text": True}
         mod.save_stream_config("agent-fb", target)
         loaded = mod.load_stream_config("agent-fb")
-        assert loaded == target
+        for k, v in target.items():
+            assert loaded[k] == v, f"{k}: expected {v}, got {loaded[k]}"
+        # show_narration/show_final fall back to show_text when absent
+        assert loaded["show_narration"] is True
+        assert loaded["show_final"] is True
 
 
 class TestGetForRequest:
