@@ -261,10 +261,15 @@ curl -X POST "http://localhost:8200/admin/sync?target=agentihub"
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `target` | query | `all` | Which repo to sync: `all`, `agentihooks`, `bundle`, `agentihub` |
+| `target` | query | `all` | Which repo to sync: `all`, `agentihooks` (URL-override only), `bundle`, `agentihub` |
+
+The `agentihooks` target is only meaningful when `AGENTICORE_AGENTIHOOKS_URL`
+is set (the override escape hatch). Under the default install — where
+agentihooks is a PyPI dependency — the response is
+`"agentihooks": "skipped (no url)"` and a pod restart is the upgrade path.
 
 ```json
-{"agentihooks": "ok", "bundle": "ok", "agentihub": "skipped (no url)"}
+{"agentihooks": "skipped (no url)", "bundle": "ok", "agentihub": "ok"}
 ```
 
 | Status | Condition |

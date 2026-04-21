@@ -5,11 +5,18 @@ services:
       - "8200:8200"
     volumes:
       - agenticore-shared:/shared
+      # Dev loopback: mount a local agentihooks checkout and let agenticore
+      # overlay the PyPI-installed version with an editable install at boot.
+      # See README → "Developer Workflow: agentihooks dev loopback".
       - /home/iamroot/dev/agentihooks:/opt/agentihooks-src
     env_file:
       - .env
     environment:
       HOME: /shared
+      # Triggers `uv pip install -e /opt/agentihooks-src` over the PyPI agentihooks
+      # at startup. Edits to the mounted checkout are live on the next Python
+      # import. Unset or empty → container runs the PyPI version unchanged.
+      AGENTICORE_AGENTIHOOKS_PATH: /opt/agentihooks-src
 
 volumes:
   agenticore-shared:

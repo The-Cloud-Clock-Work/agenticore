@@ -84,7 +84,8 @@ jobs:
           ANTHROPIC_AUTH_TOKEN=${{ steps.resolve_key.outputs.api_key }}
           ANTHROPIC_BASE_URL=${{ steps.anthropic.outputs.url }}
           GITHUB_TOKEN=${{ secrets.ORG_GITHUB_TOKEN }}
-          AGENTICORE_AGENTIHOOKS_URL=https://github.com/The-Cloud-Clock-Work/agentihooks
+          # agentihooks is a PyPI dep of agenticore — the smoke test validates
+          # the default PyPI install path. URL override is covered by unit tests.
           EOF
 
           # Build ANTHROPIC_CUSTOM_HEADERS for Claude CLI when using CF Access-protected proxy
