@@ -56,17 +56,23 @@ async def tail_event_stream(
     stream_cfg: dict[str, bool],
     process_handle: Optional[asyncio.subprocess.Process] = None,
     timeout_s: int = DEFAULT_TIMEOUT_S,
+    start_id: str = "0-0",
 ) -> AsyncGenerator[dict, None]:
     """Yields filtered event dicts from agenticore:events:{uuid}.
 
-    Starts at last_id "0-0" so events emitted before the tailer attached
-    are replayed. Stops on done sentinel, process exit + grace, or timeout.
+    ``start_id`` controls the starting offset. Default ``"0-0"`` replays
+    every event in the stream — useful for a fresh correlation id where no
+    history exists. For chat-scoped correlation ids that accumulate events
+    across many turns, pass the latest entry id captured at turn start
+    (e.g. ``snapshot_stream_head(uuid)``) so only events published during
+    this turn are delivered. Stops on done sentinel, process exit + grace,
+    or timeout.
     """
     r = _get_redis()
     if r is None:
         return
     key = stream_key(uuid)
-    last_id = "0-0"
+    last_id = start_id
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout_s
     grace_polls_remaining = WATCHDOG_GRACE_POLLS
@@ -112,3 +118,27 @@ async def tail_event_stream_until_done(
         if event["event_type"] == "done":
             break
     return out
+
+
+def snapshot_stream_head(uuid: str) -> str:
+    """Return the id of the latest entry currently in agenticore:events:{uuid}.
+
+    Returns ``"0-0"`` if the stream does not exist or is empty. Call this at
+    turn start to get a cursor you can pass to ``tail_event_stream(start_id=…)``
+    so only events published during the current turn are delivered — critical
+    for chat-scoped correlation ids where one stream accumulates many turns.
+    """
+    r = _get_redis()
+    if r is None:
+        return "0-0"
+    key = stream_key(uuid)
+    try:
+        entries = r.xrevrange(key, count=1)
+        if not entries:
+            return "0-0"
+        entry_id = entries[0][0]
+        if isinstance(entry_id, bytes):
+            entry_id = entry_id.decode("utf-8", "replace")
+        return entry_id
+    except Exception:
+        return "0-0"

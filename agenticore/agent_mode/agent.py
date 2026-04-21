@@ -419,6 +419,18 @@ class AgentExecutor:
         if context:
             stdin_data = json.dumps(context).encode()
 
+        # Snapshot the Redis stream head BEFORE the subprocess runs so the
+        # sink tailer only consumes events this turn publishes — otherwise
+        # chat-scoped correlation ids replay prior turns' events on every call.
+        stream_start_id = "0-0"
+        if sink is not None and correlation_id:
+            try:
+                from agenticore.agent_mode.event_tailer import snapshot_stream_head
+
+                stream_start_id = snapshot_stream_head(correlation_id)
+            except Exception as exc:
+                _log.warning("stream head snapshot failed (non-fatal): %s", exc)
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(cwd),
@@ -447,6 +459,7 @@ class AgentExecutor:
                         cfg_for_tail,
                         proc,
                         timeout,
+                        start_id=stream_start_id,
                     ):
                         await dispatch_to_sink(evt, guarded_sink)
                 except asyncio.CancelledError:
