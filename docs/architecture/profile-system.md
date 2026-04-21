@@ -84,8 +84,9 @@ backwards compatibility.
 ### Agentihooks Bundle
 
 The **agentihooks-bundle** repo (`AGENTICORE_AGENTIHOOKS_BUNDLE_URL`) provides
-companion configuration passed to `agentihooks init --bundle <path>`. It is cloned
-at startup alongside agentihooks and has its own background watcher controlled by
+companion configuration passed to `agentihooks init --bundle <path>`. Unlike
+agentihooks itself (a PyPI dep), the bundle is still a content repo cloned at
+startup and has its own background watcher controlled by
 `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` (default 300s, `0` disables).
 
 ### Agentihub — direct provisioning

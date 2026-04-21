@@ -322,7 +322,7 @@ Profiles are **directory packages** that configure how Claude Code runs. Each pr
 └── .mcp.json            ← MCP server config merged into the job
 ```
 
-Profiles support inheritance via `extends:` and live in `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/` or `~/.agenticore/profiles/`. Full reference: [Profile System docs](docs/architecture/profile-system.md).
+Profiles support inheritance via `extends:` and ship with the [`agentihooks`](https://pypi.org/project/agentihooks/) PyPI package (a pip dependency of agenticore). Personal overrides live in `~/.agenticore/profiles/`; set `AGENTICORE_AGENTIHOOKS_PATH` for a dev loopback against a local agentihooks checkout. Full reference: [Profile System docs](docs/architecture/profile-system.md).
 
 ## Helm (Kubernetes)
 
@@ -436,8 +436,9 @@ The bundled `docker-compose.yml` includes an OTEL Collector pre-wired to push tr
 | `GITHUB_TOKEN` | _(empty)_ | GitHub token for auto-PR (fleet mode) |
 | `AGENTIHOOKS_PROFILE` | `coding` | Active profile (fleet mode) |
 | `AGENTICORE_CLAUDE_TIMEOUT` | `3600` | Max claude runtime in seconds |
-| `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Git URL to clone agentihooks from |
-| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | _(empty)_ | Git URL to clone the bundle |
+| `AGENTICORE_AGENTIHOOKS_PATH` | _(empty)_ | Dev loopback: `uv pip install -e <path>` over the PyPI agentihooks (wins over URL) |
+| `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Override: clone ONCE + `uv pip install -e`. Default install is from PyPI. |
+| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | _(empty)_ | Git URL to clone the bundle content repo |
 | `AGENTICORE_AGENTIHUB_URL` | _(empty)_ | Git URL for agentihub repo (agent mode) |
 | `AGENTICORE_SHARED_FS_ROOT` | _(empty)_ | Shared FS root (Kubernetes mode) |
 

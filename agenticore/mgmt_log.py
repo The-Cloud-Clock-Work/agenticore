@@ -7,7 +7,7 @@ Usage::
 
     from agenticore.mgmt_log import get_mgmt_logger
     mgmt = get_mgmt_logger()
-    mgmt.info("hot-reload agentihooks OK ref=%s", ref)
+    mgmt.info("hot-reload agentihooks-bundle OK ref=%s", ref)
 """
 
 import logging
