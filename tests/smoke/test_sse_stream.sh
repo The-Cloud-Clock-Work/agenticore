@@ -12,9 +12,10 @@
 #   - kubectl with KUBECONFIG pointing at the dev cluster
 #   - jq (for parsing config keys)
 #   - Pod must be running with the new agenticore image AND
-#     `python -c "import agentihooks.hooks.observability.event_relay"` must succeed
-#     (agentihooks is a PyPI dep of agenticore — works out of the box; URL/PATH
-#     overrides also satisfy this, the resolved path differs by install mode)
+#     `python -c "import hooks.observability.event_relay"` must succeed
+#     (agentihooks PyPI dist ships `hooks/` as its top-level module, not
+#     `agentihooks/`; works out of the box under PyPI install + URL/PATH
+#     overrides — the resolved path differs by install mode)
 set -euo pipefail
 
 KCTL="kubectl --kubeconfig ${KUBECONFIG:-/home/iamroot/.kube/config-k3s}"

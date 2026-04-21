@@ -118,10 +118,11 @@ log_pf "image.match = $image_match"
 
 # agentihooks is a PyPI dependency — resolve the relay script via Python
 # import so this works under PyPI / PATH / URL install modes equally.
-event_relay_path=$($KCTL -n "$NS" exec "$POD" -c agenticore -- python -c \
-    'import agentihooks.hooks.observability.event_relay as m; print(m.__file__)' 2>/dev/null | tr -d '\r')
+# Note: the PyPI dist ships `hooks/` (not `agentihooks/`) as the top-level module.
+event_relay_path=$($KCTL -n "$NS" exec "$POD" -c agenticore -- /opt/venv/bin/python -c \
+    'import hooks.observability.event_relay as m; print(m.__file__)' 2>/dev/null | tr -d '\r')
 if [[ -z "$event_relay_path" ]]; then
-    echo "FATAL: agentihooks.hooks.observability.event_relay not importable in pod $POD" >&2
+    echo "FATAL: hooks.observability.event_relay not importable in pod $POD" >&2
     log_pf "event_relay = MISSING"
     exit 2
 fi
