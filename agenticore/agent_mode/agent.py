@@ -297,6 +297,12 @@ class AgentExecutor:
         env = build_subprocess_env()
         env["AGENTICORE_CORRELATION_ID"] = external_uuid
         env["AGENTICORE_CLAUDE_SESSION_ID"] = claude_session_id
+        # The event_relay hook self-gates on AGENTICORE_EVENT_STREAM=1. Enable
+        # it when a sink is attached so PostToolUse / Stop hooks publish
+        # intermediate events to agenticore:events:{correlation_id} for the
+        # Redis tailer to forward to the ProgressSink.
+        if sink is not None:
+            env["AGENTICORE_EVENT_STREAM"] = "1"
 
         # Set CWD to package dir
         cwd = Path(am.package_dir)
