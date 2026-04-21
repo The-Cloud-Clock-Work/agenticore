@@ -13,6 +13,11 @@ Optional:
                               (keep narration message, send final as new
                               message)
 
+Progress visibility (narration, tool chips, thinking) is controlled by
+the agent-scoped stream_config hash in Redis — not a Telegram env var.
+Send `/show-tools` or `/hide-tools` to the bot to toggle tool chips for
+this agent; the setting persists stickily.
+
 Voice support (requires agenticore.voice adapter):
   VOICE_SERVICE_URL   — base URL of voice HTTP service (enables voice)
   VOICE_DEFAULT_MODE  — default response mode: "text" (default) or "voice"
@@ -120,10 +125,9 @@ class TelegramProgressSink(ProgressSink):
     _MAX_TG_CHARS = 4000  # keep 96-char headroom under 4096 for safety
     _EDIT_INTERVAL_S = 1.0
 
-    def __init__(self, bot, chat_id: int, *, show_tools: bool = False, mode: str = "live"):
+    def __init__(self, bot, chat_id: int, *, mode: str = "live"):
         self._bot = bot
         self._chat_id = chat_id
-        self._show_tools = show_tools
         self._mode = mode if mode in ("live", "transcript") else "live"
         self._buffer: str = ""
         self._live_message_id: Optional[int] = None
@@ -177,14 +181,12 @@ class TelegramProgressSink(ProgressSink):
         await self._flush()
 
     async def on_tool_call(self, name: str, args: dict, tool_use_id: str) -> None:
-        if not self._show_tools:
-            return
+        # Visibility is decided upstream by stream_cfg (show_tools). If the
+        # event reaches us, render it.
         self._buffer += f"\n\n▶ {name}"
         await self._flush()
 
     async def on_tool_result(self, tool_use_id: str, content: str, is_error: bool) -> None:
-        if not self._show_tools:
-            return
         marker = "◉ error" if is_error else "◉ ok"
         self._buffer += f"\n{marker}"
         await self._flush()
@@ -383,7 +385,6 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
     # ------------------------------------------------------------------
 
     progress_mode = os.environ.get("TELEGRAM_PROGRESS_MODE", "live")
-    show_tools_in_progress = os.environ.get("TELEGRAM_SHOW_TOOLS", "false").lower() in ("1", "true", "yes")
 
     async def _process_and_respond(message: Message, user_text: str, chat_id: int) -> None:
         # 1. Parse voice commands
@@ -429,7 +430,6 @@ async def start(loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
             sink = TelegramProgressSink(
                 bot,
                 chat_id,
-                show_tools=show_tools_in_progress,
                 mode=progress_mode,
             )
 
