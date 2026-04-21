@@ -280,7 +280,7 @@ See [`tests/smoke/verify_streaming_pipeline.sh`](https://github.com/The-Cloud-Cl
 
 | Symptom | What's broken | How to check |
 |---|---|---|
-| `role_open` + `stop` + `[DONE]` only, no events in between | Hook isn't publishing to Redis | `kubectl exec <pod> -- python -c "import agentihooks.hooks.observability.event_relay as m; print(m.__file__)"` (resolves regardless of PyPI/URL/PATH install mode) |
+| `role_open` + `stop` + `[DONE]` only, no events in between | Hook isn't publishing to Redis | `kubectl exec <pod> -c agenticore -- /opt/venv/bin/python -c "import hooks.observability.event_relay as m; print(m.__file__)"` (resolves regardless of PyPI/URL/PATH install mode; note top-level package is `hooks`, not `agentihooks`) |
 | Nothing at all, just timeout | Subprocess spawn failed | pod logs for `Pre-call MCP render` then no subsequent activity |
 | Thinking never shows even with `/show-thinking` | Sonnet didn't emit thinking for that prompt (not a bug) | Try a harder prompt — sonnet only thinks when needed |
 | Tool events appear but truncated | That's the banner — real tool output follows | Read past the shell profile banner in the content field |

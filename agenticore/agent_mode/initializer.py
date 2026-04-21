@@ -220,19 +220,22 @@ def _bg_run_startup_scripts(package_dir: str) -> None:
 def _resolve_event_relay_script() -> Optional[str]:
     """Locate the agentihooks event_relay.py regardless of install mode.
 
-    Tries the installed Python package first (PyPI / PATH / URL editable
-    install — all resolve to a real file via ``__file__``), then falls back
-    to the legacy PVC path for backwards compat with clusters still on the
+    The agentihooks PyPI distribution ships its top-level packages as
+    ``hooks``, ``profiles``, ``scripts`` (not ``agentihooks.*``), so the
+    importable module name is ``hooks.observability.event_relay``. Tries
+    the Python import first (works for PyPI / PATH / URL editable install
+    — all resolve to a real file via ``__file__``), then falls back to the
+    legacy PVC path for backwards compat with clusters still on the
     clone-based setup.
     """
     try:
-        import agentihooks.hooks.observability.event_relay as _relay_mod
+        import hooks.observability.event_relay as _relay_mod
 
         path = getattr(_relay_mod, "__file__", None)
         if path and Path(path).exists():
             return str(path)
     except Exception as exc:
-        _log.debug("agentihooks.hooks.observability.event_relay import failed: %s", exc)
+        _log.debug("hooks.observability.event_relay import failed: %s", exc)
     legacy = "/shared/agentihooks/hooks/observability/event_relay.py"
     if Path(legacy).exists():
         return legacy
@@ -245,7 +248,8 @@ def _install_event_relay_hook() -> None:
     Adds PostToolUse + Stop + Notification entries to ~/.claude/settings.json
     pointing at the relay script shipped with the installed agentihooks
     package (PyPI install, editable PATH overlay, or URL-override clone all
-    resolve via ``agentihooks.hooks.observability.event_relay.__file__``).
+    resolve via ``hooks.observability.event_relay.__file__`` — note the
+    PyPI distribution exposes its top-level as ``hooks`` not ``agentihooks``).
     The script self-gates on AGENTICORE_EVENT_STREAM=1 so non-streaming
     traffic is a no-op. Idempotent — safe to call multiple times.
     """
