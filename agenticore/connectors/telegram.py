@@ -281,6 +281,12 @@ class TelegramProgressSink(ProgressSink):
         await self._flush()
 
     async def on_tool_call(self, name: str, args: dict, tool_use_id: str) -> None:
+        logger.info(
+            "tg.sink.on_tool_call name=%r tool_use_id=%r args_keys=%s",
+            name,
+            tool_use_id,
+            list(args.keys()) if isinstance(args, dict) else type(args).__name__,
+        )
         preview = _extract_args_preview(name, args)
         self._chips[self._chip_key(tool_use_id)] = _ChipState(
             name=name or "tool",
@@ -292,6 +298,12 @@ class TelegramProgressSink(ProgressSink):
         await self._flush(force=True)
 
     async def on_tool_result(self, tool_use_id: str, content: str, is_error: bool) -> None:
+        logger.info(
+            "tg.sink.on_tool_result tool_use_id=%r is_error=%s known_chips=%s",
+            tool_use_id,
+            is_error,
+            list(self._chips.keys()),
+        )
         key = self._chip_key(tool_use_id) if tool_use_id else None
         chip = self._chips.get(key) if key else None
         if chip is None:
@@ -311,6 +323,12 @@ class TelegramProgressSink(ProgressSink):
         await self._flush()
 
     async def on_final(self, text: str) -> None:
+        logger.info(
+            "tg.sink.on_final final_sent=%s text_len=%d chips=%d",
+            self._final_sent,
+            len(text or ""),
+            len(self._chips),
+        )
         if self._final_sent:
             return
         self._final_sent = True
