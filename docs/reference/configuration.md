@@ -154,12 +154,18 @@ agentihub_sync_interval: 300
 
 ### Agentihooks
 
+**agentihooks is a PyPI dependency of agenticore.** `pip install agenticore`
+pulls it transitively, so no configuration is required for the default
+install path. The variables below are override escape hatches for
+development against a live checkout or a non-PyPI fork/branch.
+
 | Variable | YAML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `AGENTICORE_AGENTIHOOKS_PATH` | `agentihooks_path` | (none) | Explicit path override. Skips cloning. |
-| `AGENTICORE_AGENTIHOOKS_URL` | `agentihooks_url` | (none) | Git URL to clone agentihooks from. Supports private repos via `GITHUB_TOKEN`. |
-| `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `agentihooks_sync_interval` | `300` | Hot-reload interval in seconds. `0` disables the watcher. |
-| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | `agentihooks_bundle_url` | (none) | Git URL to clone the agentihooks bundle repo. Passed as `--bundle` to `agentihooks init`. |
+| `AGENTICORE_AGENTIHOOKS_PATH` | `agentihooks_path` | (none) | Dev loopback: `uv pip install -e <path>` over the PyPI version. Wins over URL. |
+| `AGENTICORE_AGENTIHOOKS_URL` | `agentihooks_url` | (none) | Bleeding-edge override: clone ONCE at boot, `uv pip install -e`. No periodic re-sync. |
+| `AGENTICORE_AGENTIHOOKS_BRANCH` | `agentihooks_branch` | (empty) | Git ref checked out when URL is set. |
+| `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `agentihooks_sync_interval` | `300` | **DEPRECATED** — no-op. agentihooks is a versioned pip package; restart the pod to upgrade. |
+| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | `agentihooks_bundle_url` | (none) | Git URL for the bundle content repo. Passed as `--bundle` to `agentihooks init`. |
 | `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | `agentihooks_bundle_sync_interval` | `300` | Bundle hot-reload interval in seconds. `0` disables. |
 | `AGENTIHOOKS_PROFILE` | (env only) | `coding` | Profile name passed to `agentihooks init --profile`. |
 
@@ -174,25 +180,28 @@ agentihub_sync_interval: 300
 
 ## Repository Sync
 
-Agenticore clones up to three companion repos at startup and keeps them
-up-to-date via background watcher threads. Each repo has a URL (triggers
-cloning), a PATH override (skips cloning), and a SYNC_INTERVAL (controls
-hot-reload frequency).
+agentihooks itself is a pip dependency — it is NOT cloned. The two **content**
+repos (bundle and agentihub) are cloned at startup and kept up-to-date via
+background watcher threads. Each content repo has a URL (triggers cloning),
+a PATH override (skips cloning), and a SYNC_INTERVAL (controls hot-reload
+frequency).
 
 ### Which repos to configure
 
 | Deployment | Repos needed | Key variables |
 |------------|-------------|---------------|
-| **Standard mode** (job orchestrator) | agentihooks + bundle | `AGENTICORE_AGENTIHOOKS_URL`, `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` |
-| **Agent mode** (purpose-built container) | agentihooks + bundle + agentihub | All three `*_URL` vars + `AGENTIHUB_AGENT` |
-| **Local dev** (pre-cloned repos) | none — use PATH overrides | `AGENTICORE_AGENTIHOOKS_PATH`, `AGENTICORE_AGENTIHUB_PATH` |
+| **Standard mode** (job orchestrator) | bundle | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` |
+| **Agent mode** (purpose-built container) | bundle + agentihub | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL`, `AGENTICORE_AGENTIHUB_URL`, `AGENTIHUB_AGENT` |
+| **Local dev** (pre-cloned repos) | none — use PATH overrides | `AGENTICORE_AGENTIHOOKS_PATH` (editable install), `AGENTICORE_AGENTIHUB_PATH` |
 
 ### Startup flow
 
 ```
 Server start
-  ├─ AGENTICORE_AGENTIHOOKS_URL set?
-  │   └─ git clone → build profiles → start watcher (SYNC_INTERVAL)
+  ├─ AGENTICORE_AGENTIHOOKS_PATH set?        (dev loopback)
+  │   └─ uv pip install -e <path>  (overlay PyPI, once, no watcher)
+  ├─ elif AGENTICORE_AGENTIHOOKS_URL set?    (bleeding-edge fork)
+  │   └─ git clone → uv pip install -e      (once, no watcher)
   ├─ AGENTICORE_AGENTIHOOKS_BUNDLE_URL set?
   │   └─ git clone → pass to agentihooks init --bundle → start watcher (BUNDLE_SYNC_INTERVAL)
   └─ AGENTICORE_AGENTIHUB_URL set?
@@ -268,7 +277,7 @@ always clones when `*_URL` is set).
 | `/shared/repos/{hash}/repo/` | Cloned repos on shared volume |
 | `/shared/jobs/{job-id}/` | Per-job merge dir (extends profiles) / no-repo CWD |
 | `/shared/job-state/{id}.json` | Job data files (`AGENTICORE_JOBS_DIR=/shared/job-state`) |
-| `/shared/agentihooks/` | Cloned agentihooks repo (when `AGENTICORE_AGENTIHOOKS_URL` set) |
+| `/shared/agentihooks/` | Cloned agentihooks repo (only when `AGENTICORE_AGENTIHOOKS_URL` override is set — default uses PyPI, no clone) |
 | `/shared/agentihooks-bundle/` | Cloned bundle repo (when `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` set) |
 | `/shared/agentihub/` | Cloned agentihub repo (when `AGENTICORE_AGENTIHUB_URL` set) |
 | `/app/worktrees/{job-id}/` | Bespoke worktrees (emptyDir, local disk via `AGENTICORE_WORKTREE_ROOT`) |

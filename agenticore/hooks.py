@@ -1,14 +1,19 @@
-"""Agentihooks integration — clone/fetch and build profiles.
+"""Agentihooks integration — PyPI-first install with optional git overlay.
 
-Handles acquiring the agentihooks repository and invoking its own build
-tooling so agenticore always has up-to-date profiles available.
+agentihooks is a pip dependency of agenticore (declared in pyproject.toml),
+so the default install path is ``pip install agenticore`` pulling it from
+PyPI transitively. The runtime only clones or pip-installs-editable when an
+override is requested, and there is no periodic re-sync — a pod restart is
+how you pick up a new version.
 
-Install directory resolution::
+Override semantics (PATH wins over URL):
 
-    AGENTICORE_AGENTIHOOKS_PATH explicitly set  →  use as-is (no cloning)
-    AGENTICORE_AGENTIHOOKS_URL set:
-      AGENTICORE_SHARED_FS_ROOT set            →  {shared_fs_root}/agentihooks
-      else                                     →  ~/.agenticore/agentihooks
+    AGENTICORE_AGENTIHOOKS_PATH  → uv pip install -e <PATH>        (dev loopback)
+    AGENTICORE_AGENTIHOOKS_URL   → clone once, uv pip install -e   (bleeding edge)
+    neither                      → trust the PyPI install
+
+Bundle and agentihub are content repos, not Python packages; their clone +
+watcher logic is unchanged.
 """
 
 import fcntl
@@ -122,38 +127,6 @@ def _clone_or_fetch(url: str, dest: Path, branch: str = "") -> None:
             finally:
                 fcntl.flock(lf, fcntl.LOCK_UN)
     logger.info("_clone_or_fetch agentihooks done in %.2fs", time.monotonic() - t0)
-
-
-def start_sync_watcher(url: str, dest: Path, interval: int, branch: str = "") -> Optional[threading.Thread]:
-    """Start a daemon thread that periodically git-fetches + rebuilds agentihooks.
-
-    Returns the started Thread, or None in dev mode.
-    """
-    if get_config().dev_mode:
-        logger.info("dev mode: skipping agentihooks watcher")
-        return None
-    if interval <= 0:
-        raise ValueError(f"interval must be > 0, got {interval}")
-
-    mgmt = get_mgmt_logger()
-
-    def _watch():
-        while True:
-            time.sleep(interval)
-            try:
-                _clone_or_fetch(url, dest, branch)
-                ref = _get_head_ref(dest)
-                logger.info("agentihooks hot-reload complete (%s)", dest)
-                mgmt.info("hot-reload agentihooks OK ref=%s", ref)
-            except Exception as exc:
-                logger.warning("agentihooks hot-reload failed: %s", exc)
-                mgmt.warning("hot-reload agentihooks FAIL: %s", exc)
-
-    t = threading.Thread(target=_watch, name="agentihooks-watcher", daemon=True)
-    t.start()
-    logger.info("agentihooks watcher started (interval=%ds, dest=%s)", interval, dest)
-    mgmt.info("watcher agentihooks started interval=%ds dest=%s", interval, dest)
-    return t
 
 
 def start_bundle_watcher(url: str, dest: Path, interval: int, branch: str = "") -> Optional[threading.Thread]:
@@ -326,32 +299,81 @@ def _clone_or_fetch_bundle(url: str, dest: Path, branch: str = "") -> None:
     logger.info("_clone_or_fetch_bundle done in %.2fs", time.monotonic() - t0)
 
 
-def sync_agentihooks(url: str = "") -> Optional[Path]:
-    """Clone/fetch + build agentihooks. Sets AGENTICORE_AGENTIHOOKS_PATH in-process.
+def _pip_install_editable(path: Path) -> None:
+    """Overlay the PyPI-installed agentihooks with an editable install from *path*.
 
-    Returns the install directory, or None if no URL is configured.
-    If AGENTICORE_AGENTIHOOKS_PATH is already set and no URL is provided,
-    returns the existing path without cloning.
+    Best-effort: logs a warning on failure but does not raise. The PyPI
+    version stays active if the overlay fails.
+    """
+    logger.info("Overlaying agentihooks with editable install: %s", path)
+    result = subprocess.run(
+        ["uv", "pip", "install", "--quiet", "-e", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "uv pip install -e %s failed (exit %d): %s",
+            path,
+            result.returncode,
+            (result.stderr or "").strip(),
+        )
+
+
+def sync_agentihooks(url: str = "") -> Optional[Path]:
+    """Resolve + optionally overlay the PyPI-installed agentihooks package.
+
+    PyPI is the default: ``pip install agenticore`` pulls agentihooks
+    transitively. This function only does work when an override is requested.
+
+    Order of resolution (PATH wins over URL):
+
+    1. ``AGENTICORE_AGENTIHOOKS_PATH`` set (or dev_mode pre-mounted path):
+       ``uv pip install -e <PATH>`` over the PyPI version. Dev loopback.
+    2. ``AGENTICORE_AGENTIHOOKS_URL`` set: clone once to the computed install
+       dir, ``uv pip install -e <dest>``. Bleeding-edge fork / branch test.
+    3. Neither set: no-op. The PyPI version is authoritative.
+
+    No periodic re-sync — pod restart picks up a new version.
+
+    Returns the overlaid path, or ``None`` when running from PyPI.
     """
     cfg = get_config()
-    if cfg.dev_mode:
+
+    # 1. PATH override (dev loopback). In dev_mode we also accept a path
+    # surfaced by resolve_repo_paths() from pre-mounted volumes.
+    path_str = cfg.agentihooks_path or os.getenv("AGENTICORE_AGENTIHOOKS_PATH", "")
+    if not path_str and cfg.dev_mode:
         hooks, _, _ = resolve_repo_paths(cfg)
         if hooks and hooks.exists():
-            logger.info("dev mode: agentihooks at %s (no clone)", hooks)
-            os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(hooks)
-            return hooks
-        return None
-    url = url or cfg.agentihooks_url
-    if not url:
-        explicit = os.getenv("AGENTICORE_AGENTIHOOKS_PATH")
-        if explicit:
-            return Path(explicit)
-        return None
-    dest = _install_dir()
-    _clone_or_fetch(url, dest, cfg.agentihooks_branch)
-    os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(dest)
-    logger.info("AGENTICORE_AGENTIHOOKS_PATH → %s (branch=%s)", dest, cfg.agentihooks_branch or "HEAD")
-    return dest
+            path_str = str(hooks)
+    if path_str:
+        path = Path(path_str)
+        if path.exists():
+            _pip_install_editable(path)
+            os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(path)
+            logger.info("agentihooks overlay via PATH → %s", path)
+            return path
+        logger.warning("AGENTICORE_AGENTIHOOKS_PATH %s does not exist; falling back", path)
+
+    # 2. URL override (clone once, no watcher).
+    resolved_url = url or cfg.agentihooks_url
+    if resolved_url:
+        dest = _install_dir()
+        _clone_or_fetch(resolved_url, dest, cfg.agentihooks_branch)
+        _pip_install_editable(dest)
+        os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(dest)
+        logger.info(
+            "agentihooks overlay via URL → %s (branch=%s)",
+            dest,
+            cfg.agentihooks_branch or "HEAD",
+        )
+        return dest
+
+    # 3. PyPI default — trust what's in the venv.
+    logger.debug("agentihooks: PyPI install (no PATH/URL override)")
+    return None
 
 
 def sync_bundle() -> Optional[Path]:
@@ -382,8 +404,11 @@ def run_agentihooks_init(
 ) -> None:
     """Run ``agentihooks init`` with profile and optional bundle/repo.
 
-    Also installs agentihooks via uv pip if hooks_path is provided.
-    This replaces the old entrypoint.sh logic.
+    Assumes the ``agentihooks`` CLI is already on PATH — either from the PyPI
+    dependency (default) or overlaid by :func:`sync_agentihooks` when a
+    PATH/URL override is set. The ``hooks_path`` parameter is accepted for
+    backwards compatibility with existing call sites but is no longer used
+    for installation.
 
     When *repo_dir* is given, ``--repo <dir>`` is passed so agentihooks
     processes the per-repo ``.agentihooks.json`` whitelist and writes
@@ -391,15 +416,8 @@ def run_agentihooks_init(
     This also registers a project target in ``state.json`` so the daemon
     can auto-reconcile on file changes.
     """
+    del hooks_path  # Accepted for backwards compat; install is handled in sync_agentihooks.
     t0 = time.monotonic()
-
-    if hooks_path and hooks_path.exists():
-        logger.info("Installing agentihooks from %s", hooks_path)
-        subprocess.run(
-            ["uv", "pip", "install", "--quiet", "-e", str(hooks_path)],
-            check=False,
-            capture_output=True,
-        )
 
     # Clear stale sync locks from previous pod incarnations. /shared is a
     # PVC so sync.lock + sync-daemon.pid survive pod restarts. If a prior
