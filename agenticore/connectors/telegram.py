@@ -8,10 +8,11 @@ Optional:
   TELEGRAM_SYSTEM_PROMPT    — system prompt prepended to every conversation
   TELEGRAM_MAX_MESSAGES     — conversation history depth (default 20)
   TELEGRAM_CONVERSATION_TTL — history TTL in seconds (default 86400)
-  TELEGRAM_PROGRESS_MODE    — "live" (default, edit one message with
-                              narration → final) or "transcript"
-                              (keep narration message, send final as new
-                              message)
+  TELEGRAM_PROGRESS_MODE    — "live" (default — transient progress message
+                              is DELETED when the final answer arrives,
+                              leaving only the clean final in scrollback)
+                              or "transcript" (progress message is KEPT;
+                              final answer is sent as a new message below)
 
 Progress visibility (narration, tool chips, thinking) is controlled by
 the agent-scoped stream_config hash in Redis — not a Telegram env var.
@@ -25,10 +26,12 @@ Voice support (requires agenticore.voice adapter):
 
 import asyncio
 import io
+import json
 import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 from agenticore.connectors.base import ProgressSink
@@ -106,20 +109,92 @@ def _uuid_for_chat(chat_id: int) -> str:
     return _chat_uuids[chat_id]
 
 
+# Tool name → primary arg key (for chip preview rendering).
+_TOOL_ARG_KEYS = {
+    "Bash": "command",
+    "bash": "command",
+    "WebSearch": "query",
+    "WebFetch": "url",
+    "Read": "file_path",
+    "Write": "file_path",
+    "Edit": "file_path",
+    "Grep": "pattern",
+    "Glob": "pattern",
+    "Task": "description",
+}
+
+
+def _extract_args_preview(name: str, args: dict, max_len: int = 80) -> str:
+    """Pick the most informative arg value for a tool-call chip.
+
+    Uses a per-tool known-key lookup (e.g. Bash→command, WebSearch→query).
+    Falls back to the first scalar value in args, then a compact JSON dump.
+    Strips newlines and truncates to ``max_len`` with a trailing ellipsis.
+    MCP tool names like ``mcp__tools-infra__anton-docker`` are matched by
+    their trailing segment as well as the full name.
+    """
+    if not isinstance(args, dict) or not args:
+        return ""
+    trailing = name.split("__")[-1] if "__" in name else name
+    key = _TOOL_ARG_KEYS.get(name) or _TOOL_ARG_KEYS.get(trailing)
+    val = None
+    if key and key in args:
+        val = args[key]
+    else:
+        for v in args.values():
+            if isinstance(v, (str, int, float, bool)) and v != "":
+                val = v
+                break
+    if val is None:
+        try:
+            val = json.dumps(args, ensure_ascii=False)
+        except Exception:
+            val = str(args)
+    s = str(val).replace("\n", " ").replace("\r", " ").strip()
+    if len(s) > max_len:
+        s = s[: max_len - 1] + "…"
+    return s
+
+
+def _format_elapsed(elapsed_s: float) -> str:
+    """Format a duration as 850ms / 1.2s / 12s / 2m05s."""
+    if elapsed_s < 0:
+        return "?"
+    if elapsed_s < 1:
+        return f"{int(elapsed_s * 1000)}ms"
+    if elapsed_s < 60:
+        return f"{elapsed_s:.1f}s"
+    m = int(elapsed_s // 60)
+    s = int(elapsed_s - m * 60)
+    return f"{m}m{s:02d}s"
+
+
+@dataclass
+class _ChipState:
+    name: str
+    args_preview: str
+    started_monotonic: float
+    status: str = "running"  # "running" | "ok" | "error"
+    elapsed_s: float = 0.0
+
+
 class TelegramProgressSink(ProgressSink):
     """ProgressSink that renders canonical agent events into Telegram messages.
 
-    The rendering strategy is controlled by TELEGRAM_PROGRESS_MODE:
+    Lifecycle:
 
-    - ``live`` (default) — single message is edited with narration +
-      tool-call chips while the agent runs; when on_final fires the
-      message is replaced with the authoritative final answer.
-    - ``transcript`` — the progress message remains for history; the
-      final answer is sent as a new message below it.
+    1. First tool_call or narration creates a TRANSIENT progress message.
+    2. Each tool call adds a chip line, rendered in-place as the status
+       transitions ``▶ name: args`` (running) → ``✓ name: args (1.2s)``
+       (done) or ``✗`` on error.
+    3. Narration, if the model emits any, stacks below the chips.
+    4. When ``on_final`` fires, the progress message is DELETED (live
+       mode) or KEPT (transcript mode) and the final answer is sent as
+       a new persistent message.
 
-    Narration updates are debounced to ~1 edit per second to stay inside
-    Telegram's rate limit, and each edit truncates to Telegram's 4096-
-    character message limit from the tail (most recent content visible).
+    Edits are debounced to one per second to stay inside Telegram's rate
+    limit. tool_call edits force-flush so the user sees the running state
+    immediately even for sub-second tools.
     """
 
     _MAX_TG_CHARS = 4000  # keep 96-char headroom under 4096 for safety
@@ -129,8 +204,9 @@ class TelegramProgressSink(ProgressSink):
         self._bot = bot
         self._chat_id = chat_id
         self._mode = mode if mode in ("live", "transcript") else "live"
-        self._buffer: str = ""
-        self._live_message_id: Optional[int] = None
+        self._chips: dict[str, _ChipState] = {}
+        self._narration: str = ""
+        self._progress_message_id: Optional[int] = None
         self._last_edit_ts: float = 0.0
         self._edit_lock = asyncio.Lock()
         self._last_rendered: str = ""
@@ -140,39 +216,60 @@ class TelegramProgressSink(ProgressSink):
     # ------------------------------------------------------------------
     # Internal helpers
 
-    def _render_buffer(self) -> str:
-        text = self._buffer
-        if len(text) > self._MAX_TG_CHARS:
-            text = "…" + text[-(self._MAX_TG_CHARS - 1) :]
-        return text
+    def _render(self) -> str:
+        lines: list[str] = []
+        for chip in self._chips.values():
+            if chip.status == "running":
+                prefix = "▶"
+                suffix = ""
+            elif chip.status == "error":
+                prefix = "✗"
+                suffix = f" ({_format_elapsed(chip.elapsed_s)})"
+            else:  # ok
+                prefix = "✓"
+                suffix = f" ({_format_elapsed(chip.elapsed_s)})"
+            args_part = f": {chip.args_preview}" if chip.args_preview else ""
+            lines.append(f"{prefix} {chip.name}{args_part}{suffix}")
+        if self._narration:
+            if lines:
+                lines.append("")
+            lines.append(self._narration)
+        body = "\n".join(lines)
+        if len(body) > self._MAX_TG_CHARS:
+            body = "…" + body[-(self._MAX_TG_CHARS - 1) :]
+        return body
 
     async def _flush(self, *, force: bool = False) -> None:
-        if not self._buffer:
+        if not self._chips and not self._narration:
             return
         now = time.monotonic()
         if not force and now - self._last_edit_ts < self._EDIT_INTERVAL_S:
-            logger.info("tg.sink flush debounced (last=%.2fs ago)", now - self._last_edit_ts)
             return
-        rendered = self._render_buffer()
-        if rendered == self._last_rendered:
+        rendered = self._render()
+        if not rendered or rendered == self._last_rendered:
             return
         async with self._edit_lock:
             try:
-                if self._live_message_id is None:
+                if self._progress_message_id is None:
                     msg = await self._bot.send_message(self._chat_id, rendered)
-                    self._live_message_id = msg.message_id
-                    logger.info("tg.sink SEND msg_id=%s chars=%d", msg.message_id, len(rendered))
+                    self._progress_message_id = msg.message_id
                 else:
                     await self._bot.edit_message_text(
                         rendered,
                         chat_id=self._chat_id,
-                        message_id=self._live_message_id,
+                        message_id=self._progress_message_id,
                     )
-                    logger.info("tg.sink EDIT msg_id=%s chars=%d", self._live_message_id, len(rendered))
                 self._last_rendered = rendered
                 self._last_edit_ts = time.monotonic()
             except Exception as e:
-                logger.warning("tg.sink flush failed: %s", e)
+                if "not modified" in str(e).lower():
+                    return
+                logger.debug("telegram progress flush failed: %s", e)
+
+    def _chip_key(self, tool_use_id: str) -> str:
+        """Stable dict key for a chip. Empty tool_use_ids get a synthetic key
+        so we still render something for malformed events."""
+        return tool_use_id if tool_use_id else f"_chip_{len(self._chips)}"
 
     # ------------------------------------------------------------------
     # ProgressSink overrides
@@ -180,21 +277,37 @@ class TelegramProgressSink(ProgressSink):
     async def on_narration(self, text: str) -> None:
         if not text:
             return
-        self._buffer += text
-        logger.info("tg.sink narration chars=%d buf_len=%d", len(text), len(self._buffer))
+        self._narration += text
         await self._flush()
 
     async def on_tool_call(self, name: str, args: dict, tool_use_id: str) -> None:
-        # Visibility is decided upstream by stream_cfg (show_tools). If the
-        # event reaches us, render it.
-        self._buffer += f"\n\n▶ {name}"
-        logger.info("tg.sink tool_call name=%s buf_len=%d", name, len(self._buffer))
-        await self._flush()
+        preview = _extract_args_preview(name, args)
+        self._chips[self._chip_key(tool_use_id)] = _ChipState(
+            name=name or "tool",
+            args_preview=preview,
+            started_monotonic=time.monotonic(),
+            status="running",
+        )
+        # Force-flush so "running" is visible even for sub-second tools.
+        await self._flush(force=True)
 
     async def on_tool_result(self, tool_use_id: str, content: str, is_error: bool) -> None:
-        marker = "◉ error" if is_error else "◉ ok"
-        self._buffer += f"\n{marker}"
-        logger.info("tg.sink tool_result is_error=%s buf_len=%d", is_error, len(self._buffer))
+        key = self._chip_key(tool_use_id) if tool_use_id else None
+        chip = self._chips.get(key) if key else None
+        if chip is None:
+            # Unpaired result (tool_call never arrived, or id missing) —
+            # synthesize a minimal chip so the user sees the outcome.
+            chip = _ChipState(
+                name="?",
+                args_preview="",
+                started_monotonic=time.monotonic(),
+                status="error" if is_error else "ok",
+                elapsed_s=0.0,
+            )
+            self._chips[key or f"_orphan_{len(self._chips)}"] = chip
+        else:
+            chip.status = "error" if is_error else "ok"
+            chip.elapsed_s = max(0.0, time.monotonic() - chip.started_monotonic)
         await self._flush()
 
     async def on_final(self, text: str) -> None:
@@ -203,47 +316,45 @@ class TelegramProgressSink(ProgressSink):
         self._final_sent = True
         self.final_text = text or ""
 
-        # Flush any residual narration so the user sees the complete
-        # progress before the final lands.
-        await self._flush(force=True)
-
-        rendered = text or ""
-        if len(rendered) > self._MAX_TG_CHARS:
-            rendered = rendered[: self._MAX_TG_CHARS - 1] + "…"
-
-        if self._mode == "live" and self._live_message_id is not None:
-            # The live message already shows identical content (anton-profile
-            # case: model emits one text block that is BOTH the narration and
-            # the final). Editing with the same text throws "message not
-            # modified" on Telegram. Skip the edit — nothing to do.
-            if rendered == self._last_rendered:
-                return
-            try:
-                async with self._edit_lock:
-                    await self._bot.edit_message_text(
-                        rendered,
+        # Dispose of the transient progress message.
+        if self._progress_message_id is not None:
+            if self._mode == "live":
+                try:
+                    await self._bot.delete_message(
                         chat_id=self._chat_id,
-                        message_id=self._live_message_id,
+                        message_id=self._progress_message_id,
                     )
-                    self._last_rendered = rendered
-                return
-            except Exception as e:
-                err = str(e)
-                # "message is not modified" is benign — narration already
-                # matches final. Do NOT send a new message.
-                if "not modified" in err.lower():
-                    return
-                logger.debug("telegram final edit failed, sending new message: %s", e)
+                    self._progress_message_id = None
+                except Exception as e:
+                    logger.debug("telegram progress delete failed, editing to marker: %s", e)
+                    try:
+                        async with self._edit_lock:
+                            await self._bot.edit_message_text(
+                                "✓",
+                                chat_id=self._chat_id,
+                                message_id=self._progress_message_id,
+                            )
+                    except Exception:
+                        pass
+            else:
+                # transcript mode — keep progress visible. Force one last
+                # flush so the chips render their final states.
+                await self._flush(force=True)
 
-        # transcript mode, no live message, or non-benign edit failure —
-        # send the final as one or more new messages.
+        # Send the final as its own new message, chunked at Telegram's 4096
+        # char per-message limit.
+        rendered = text or ""
         try:
+            if not rendered:
+                return
             for i in range(0, len(rendered), 4096):
                 await self._bot.send_message(self._chat_id, rendered[i : i + 4096])
         except Exception:
             logger.exception("telegram final send failed")
 
     async def on_error(self, message: str, code=None) -> None:
+        # Keep the progress message visible — it reflects what the agent
+        # was doing when the error occurred — and report the error.
         try:
             await self._bot.send_message(self._chat_id, f"Error: {message}")
         except Exception:

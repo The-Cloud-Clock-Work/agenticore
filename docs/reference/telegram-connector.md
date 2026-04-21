@@ -23,24 +23,58 @@ Optional:
 TELEGRAM_SYSTEM_PROMPT=<custom system prompt>
 TELEGRAM_MAX_MESSAGES=20          # conversation history depth
 TELEGRAM_CONVERSATION_TTL=86400   # history TTL in seconds
+TELEGRAM_PROGRESS_MODE=live       # "live" deletes the transient progress
+                                  # message when the final answer lands;
+                                  # "transcript" keeps it for history
 VOICE_SERVICE_URL=<url>           # enables voice message support
 VOICE_DEFAULT_MODE=text           # default output mode: "text" or "voice"
 ```
+
+Progress visibility (tool chips, narration, thinking) is controlled by
+the per-agent sticky `stream_config` in Redis — send `/show-tools`,
+`/hide-tools`, `/show-thinking`, etc. to the bot to toggle for the
+current agent. See [SSE streaming](sse-streaming.md#slash-tokens-visibility-toggles)
+for the full token list.
 
 ## Architecture
 
 ```
 agenticore/connectors/telegram.py
     │
-    ├── ConversationStore     — per-chat message history + voice mode state
-    ├── _call_completions()   — routes to AgentExecutor in-process
+    ├── ConversationStore       — per-chat message history + voice mode state
+    ├── TelegramProgressSink    — ProgressSink that renders tool-call chips +
+    │                             narration into a transient progress message
+    │                             while the agent runs, then deletes it and
+    │                             sends the final answer as a new message
+    ├── _SilentSink             — no-op sink used in voice mode (chat stays
+    │                             clean; TTS handles the final answer)
+    ├── _call_completions()     — routes to AgentExecutor in-process, passing
+    │                             the sink so intermediate events flow
     ├── _parse_voice_commands() — regex intercept before LLM
-    ├── _send_in_mode()       — voice or text output based on mode
+    ├── _speak_or_fallback()    — voice or text output for repeat / voice-mode final
     │
-    ├── F.text handler        — text messages
-    ├── F.voice handler       — voice note transcription
+    ├── F.text handler          — text messages
+    ├── F.voice handler         — voice note transcription
     └── /start, /clear, /status, /voice commands
 ```
+
+### What the user sees during a turn
+
+1. User sends a prompt.
+2. The bot creates a **transient progress message** with a chip per tool
+   invocation:
+   - `▶ Bash: docker ps --format ...` — tool is running
+   - `✓ Bash: docker ps --format ... (1.2s)` — tool completed ok
+   - `✗ Bash: false (50ms)` — tool errored
+   Multiple tools stack as separate lines, each transitioning independently.
+   Narration (if the model emits any) appears below the chips.
+3. When the agent finishes, the progress message is **deleted** (live mode,
+   default) and the **final answer is sent as a new persistent message**.
+   In transcript mode, the progress message is kept instead of deleted.
+
+Edits are debounced to one per second to respect Telegram's rate limit;
+`on_tool_call` force-flushes so the "running" state appears even for
+sub-second tools.
 
 The connector uses [aiogram](https://docs.aiogram.dev/) v3 for Telegram Bot API
 interaction. It runs as an async polling loop inside the agenticore process.
