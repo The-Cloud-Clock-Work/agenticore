@@ -96,9 +96,49 @@ def format_role_open_chunk(model: str, request_uuid: str) -> str:
 
 
 def format_text_delta(text: str, model: str, request_uuid: str) -> str:
-    """Streaming content delta for assistant_text events."""
+    """Streaming content delta for assistant_text events (legacy).
+
+    Kept for callers that haven't migrated to the canonical narration/final
+    distinction. New code should use format_narration_delta or
+    format_final_delta so clients can distinguish interleaved text from the
+    final answer via x_agenticore_event_type.
+    """
     env = _chunk_envelope(model, request_uuid)
     env["choices"] = [{"index": 0, "delta": {"content": text}, "finish_reason": None}]
+    return _sse(env)
+
+
+def format_narration_delta(text: str, model: str, request_uuid: str) -> str:
+    """Streaming delta for interleaved assistant text emitted between tool
+    calls ("checking logs…", "found the issue, patching now…"). Same
+    delta.content channel as text_delta, but tagged narration so UIs can
+    render it distinctly from the final answer."""
+    env = _chunk_envelope(model, request_uuid)
+    env["choices"] = [
+        {
+            "index": 0,
+            "delta": {"content": text},
+            "finish_reason": None,
+            "x_agenticore_event_type": "narration",
+        }
+    ]
+    return _sse(env)
+
+
+def format_final_delta(text: str, model: str, request_uuid: str) -> str:
+    """Streaming delta for the final assistant answer — the last text block
+    before the terminal result event. Tagged so clients can treat it as the
+    authoritative reply (e.g. Telegram sends it as a new message instead of
+    editing the in-flight narration message)."""
+    env = _chunk_envelope(model, request_uuid)
+    env["choices"] = [
+        {
+            "index": 0,
+            "delta": {"content": text},
+            "finish_reason": None,
+            "x_agenticore_event_type": "final",
+        }
+    ]
     return _sse(env)
 
 
@@ -219,6 +259,10 @@ def format_event_as_sse(event: dict, model: str, request_uuid: str) -> str | Non
     """Dispatch a raw stream event dict to its formatter. Returns None for unknown."""
     et = event.get("event_type", "")
     content = event.get("content", "")
+    if et == "narration":
+        return format_narration_delta(content, model, request_uuid)
+    if et == "final":
+        return format_final_delta(content, model, request_uuid)
     if et == "assistant_text":
         return format_text_delta(content, model, request_uuid)
     if et == "thinking":

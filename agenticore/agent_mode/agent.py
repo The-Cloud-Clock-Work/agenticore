@@ -6,6 +6,7 @@ Builds Claude CLI commands from request parameters and manages execution.
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -228,11 +229,21 @@ class AgentExecutor:
         context: Optional[dict] = None,
         meta: Optional[dict] = None,
         disable_mcp_servers: Optional[list] = None,
+        sink: Optional["object"] = None,
+        stream_cfg: Optional[dict] = None,
     ) -> dict:
         """Execute an agent request.
 
         Returns a result dict with: result, session_id, cost_usd, duration_ms,
         num_turns, is_error, usage, tool_uses.
+
+        When ``sink`` is a ProgressSink, canonical progress events are
+        dispatched to it as the subprocess runs — narration between tool
+        calls, tool_call / tool_result, thinking, and the final answer.
+        The sink's visibility is gated by ``stream_cfg``; if not supplied,
+        the agent-scoped sticky config is loaded from Redis. Connectors
+        (Telegram, Slack, Teams, …) use this to surface intermediate
+        progress identically to how SSE clients see it.
         """
         from agenticore.agent_mode.session_registry import (
             mark_session_complete,
@@ -251,6 +262,17 @@ class AgentExecutor:
 
         # Save state for hooks
         save_state(external_uuid, wait=wait, meta=meta)
+
+        # Resolve stream_cfg for sink visibility (agent-scoped sticky config)
+        if sink is not None and stream_cfg is None:
+            try:
+                from agenticore.agent_mode.stream_config import load_stream_config
+
+                agent_id = os.environ.get("AGENTIHUB_AGENT", "default")
+                stream_cfg = load_stream_config(agent_id)
+            except Exception as e:
+                _log.warning("Could not load stream_cfg for sink (non-fatal): %s", e)
+                stream_cfg = {}
 
         # Build command
         cmd = build_claude_cmd(
@@ -296,7 +318,16 @@ class AgentExecutor:
         last_error = None
         for attempt in range(am.max_retry_attempts):
             try:
-                result = await self._run_subprocess(cmd, cwd, env, resolved_timeout, context)
+                result = await self._run_subprocess(
+                    cmd,
+                    cwd,
+                    env,
+                    resolved_timeout,
+                    context,
+                    sink=sink,
+                    correlation_id=external_uuid,
+                    stream_cfg=stream_cfg,
+                )
 
                 # After first call for persistent session: capture real Claude session ID
                 if not stateless and not claude_session_id and result.get("session_id"):
@@ -360,9 +391,24 @@ class AgentExecutor:
         }
 
     async def _run_subprocess(
-        self, cmd: list, cwd: Path, env: dict, timeout: int, context: Optional[dict] = None
+        self,
+        cmd: list,
+        cwd: Path,
+        env: dict,
+        timeout: int,
+        context: Optional[dict] = None,
+        sink: Optional[object] = None,
+        correlation_id: str = "",
+        stream_cfg: Optional[dict] = None,
     ) -> dict:
-        """Run the Claude subprocess and parse output."""
+        """Run the Claude subprocess and parse output.
+
+        If ``sink`` is provided, spawns a Redis event tailer in parallel
+        with the subprocess and dispatches canonical ProgressEvents to the
+        sink as they land. The subprocess itself still runs with the
+        caller's configured output_format (typically aggregated JSON) —
+        the Redis bus is the intermediate-event source.
+        """
         stdin_data = None
         if context:
             stdin_data = json.dumps(context).encode()
@@ -376,8 +422,51 @@ class AgentExecutor:
             stderr=asyncio.subprocess.PIPE,
         )
 
-        async with asyncio.timeout(timeout):
-            stdout, stderr = await proc.communicate(input=stdin_data)
+        sink_task: Optional[asyncio.Task] = None
+        guarded_sink = None
+        if sink is not None and correlation_id:
+            from agenticore.agent_mode.progress import (
+                OnceSink,
+                dispatch_to_sink,
+                tail_canonical_from_redis,
+            )
+
+            cfg_for_tail = stream_cfg or {}
+            guarded_sink = OnceSink(sink)
+
+            async def _drive_sink() -> None:
+                try:
+                    async for evt in tail_canonical_from_redis(
+                        correlation_id,
+                        cfg_for_tail,
+                        proc,
+                        timeout,
+                    ):
+                        await dispatch_to_sink(evt, guarded_sink)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    _log.warning("sink drive loop failed (non-fatal): %s", exc)
+
+            sink_task = asyncio.create_task(_drive_sink())
+
+        try:
+            async with asyncio.timeout(timeout):
+                stdout, stderr = await proc.communicate(input=stdin_data)
+        finally:
+            if sink_task is not None:
+                # Give the Redis tailer a short grace window to drain the
+                # ``done`` sentinel the hook emits on Stop, then cancel.
+                try:
+                    await asyncio.wait_for(sink_task, timeout=5)
+                except asyncio.TimeoutError:
+                    sink_task.cancel()
+                    try:
+                        await sink_task
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
 
         output_text = stdout.decode("utf-8", errors="replace") if stdout else ""
         error_text = stderr.decode("utf-8", errors="replace") if stderr else ""
@@ -389,6 +478,20 @@ class AgentExecutor:
             result["is_error"] = True
             if not result["result"]:
                 result["result"] = error_text or f"Claude exited with code {proc.returncode}"
+
+        # Terminal-signal fallback: connectors must always see an on_final
+        # (or on_error) per turn. OnceSink de-dupes if the Redis tailer
+        # already delivered these via the done sentinel.
+        if guarded_sink is not None:
+            try:
+                if result["is_error"]:
+                    await guarded_sink.on_error(result.get("result") or "agent error", None)
+                elif result.get("result"):
+                    await guarded_sink.on_final(result["result"])
+                if result.get("usage"):
+                    await guarded_sink.on_usage(result["usage"])
+            except Exception as exc:
+                _log.warning("sink terminal dispatch failed (non-fatal): %s", exc)
 
         return result
 
@@ -446,12 +549,18 @@ class AgentExecutor:
         """
         from agenticore.agent_mode.openai_compat import (
             format_done,
+            format_final_delta,
+            format_narration_delta,
             format_role_open_chunk,
             format_stop_chunk,
-            format_text_delta,
             format_thinking_delta,
             format_tool_result_delta,
             format_tool_use_delta,
+        )
+        from agenticore.agent_mode.progress import (
+            CanonicalTranslator,
+            ProgressEventType,
+            progress_is_visible,
         )
         from agenticore.agent_mode.session_registry import (
             mark_session_complete,
@@ -459,7 +568,6 @@ class AgentExecutor:
             register_session,
         )
         from agenticore.agent_mode.state import save_state
-        from agenticore.agent_mode.stream_config import is_visible
         from agenticore.runner import build_subprocess_env
 
         cfg = get_config()
@@ -517,8 +625,7 @@ class AgentExecutor:
 
         yield format_role_open_chunk(mdl, rid)
 
-        # Tool-use accumulators: block_index -> {id, name, partial_json}
-        tool_blocks: dict[int, dict] = {}
+        translator = CanonicalTranslator(correlation_id=rid, session_id=claude_session_id)
         usage: dict = {}
         final_is_error = False
 
@@ -527,6 +634,42 @@ class AgentExecutor:
                 return await asyncio.wait_for(proc.stdout.readline(), timeout=resolved_timeout)
             except asyncio.TimeoutError:
                 return None
+
+        def _format_canonical(canonical) -> Optional[str]:
+            """Translate one canonical ProgressEvent into one SSE chunk."""
+            ctype = canonical.type
+            pl = canonical.payload or {}
+            if ctype is ProgressEventType.NARRATION:
+                return format_narration_delta(pl.get("text", ""), mdl, rid)
+            if ctype is ProgressEventType.FINAL:
+                return format_final_delta(pl.get("text", ""), mdl, rid)
+            if ctype is ProgressEventType.THINKING:
+                return format_thinking_delta(pl.get("text", ""), mdl, rid)
+            if ctype is ProgressEventType.TOOL_CALL:
+                return format_tool_use_delta(
+                    json.dumps(
+                        {
+                            "id": pl.get("tool_use_id", ""),
+                            "name": pl.get("name", ""),
+                            "input": pl.get("args", {}) or {},
+                        }
+                    ),
+                    mdl,
+                    rid,
+                )
+            if ctype is ProgressEventType.TOOL_RESULT:
+                return format_tool_result_delta(
+                    json.dumps(
+                        {
+                            "tool_use_id": pl.get("tool_use_id", ""),
+                            "is_error": bool(pl.get("is_error", False)),
+                            "output": pl.get("content", ""),
+                        }
+                    ),
+                    mdl,
+                    rid,
+                )
+            return None
 
         try:
             while True:
@@ -542,99 +685,25 @@ class AgentExecutor:
                 except Exception:
                     continue
 
-                etype = evt.get("type")
-
-                if etype == "stream_event":
-                    se = evt.get("event", {}) or {}
-                    se_type = se.get("type")
-
-                    if se_type == "content_block_start":
-                        idx = se.get("index", 0)
-                        block = se.get("content_block", {}) or {}
-                        if block.get("type") == "tool_use":
-                            tool_blocks[idx] = {
-                                "id": block.get("id", ""),
-                                "name": block.get("name", ""),
-                                "partial_json": "",
-                            }
+                for canonical in translator.feed_stdout(evt):
+                    if canonical.type is ProgressEventType.USAGE:
+                        usage = canonical.payload
+                        final_is_error = bool(canonical.payload.get("is_error", False))
                         continue
-
-                    if se_type == "content_block_delta":
-                        idx = se.get("index", 0)
-                        delta = se.get("delta", {}) or {}
-                        dtype = delta.get("type")
-
-                        if dtype == "thinking_delta":
-                            if is_visible("thinking", stream_cfg):
-                                yield format_thinking_delta(delta.get("thinking", ""), mdl, rid)
-                            continue
-
-                        if dtype == "text_delta":
-                            if is_visible("assistant_text", stream_cfg):
-                                yield format_text_delta(delta.get("text", ""), mdl, rid)
-                            continue
-
-                        if dtype == "input_json_delta":
-                            tb = tool_blocks.get(idx)
-                            if tb is not None:
-                                tb["partial_json"] += delta.get("partial_json", "")
-                            continue
-
+                    if not progress_is_visible(canonical, stream_cfg):
                         continue
+                    chunk = _format_canonical(canonical)
+                    if chunk:
+                        yield chunk
 
-                    if se_type == "content_block_stop":
-                        idx = se.get("index", 0)
-                        tb = tool_blocks.pop(idx, None)
-                        if tb is not None and is_visible("tool_use", stream_cfg):
-                            try:
-                                parsed_input = json.loads(tb["partial_json"]) if tb["partial_json"] else {}
-                            except Exception:
-                                parsed_input = {"_raw": tb["partial_json"]}
-                            tu_payload = json.dumps(
-                                {
-                                    "id": tb["id"],
-                                    "name": tb["name"],
-                                    "input": parsed_input,
-                                }
-                            )
-                            yield format_tool_use_delta(tu_payload, mdl, rid)
-                        continue
-
+            # Flush any residual buffered text as FINAL if the turn ended
+            # without a result event (unusual, but guard against it).
+            for canonical in translator.flush():
+                if not progress_is_visible(canonical, stream_cfg):
                     continue
-
-                if etype == "user":
-                    msg = evt.get("message", {}) or {}
-                    content = msg.get("content", [])
-                    if isinstance(content, list):
-                        for blk in content:
-                            if not isinstance(blk, dict):
-                                continue
-                            if blk.get("type") == "tool_result" and is_visible("tool_result", stream_cfg):
-                                out = blk.get("content", "")
-                                if isinstance(out, list):
-                                    parts = []
-                                    for item in out:
-                                        if isinstance(item, dict) and item.get("type") == "text":
-                                            parts.append(item.get("text", ""))
-                                        else:
-                                            parts.append(str(item))
-                                    out = "\n".join(parts)
-                                tr_payload = json.dumps(
-                                    {
-                                        "tool_use_id": blk.get("tool_use_id", ""),
-                                        "is_error": bool(blk.get("is_error", False)),
-                                        "output": out,
-                                    }
-                                )
-                                yield format_tool_result_delta(tr_payload, mdl, rid)
-                    continue
-
-                if etype == "result":
-                    usage = evt.get("usage", {}) or {}
-                    final_is_error = bool(evt.get("is_error", False)) or evt.get("subtype") == "error"
-                    continue
-
-                continue
+                chunk = _format_canonical(canonical)
+                if chunk:
+                    yield chunk
         except asyncio.CancelledError:
             try:
                 proc.terminate()

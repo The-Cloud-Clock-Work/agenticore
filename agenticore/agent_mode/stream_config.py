@@ -23,6 +23,8 @@ DEFAULT_CONFIG: dict[str, bool] = {
     "show_thinking": True,
     "show_tools": True,
     "show_text": True,
+    "show_narration": True,
+    "show_final": True,
 }
 
 SLASH_TOKENS: set[str] = {
@@ -30,6 +32,10 @@ SLASH_TOKENS: set[str] = {
     "/hide-thinking",
     "/show-tools",
     "/hide-tools",
+    "/show-narration",
+    "/hide-narration",
+    "/show-final",
+    "/hide-final",
     "/show-all",
     "/hide-all",
     "/stream-status",
@@ -69,10 +75,13 @@ def load_stream_config(agent_id: str) -> dict[str, bool]:
                     if isinstance(v, bytes):
                         v = v.decode()
                     decoded[k] = v
+                show_text = _coerce_bool(decoded.get("show_text", True))
                 return {
                     "show_thinking": _coerce_bool(decoded.get("show_thinking", False)),
                     "show_tools": _coerce_bool(decoded.get("show_tools", False)),
-                    "show_text": _coerce_bool(decoded.get("show_text", True)),
+                    "show_text": show_text,
+                    "show_narration": _coerce_bool(decoded.get("show_narration", show_text)),
+                    "show_final": _coerce_bool(decoded.get("show_final", show_text)),
                 }
         except Exception:
             pass
@@ -80,10 +89,13 @@ def load_stream_config(agent_id: str) -> dict[str, bool]:
     if f.exists():
         try:
             data = json.loads(f.read_text())
+            show_text = _coerce_bool(data.get("show_text", True))
             return {
                 "show_thinking": _coerce_bool(data.get("show_thinking", False)),
                 "show_tools": _coerce_bool(data.get("show_tools", False)),
-                "show_text": _coerce_bool(data.get("show_text", True)),
+                "show_text": show_text,
+                "show_narration": _coerce_bool(data.get("show_narration", show_text)),
+                "show_final": _coerce_bool(data.get("show_final", show_text)),
             }
         except Exception:
             pass
@@ -92,10 +104,13 @@ def load_stream_config(agent_id: str) -> dict[str, bool]:
 
 def save_stream_config(agent_id: str, config: dict[str, bool]) -> None:
     """Persist config to Redis hash + file fallback. No TTL."""
+    show_text = config.get("show_text", True)
     serialized = {
         "show_thinking": "1" if config.get("show_thinking", False) else "0",
         "show_tools": "1" if config.get("show_tools", False) else "0",
-        "show_text": "1" if config.get("show_text", True) else "0",
+        "show_text": "1" if show_text else "0",
+        "show_narration": "1" if config.get("show_narration", show_text) else "0",
+        "show_final": "1" if config.get("show_final", show_text) else "0",
     }
     r = _get_redis()
     if r is not None:
@@ -147,14 +162,26 @@ def apply_tokens(config: dict[str, bool], tokens: list[str]) -> dict[str, bool]:
             out["show_tools"] = True
         elif tok == "/hide-tools":
             out["show_tools"] = False
+        elif tok == "/show-narration":
+            out["show_narration"] = True
+        elif tok == "/hide-narration":
+            out["show_narration"] = False
+        elif tok == "/show-final":
+            out["show_final"] = True
+        elif tok == "/hide-final":
+            out["show_final"] = False
         elif tok == "/show-all":
             out["show_thinking"] = True
             out["show_tools"] = True
             out["show_text"] = True
+            out["show_narration"] = True
+            out["show_final"] = True
         elif tok == "/hide-all":
             out["show_thinking"] = False
             out["show_tools"] = False
             out["show_text"] = True
+            out["show_narration"] = False
+            out["show_final"] = True
     return out
 
 
@@ -181,15 +208,23 @@ def get_for_request(
 
 
 def is_visible(event_type: str, config: dict[str, bool]) -> bool:
-    """Pure predicate. Returns True if this event_type should be emitted."""
+    """Pure predicate. Returns True if this event_type should be emitted.
+
+    Canonical progress types: narration, final, thinking, tool_use, tool_result,
+    done, stream_config, usage, error. Legacy alias: assistant_text → show_text.
+    show_narration / show_final fall back to show_text when not explicitly set,
+    preserving behaviour for configs persisted before these keys existed.
+    """
     if event_type == "thinking":
         return bool(config.get("show_thinking", False))
     if event_type in ("tool_use", "tool_result"):
         return bool(config.get("show_tools", False))
+    if event_type == "narration":
+        return bool(config.get("show_narration", config.get("show_text", True)))
+    if event_type == "final":
+        return bool(config.get("show_final", config.get("show_text", True)))
     if event_type == "assistant_text":
         return bool(config.get("show_text", True))
-    if event_type == "done":
-        return True
-    if event_type == "stream_config":
+    if event_type in ("done", "stream_config", "usage", "error"):
         return True
     return False

@@ -191,6 +191,24 @@ class TestSseFormatters:
         assert d["choices"][0]["delta"]["content"] == "hello world"
         assert d["choices"][0]["finish_reason"] is None
 
+    def test_narration_delta_tagged(self):
+        from agenticore.agent_mode.openai_compat import format_narration_delta
+
+        s = format_narration_delta("checking logs…", "sonnet", "rid-n")
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["delta"]["content"] == "checking logs…"
+        assert d["choices"][0]["x_agenticore_event_type"] == "narration"
+        assert d["choices"][0]["finish_reason"] is None
+
+    def test_final_delta_tagged(self):
+        from agenticore.agent_mode.openai_compat import format_final_delta
+
+        s = format_final_delta("here is the final answer.", "sonnet", "rid-f")
+        d = _parse_sse_chunk(s)
+        assert d["choices"][0]["delta"]["content"] == "here is the final answer."
+        assert d["choices"][0]["x_agenticore_event_type"] == "final"
+        assert d["choices"][0]["finish_reason"] is None
+
     def test_thinking_delta_marked(self):
         s = format_thinking_delta("I should think", "sonnet", "rid-3")
         d = _parse_sse_chunk(s)
