@@ -420,11 +420,17 @@ async def tail_canonical_from_redis(
     process_handle: Optional[asyncio.subprocess.Process] = None,
     timeout_s: int = 600,
     session_id: str = "",
+    start_id: str = "0-0",
 ) -> AsyncIterator[ProgressEvent]:
     """Tail Redis events and yield canonical ProgressEvents.
 
     Honours stream_cfg visibility at the canonical layer — callers do not
     filter again. Terminates on the ``done`` sentinel or subprocess exit.
+
+    ``start_id`` must be the stream head snapshotted BEFORE the subprocess
+    was spawned — otherwise events accumulated from prior turns (chat-scoped
+    correlation ids) are replayed as if they were this turn's, producing
+    stale "echo" rendering.
     """
     from agenticore.agent_mode.event_tailer import tail_event_stream
 
@@ -434,7 +440,7 @@ async def tail_canonical_from_redis(
     # (we need the raw events to correctly label FINAL).
     permissive = {"show_thinking": True, "show_tools": True, "show_text": True}
 
-    async for raw in tail_event_stream(correlation_id, permissive, process_handle, timeout_s):
+    async for raw in tail_event_stream(correlation_id, permissive, process_handle, timeout_s, start_id=start_id):
         for canonical in translator.feed_redis(raw):
             if progress_is_visible(canonical, stream_cfg):
                 yield canonical
