@@ -275,6 +275,18 @@ class TestVisibility:
         assert progress_is_visible(evt, {"show_text": True}) is True
         assert progress_is_visible(evt, {"show_text": False}) is False
 
+    def test_tool_call_gated_by_show_tools(self):
+        """Regression: canonical 'tool_call' must map to show_tools (was
+        silently filtered because is_visible only knew 'tool_use')."""
+        evt = ProgressEvent(type=ProgressEventType.TOOL_CALL, payload={"name": "bash"})
+        assert progress_is_visible(evt, {"show_tools": True}) is True
+        assert progress_is_visible(evt, {"show_tools": False}) is False
+
+    def test_tool_result_gated_by_show_tools(self):
+        evt = ProgressEvent(type=ProgressEventType.TOOL_RESULT, payload={"content": "x"})
+        assert progress_is_visible(evt, {"show_tools": True}) is True
+        assert progress_is_visible(evt, {"show_tools": False}) is False
+
 
 # ----------------------------------------------------------------------
 # Sink dispatching + OnceSink

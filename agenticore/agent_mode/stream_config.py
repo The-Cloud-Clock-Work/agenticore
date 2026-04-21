@@ -217,7 +217,10 @@ def is_visible(event_type: str, config: dict[str, bool]) -> bool:
     """
     if event_type == "thinking":
         return bool(config.get("show_thinking", False))
-    if event_type in ("tool_use", "tool_result"):
+    if event_type in ("tool_use", "tool_result", "tool_call"):
+        # "tool_call" is the canonical ProgressEventType name; "tool_use" is
+        # the raw-event alias from the event_relay hook. Both gate on the
+        # same show_tools flag.
         return bool(config.get("show_tools", False))
     if event_type == "narration":
         return bool(config.get("show_narration", config.get("show_text", True)))
