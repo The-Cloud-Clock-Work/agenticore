@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agenticore-shared
+  labels:
+    app: agenticore
+spec:
+  accessModes:
+    - ReadWriteMany
+  # Set storageClassName to match your environment:
+  #   - nfs-client      (on-prem NFS with nfs-subdir-external-provisioner)
+  #   - efs-sc          (AWS EFS with efs-csi-driver)
+  #   - azurefile-csi   (Azure Files)
+  #   - ceph-filesystem (Rook/Ceph)
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 100Gi

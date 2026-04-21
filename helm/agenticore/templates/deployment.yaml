@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agenticore.fullname" . }}
+  labels:
+    {{- include "agenticore.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agenticore.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agenticore.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agenticore
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.server.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "agenticore.fullname" . }}
+            - secretRef:
+                name: {{ include "agenticore.fullname" . }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.server.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.server.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            {{- if .Values.persistence.repos.enabled }}
+            - name: repos
+              mountPath: {{ .Values.repos.root }}
+            {{- end }}
+            {{- if .Values.persistence.jobs.enabled }}
+            - name: jobs
+              mountPath: /root/.agenticore/jobs
+            {{- end }}
+      volumes:
+        {{- if .Values.persistence.repos.enabled }}
+        - name: repos
+          persistentVolumeClaim:
+            claimName: {{ include "agenticore.fullname" . }}-repos
+        {{- end }}
+        {{- if .Values.persistence.jobs.enabled }}
+        - name: jobs
+          persistentVolumeClaim:
+            claimName: {{ include "agenticore.fullname" . }}-jobs
+        {{- end }}

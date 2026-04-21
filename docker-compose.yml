@@ -1,0 +1,90 @@
+# Agenticore — local development stack.
+#
+# Runs agenticore alongside Redis, PostgreSQL, and an OTEL Collector.
+# All config lives in .env (copy .env.example to get started).
+#
+# Usage:
+#   cp .env.example .env
+#   docker compose up --build -d
+
+services:
+  agenticore:
+    container_name: agenticore
+    build: .
+    image: agenticore:latest
+    ports:
+      - "8200:8200"
+    volumes:
+      - ac_repos_data:/home/agenticore/agenticore-repos
+      - ac_jobs_data:/home/agenticore/.agenticore/jobs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file: .env
+    networks:
+      - ac-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8200/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  redis:
+    container_name: agenticore-redis
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - ac_redis_data:/data
+    networks:
+      - ac-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    container_name: agenticore-postgres
+    image: postgres:16-alpine
+    env_file: .env
+    volumes:
+      - ac_postgres_data:/var/lib/postgresql/data
+    networks:
+      - ac-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agenticore"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+
+  otel-collector:
+    container_name: agenticore-otel
+    image: otel/opentelemetry-collector-contrib:latest
+    env_file: .env
+    volumes:
+      - ./otel-collector-config.yml:/etc/otelcol-contrib/config.yaml
+    networks:
+      - ac-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ac_redis_data:
+  ac_postgres_data:
+  ac_repos_data:
+  ac_jobs_data:
+
+networks:
+  ac-network:
+    driver: bridge

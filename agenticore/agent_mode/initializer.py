@@ -1,0 +1,367 @@
+"""Agent mode startup logic.
+
+Called when AGENT_MODE=true. Clones the package repo (if configured),
+validates the package directory, and runs startup scripts.
+"""
+
+import logging
+import os
+import stat
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+from agenticore.config import get_config
+
+_log = logging.getLogger(__name__)
+
+
+def _provision_from_agentihub(cfg) -> None:
+    """Resolve agent package/evaluation dirs from agentihub — reference in place, no copy.
+
+    The hub is already cloned to a deterministic path by sync_agentihub() at startup.
+    This function points package_dir and evaluation_dir at the hub checkout directly.
+    """
+    agent_name = cfg.agent_mode.agent
+    if not agent_name:
+        _log.debug("AGENTIHUB_AGENT not set — skipping agentihub provision")
+        return
+
+    hub_path_str = os.getenv("AGENTICORE_AGENTIHUB_PATH", "")
+    if not hub_path_str:
+        _log.warning("AGENTICORE_AGENTIHUB_PATH not set — hub not available for agent provision")
+        return
+
+    hub_path = Path(hub_path_str)
+    agent_dir = hub_path / "agents" / agent_name
+    if not agent_dir.exists():
+        # Try aliases: check for aliases.yaml in the hub root, or fuzzy-match
+        # by checking if any agent dir contains an agent.yml with a matching name
+        aliases_file = hub_path / "aliases.yaml"
+        resolved = None
+        if aliases_file.exists():
+            try:
+                import yaml
+
+                aliases = yaml.safe_load(aliases_file.read_text()) or {}
+                if agent_name in aliases:
+                    resolved = hub_path / "agents" / aliases[agent_name]
+                    if resolved.exists():
+                        _log.info("Resolved agent '%s' → '%s' via aliases.yaml", agent_name, aliases[agent_name])
+                        agent_dir = resolved
+            except Exception as e:
+                _log.warning("Failed to read aliases.yaml: %s", e)
+
+        if resolved is None or not agent_dir.exists():
+            available = []
+            agents_dir = hub_path / "agents"
+            if agents_dir.exists():
+                available = [d.name for d in agents_dir.iterdir() if d.is_dir()]
+            raise RuntimeError(
+                f"Agent '{agent_name}' not found in agentihub at {hub_path / 'agents' / agent_name}. Available: {available}"
+            )
+
+    # Point package_dir and evaluation_dir at the hub path — no copy
+    src_package = agent_dir / "package"
+    if src_package.exists():
+        cfg.agent_mode.package_dir = str(src_package)
+        _log.info("package_dir → %s (from agentihub, no copy)", src_package)
+    else:
+        _log.warning("No package/ dir in agent '%s'", agent_name)
+
+    src_eval = agent_dir / "evaluation"
+    if src_eval.exists():
+        cfg.agent_mode.evaluation_dir = str(src_eval)
+        _log.info("evaluation_dir → %s (from agentihub, no copy)", src_eval)
+
+    _log.info("Agentihub provision complete for agent '%s'", agent_name)
+
+
+def _clone_package_repo(repo_url: str, branch: str, target_dir: str) -> None:
+    """Clone the package repo to /app using git subprocess."""
+    from agenticore.repos import resolve_github_token
+    from agenticore.git_credentials import git_askpass_env
+
+    _log.info("Cloning package repo: %s (branch: %s)", repo_url, branch)
+
+    token = resolve_github_token()
+    with git_askpass_env(token) as extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
+
+        # Clone to a temp dir, then move contents to target
+        # (target_dir may already have /app/package and /app/evaluation as empty dirs)
+        target = Path(target_dir)
+        if not target.exists():
+            target.mkdir(parents=True, exist_ok=True)
+
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", "--branch", branch, repo_url, str(target / "_clone_tmp")],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(f"Git clone failed: {result.stderr.strip()}")
+
+        # Move contents from clone to target (overwriting existing dirs)
+        clone_tmp = target / "_clone_tmp"
+        for item in clone_tmp.iterdir():
+            if item.name == ".git":
+                continue
+            dest = target / item.name
+            if dest.exists():
+                import shutil
+
+                shutil.rmtree(dest)
+            item.rename(dest)
+
+        # Clean up temp clone dir
+        import shutil
+
+        shutil.rmtree(clone_tmp, ignore_errors=True)
+
+    _log.info("Package repo cloned to %s", target_dir)
+
+
+def _validate_package_dir(package_dir: str) -> None:
+    """Validate that the package directory exists and has basic structure."""
+    pkg = Path(package_dir)
+    if not pkg.exists():
+        raise RuntimeError(f"Package directory does not exist: {package_dir}")
+
+    _log.info("Package directory validated: %s", package_dir)
+
+    # Log what's available
+    claude_md = pkg / "CLAUDE.md"
+    system_md = pkg / "system.md"
+    mcp_json = pkg / ".mcp.json"
+    settings = pkg / ".claude" / "settings.json"
+    runners = pkg / "runners"
+
+    for path, label in [
+        (claude_md, "CLAUDE.md"),
+        (system_md, "system.md"),
+        (mcp_json, ".mcp.json"),
+        (settings, ".claude/settings.json"),
+        (runners, "runners/"),
+    ]:
+        if path.exists():
+            _log.info("  [found] %s", label)
+        else:
+            _log.debug("  [missing] %s", label)
+
+
+def _run_startup_scripts(package_dir: str) -> None:
+    """Run numbered scripts from package/runners/ in order."""
+    runners_dir = Path(package_dir) / "runners"
+    if not runners_dir.exists():
+        _log.debug("No runners/ directory — skipping startup scripts")
+        return
+
+    scripts = sorted(runners_dir.iterdir(), key=lambda p: p.name)
+    scripts = [s for s in scripts if s.is_file() and not s.name.startswith(".")]
+
+    if not scripts:
+        _log.debug("No scripts in runners/")
+        return
+
+    _log.info("Running %d startup script(s) from runners/", len(scripts))
+
+    for script in scripts:
+        _log.info("  Running: %s", script.name)
+
+        if script.suffix == ".py":
+            cmd = [sys.executable, str(script)]
+        elif script.suffix == ".sh":
+            # Ensure executable bit
+            if not os.access(script, os.X_OK):
+                script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            cmd = ["bash", str(script)]
+        else:
+            _log.warning("  Skipping unknown script type: %s", script.name)
+            continue
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, cwd=package_dir)
+
+        if result.stdout:
+            _log.info("  stdout: %s", result.stdout.strip()[:500])
+        if result.returncode != 0:
+            _log.warning(
+                "  Script %s exited with code %d: %s", script.name, result.returncode, result.stderr.strip()[:500]
+            )
+        else:
+            _log.info("  Script %s completed successfully", script.name)
+
+
+def _log_telegram_status() -> None:
+    """Log Telegram connector status. Actual startup happens in ASGI lifespan."""
+    from agenticore.connectors.telegram import is_enabled
+
+    if is_enabled():
+        _log.info("Telegram connector: configured (will start with ASGI server)")
+    else:
+        _log.info("Telegram: not configured (no TELEGRAM_BOT_TOKEN)")
+
+
+def _bg_run_startup_scripts(package_dir: str) -> None:
+    """Wrapper for background thread — catches all exceptions."""
+    try:
+        _run_startup_scripts(package_dir)
+    except Exception as e:
+        _log.warning("Startup scripts error (non-fatal, background): %s", e)
+
+
+def _install_event_relay_hook() -> None:
+    """Wire the agentihooks event_relay.py script for SSE event streaming.
+
+    Adds PostToolUse + Stop + Notification entries to ~/.claude/settings.json
+    pointing at the relay script in the agentihooks PVC mount. The script
+    self-gates on AGENTICORE_EVENT_STREAM=1 so non-streaming traffic is a no-op.
+    Idempotent — safe to call multiple times.
+    """
+    import json
+
+    relay_script = "/shared/agentihooks/hooks/observability/event_relay.py"
+    if not Path(relay_script).exists():
+        _log.info("Event relay script not found at %s — skipping wire-up", relay_script)
+        return
+
+    claude_home = Path(os.getenv("CLAUDE_CODE_HOME_DIR", str(Path.home())))
+    settings_path = claude_home / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings = {}
+    if settings_path.exists():
+        try:
+            with open(settings_path) as f:
+                settings = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            settings = {}
+
+    hooks = settings.get("hooks", {})
+    relay_cmd = f"python3 {relay_script}"
+
+    hook_entries = {
+        "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": relay_cmd}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": relay_cmd}]}],
+        "Notification": [{"hooks": [{"type": "command", "command": relay_cmd}]}],
+    }
+
+    for hook_name, entries in hook_entries.items():
+        existing = hooks.get(hook_name, [])
+        existing_cmds = set()
+        for e in existing:
+            for h in e.get("hooks", []):
+                existing_cmds.add(h.get("command", ""))
+        for entry in entries:
+            cmd = entry["hooks"][0]["command"]
+            if cmd not in existing_cmds:
+                existing.append(entry)
+        hooks[hook_name] = existing
+
+    settings["hooks"] = hooks
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
+    _log.info("Event relay hooks wired in settings.json (PostToolUse + Stop + Notification)")
+
+
+def _bg_install_event_relay_hook() -> None:
+    """Wrapper for background thread — catches all exceptions.
+
+    Polls up to 60s for the relay script since agentihooks sync may not have
+    completed when the bg thread starts.
+    """
+    import time as _time
+
+    relay_script = Path("/shared/agentihooks/hooks/observability/event_relay.py")
+    for _ in range(12):
+        if relay_script.exists():
+            break
+        _time.sleep(5)
+    try:
+        _install_event_relay_hook()
+    except Exception as e:
+        _log.warning("Event relay hook install failed (non-fatal, background): %s", e)
+
+
+def initialize_agent_mode() -> list[threading.Thread]:
+    """Main initialization entry point for agent mode.
+
+    Fatal steps (provision, clone, validate) run synchronously.
+    Non-fatal steps (startup scripts, notification hooks) run as background daemon threads.
+
+    Returns list of background threads for callers that need to join them (e.g. tests).
+    """
+    t0 = time.monotonic()
+    cfg = get_config()
+    am = cfg.agent_mode
+
+    _log.info("=== Agent Mode Initialization ===")
+
+    # Step 0: Provision from agentihub if AGENTIHUB_AGENT is set (FATAL)
+    if am.agent:
+        try:
+            _provision_from_agentihub(cfg)
+        except Exception as e:
+            _log.error("Agentihub provision failed: %s", e)
+            print(f"FATAL: Agentihub provision failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # Step 1: Clone package repo if URL is configured (FATAL)
+    if am.repo_url:
+        try:
+            _clone_package_repo(am.repo_url, am.repo_branch, str(Path(am.package_dir).parent))
+        except Exception as e:
+            _log.error("Package repo clone failed: %s", e)
+            print(f"FATAL: Package repo clone failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # Step 2: Validate package dir (FATAL)
+    try:
+        _validate_package_dir(am.package_dir)
+    except RuntimeError as e:
+        _log.error(str(e))
+        print(f"FATAL: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Step 3: Cache system prompt (instant file read)
+    from agenticore.agent_mode.agent import _load_system_prompt
+
+    prompt = _load_system_prompt(am.package_dir)
+    if prompt:
+        _log.info("Default system prompt loaded (%d chars)", len(prompt))
+    else:
+        _log.info("No default system prompt (system.md not found)")
+
+    # Step 4+5: Non-fatal steps — fire as background daemon threads
+    bg_threads: list[threading.Thread] = []
+    t_scripts = threading.Thread(
+        target=_bg_run_startup_scripts,
+        args=(am.package_dir,),
+        name="startup-scripts",
+        daemon=True,
+    )
+    t_scripts.start()
+    bg_threads.append(t_scripts)
+
+    t_relay = threading.Thread(
+        target=_bg_install_event_relay_hook,
+        name="event-relay-hook",
+        daemon=True,
+    )
+    t_relay.start()
+    bg_threads.append(t_relay)
+
+    # Step 6: Telegram channel (already Popen/detached)
+    _log_telegram_status()
+
+    _log.info("=== Agent Mode Ready (%.2fs) ===", time.monotonic() - t0)
+    _log.info("  Package dir: %s", am.package_dir)
+    _log.info("  Default model: %s", am.model)
+    _log.info("  Max turns: %d", am.max_turns)
+    _log.info("  Permission mode: %s", am.permission_mode)
+    return bg_threads

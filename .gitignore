@@ -1,0 +1,48 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+package/
+packages/*
+!packages/anton_google_auth
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# MCP server config (machine-specific paths and defaults — gitignored, see .mcp.json.example)
+.mcp.json
+
+# Local Claude instructions (machine-specific, auto-gitignored by Claude Code)
+CLAUDE.local.md
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+.swp
+.claude
+
+# Jekyll
+_site/
+.jekyll-cache/
+Gemfile.lock
+coverage.xml
+.coverage
+.claude/settings.local.json
+
+.claude/CLAUDE.local.md
+.self-drive/

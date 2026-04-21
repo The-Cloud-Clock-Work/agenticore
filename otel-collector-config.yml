@@ -1,0 +1,40 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 100
+
+exporters:
+  # Debug exporter for development
+  debug:
+    verbosity: basic
+
+  # Langfuse OTEL ingestion (traces only — Langfuse does not support metrics/logs)
+  otlp_http/langfuse:
+    endpoint: ${env:LANGFUSE_HOST}/api/public/otel
+    headers:
+      Authorization: "Basic ${env:LANGFUSE_BASIC_AUTH}"
+      CF-Access-Client-Id: "${env:CF_ACCESS_CLIENT_ID}"
+      CF-Access-Client-Secret: "${env:CF_ACCESS_CLIENT_SECRET}"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, otlp_http/langfuse]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

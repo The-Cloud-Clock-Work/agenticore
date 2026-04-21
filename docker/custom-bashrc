@@ -1,0 +1,21 @@
+anton() { unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"; }
+wkt-get() {
+  local query="${1:-}" wt_root="$HOME/.agenticore/worktrees"
+  [ -d "$wt_root" ] || { echo "No worktrees dir: $wt_root"; return 1; }
+  local -a dirs=() names=()
+  for d in "$wt_root"/*/; do
+    [ -d "$d" ] || continue
+    local name="${d%/}"; name="${name##*/}"
+    if [ -z "$query" ] || [[ "${name,,}" == *"${query,,}"* ]]; then
+      dirs+=("$d"); names+=("$name")
+    fi
+  done
+  [ ${#dirs[@]} -gt 0 ] || { echo "No worktrees${query:+ matching '$query'}"; return 1; }
+  local i=1; for n in "${names[@]}"; do printf "%d) %s\n" "$i" "$n"; ((i++)); done
+  if [ ${#dirs[@]} -eq 1 ]; then
+    echo "-> ${dirs[0]}"; cd "${dirs[0]}" || return 1; return 0
+  fi
+  local sel; read -rp "Worktree [1-${#dirs[@]}]: " sel
+  [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#dirs[@]}" ] || { echo "Invalid"; return 1; }
+  echo "-> ${dirs[$((sel-1))]}"; cd "${dirs[$((sel-1))]}" || return 1
+}

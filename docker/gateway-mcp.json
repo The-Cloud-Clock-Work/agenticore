@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "gateway": {
+      "type": "http",
+      "url": "${LITELLM_MCP_GATEWAY_URL}",
+      "headers": {
+        "Authorization": "Bearer ${LITELLM_MCP_GATEWAY_KEY}"
+      }
+    }
+  }
+}

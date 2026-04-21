@@ -1,0 +1,306 @@
+"""Job store with Redis + file fallback.
+
+Jobs are stored as Redis hashes or JSON files under ``~/.agenticore/jobs/``.
+"""
+
+import json
+import os
+import sys
+import time
+import uuid
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Optional
+
+
+@dataclass
+class Job:
+    id: str = ""
+    repo_url: str = ""
+    base_ref: str = "main"
+    task: str = ""
+    profile: str = "code"
+    status: str = "queued"  # queued|running|succeeded|failed|cancelled|expired
+    mode: str = "fire_and_forget"  # fire_and_forget|sync
+    exit_code: Optional[int] = None
+    session_id: Optional[str] = None  # Claude session ID (for resume)
+    pr_url: Optional[str] = None
+    output: Optional[str] = None
+    error: Optional[str] = None
+    created_at: str = ""
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    ttl_seconds: int = 86400
+    pid: Optional[int] = None  # OS process ID of claude subprocess
+    pod_name: str = ""  # Which pod ran this job (K8s)
+    worktree_path: str = ""  # Absolute path to worktree (~/.agenticore/worktrees/)
+    job_config_dir: str = ""  # CLAUDE_CONFIG_DIR used for this job
+    plan_id: str = ""  # set when this job was created by execute_plan
+    file_path: str = ""  # path to a .mcp.json on the shared FS; merged into job config dir
+    branch: str = ""  # branch name used by this job's worktree
+    worktree_id: str = ""  # ID of pre-prepared worktree (two-phase workflow)
+
+    def to_dict(self) -> dict:
+        return {k: v for k, v in asdict(self).items() if v is not None}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Job":
+        # Handle None values for optional fields
+        return cls(
+            id=data.get("id", ""),
+            repo_url=data.get("repo_url", ""),
+            base_ref=data.get("base_ref", "main"),
+            task=data.get("task", ""),
+            profile=data.get("profile", "code"),
+            status=data.get("status", "queued"),
+            mode=data.get("mode", "fire_and_forget"),
+            exit_code=data.get("exit_code"),
+            session_id=data.get("session_id"),
+            pr_url=data.get("pr_url"),
+            output=data.get("output"),
+            error=data.get("error"),
+            created_at=data.get("created_at", ""),
+            started_at=data.get("started_at"),
+            ended_at=data.get("ended_at"),
+            ttl_seconds=int(data.get("ttl_seconds", 86400)),
+            pid=data.get("pid"),
+            pod_name=data.get("pod_name", ""),
+            worktree_path=data.get("worktree_path", ""),
+            job_config_dir=data.get("job_config_dir", ""),
+            plan_id=data.get("plan_id", ""),
+            file_path=data.get("file_path", ""),
+            branch=data.get("branch", ""),
+            worktree_id=data.get("worktree_id", ""),
+        )
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# Redis helpers
+# ---------------------------------------------------------------------------
+
+_redis_client = None
+_redis_last_attempt: float = 0.0
+_REDIS_RETRY_COOLDOWN = 30.0
+
+
+def _get_redis():
+    global _redis_client, _redis_last_attempt
+    if _redis_client is not None:
+        return _redis_client
+    now = time.monotonic()
+    if _redis_last_attempt and (now - _redis_last_attempt) < _REDIS_RETRY_COOLDOWN:
+        return None
+    _redis_last_attempt = now
+    url = os.getenv("REDIS_URL", "")
+    if not url:
+        return None
+    try:
+        import redis as redis_lib
+
+        client = redis_lib.Redis.from_url(url, decode_responses=True, socket_timeout=5.0)
+        client.ping()
+        _redis_client = client
+    except Exception as exc:
+        print(f"Redis connection failed: {exc}", file=sys.stderr)
+        _redis_client = None
+    return _redis_client
+
+
+def _reset_redis():
+    """Reset redis singleton (for testing)."""
+    global _redis_client, _redis_last_attempt
+    _redis_client = None
+    _redis_last_attempt = 0.0
+
+
+def _redis_key(job_id: str) -> str:
+    prefix = os.getenv("REDIS_KEY_PREFIX", "agenticore")
+    return f"{prefix}:job:{job_id}"
+
+
+# ---------------------------------------------------------------------------
+# File fallback
+# ---------------------------------------------------------------------------
+
+
+def _jobs_dir() -> Path:
+    from agenticore.config import get_config
+
+    cfg = get_config()
+    if cfg.repos.jobs_dir:
+        d = Path(cfg.repos.jobs_dir)
+    else:
+        d = Path.home() / ".agenticore" / "jobs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _job_file(job_id: str) -> Path:
+    return _jobs_dir() / f"{job_id}.json"
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def create_job(
+    task: str,
+    profile: str = "code",
+    repo_url: str = "",
+    base_ref: str = "main",
+    mode: str = "fire_and_forget",
+    session_id: Optional[str] = None,
+    ttl_seconds: int = 86400,
+    file_path: str = "",
+) -> Job:
+    """Create a new job and persist it."""
+    job = Job(
+        id=str(uuid.uuid4()),
+        task=task,
+        profile=profile,
+        repo_url=repo_url,
+        base_ref=base_ref,
+        mode=mode,
+        session_id=session_id,
+        status="queued",
+        created_at=_now_iso(),
+        ttl_seconds=ttl_seconds,
+        file_path=file_path,
+    )
+    _save_job(job)
+    return job
+
+
+def _coerce_redis_types(data: dict) -> dict:
+    """Convert Redis string values to proper Python types."""
+    for key, convert in [("exit_code", int), ("ttl_seconds", int), ("pid", int)]:
+        if key in data:
+            data[key] = convert(data[key]) if data[key] != "None" else None
+    # String fields stored as "None" in Redis — normalize to empty string
+    for key in ("pod_name", "worktree_path", "job_config_dir", "plan_id", "file_path", "branch", "worktree_id"):
+        if data.get(key) == "None":
+            data[key] = ""
+    return data
+
+
+def get_job(job_id: str) -> Optional[Job]:
+    """Retrieve a job by ID."""
+    r = _get_redis()
+    if r is not None:
+        data = r.hgetall(_redis_key(job_id))
+        if data:
+            return Job.from_dict(_coerce_redis_types(data))
+
+    # File fallback
+    path = _job_file(job_id)
+    if path.exists():
+        with open(path) as f:
+            return Job.from_dict(json.load(f))
+
+    return None
+
+
+def update_job(job_id: str, **kwargs) -> Optional[Job]:
+    """Update specific fields of a job."""
+    job = get_job(job_id)
+    if job is None:
+        return None
+
+    for key, value in kwargs.items():
+        if hasattr(job, key):
+            setattr(job, key, value)
+
+    _save_job(job)
+    return job
+
+
+def _scan_redis_keys(r, prefix: str) -> list:
+    """Scan Redis for all job keys."""
+    cursor = 0
+    keys = []
+    while True:
+        cursor, batch = r.scan(cursor, match=f"{prefix}:job:*", count=100)
+        keys.extend(batch)
+        if cursor == 0:
+            break
+    return keys
+
+
+def _load_jobs_from_redis(r) -> List[Job]:
+    """Load all jobs from Redis."""
+    prefix = os.getenv("REDIS_KEY_PREFIX", "agenticore")
+    keys = _scan_redis_keys(r, prefix)
+    jobs = []
+    for key in keys:
+        data = r.hgetall(key)
+        if data:
+            jobs.append(Job.from_dict(_coerce_redis_types(data)))
+    return jobs
+
+
+def _load_jobs_from_files() -> List[Job]:
+    """Load all jobs from filesystem fallback."""
+    jobs = []
+    for path in _jobs_dir().glob("*.json"):
+        with open(path) as f:
+            jobs.append(Job.from_dict(json.load(f)))
+    return jobs
+
+
+def list_jobs(limit: int = 20, status: Optional[str] = None) -> List[Job]:
+    """List recent jobs, optionally filtered by status."""
+    r = _get_redis()
+    jobs_by_id: dict[str, Job] = {}
+    for job in _load_jobs_from_files():
+        jobs_by_id[job.id] = job
+    if r is not None:
+        for job in _load_jobs_from_redis(r):
+            jobs_by_id[job.id] = job  # Redis wins on duplicates
+    jobs = list(jobs_by_id.values())
+    if status:
+        jobs = [j for j in jobs if j.status == status]
+    jobs.sort(key=lambda j: j.created_at, reverse=True)
+    return jobs[:limit]
+
+
+def cancel_job(job_id: str) -> Optional[Job]:
+    """Cancel a running or queued job."""
+    job = get_job(job_id)
+    if job is None:
+        return None
+
+    if job.status not in ("queued", "running"):
+        return job  # Already terminal
+
+    # Kill process if running
+    if job.pid is not None:
+        try:
+            os.kill(job.pid, 15)  # SIGTERM
+        except ProcessLookupError:
+            pass
+
+    return update_job(job_id, status="cancelled", ended_at=_now_iso())
+
+
+def _save_job(job: Job) -> None:
+    """Persist a job to Redis and/or file."""
+    r = _get_redis()
+    data = job.to_dict()
+
+    if r is not None:
+        # Convert all values to strings for Redis hash
+        str_data = {k: str(v) if v is not None else "None" for k, v in data.items()}
+        r.hset(_redis_key(job.id), mapping=str_data)
+        if job.ttl_seconds > 0:
+            r.expire(_redis_key(job.id), job.ttl_seconds)
+
+    # Always write file as fallback
+    path = _job_file(job.id)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)

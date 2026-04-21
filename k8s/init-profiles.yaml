@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agenticore-init-profiles
+  labels:
+    app: agenticore
+    component: init
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: init
+        image: agenticore:latest
+        command: ["agenticore", "init-shared-fs"]
+        env:
+        - name: AGENTICORE_SHARED_FS_ROOT
+          value: /shared
+        volumeMounts:
+        - name: shared-fs
+          mountPath: /shared
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+      volumes:
+      - name: shared-fs
+        persistentVolumeClaim:
+          claimName: agenticore-shared

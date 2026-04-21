@@ -1,0 +1,36 @@
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "agenticore.fullname" . }}-scaler
+  labels:
+    {{- include "agenticore.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "agenticore.fullname" . }}
+    kind: StatefulSet
+  minReplicaCount: {{ .Values.keda.minReplicas }}
+  maxReplicaCount: {{ .Values.keda.maxReplicas }}
+  pollingInterval: {{ .Values.keda.pollingInterval }}
+  cooldownPeriod: {{ .Values.keda.cooldownPeriod }}
+  triggers:
+    - type: redis
+      metadata:
+        address: {{ .Values.keda.redisAddress | quote }}
+        listName: agenticore:queue
+        listLength: {{ .Values.keda.listLength | quote }}
+      authenticationRef:
+        name: {{ include "agenticore.fullname" . }}-redis-auth
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "agenticore.fullname" . }}-redis-auth
+  labels:
+    {{- include "agenticore.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: address
+      name: {{ .Values.secretName }}
+      key: redis-address
+{{- end }}
