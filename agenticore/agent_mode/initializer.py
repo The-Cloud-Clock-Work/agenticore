@@ -282,16 +282,21 @@ def _install_event_relay_hook() -> None:
         "Notification": [{"hooks": [{"type": "command", "command": relay_cmd}]}],
     }
 
+    # Prune stale event_relay entries (previous boots may have wired a different
+    # path — e.g. /shared/agentihooks/... before the PyPI refactor, or
+    # site-packages after). ~/.claude/settings.json persists on the shared FS
+    # across pod restarts, so a path migration would otherwise double-fire every
+    # tool event.
+    def _is_event_relay_entry(entry: dict) -> bool:
+        for h in entry.get("hooks", []):
+            if "event_relay.py" in h.get("command", ""):
+                return True
+        return False
+
     for hook_name, entries in hook_entries.items():
         existing = hooks.get(hook_name, [])
-        existing_cmds = set()
-        for e in existing:
-            for h in e.get("hooks", []):
-                existing_cmds.add(h.get("command", ""))
-        for entry in entries:
-            cmd = entry["hooks"][0]["command"]
-            if cmd not in existing_cmds:
-                existing.append(entry)
+        existing = [e for e in existing if not _is_event_relay_entry(e)]
+        existing.extend(entries)
         hooks[hook_name] = existing
 
     settings["hooks"] = hooks
