@@ -16,9 +16,16 @@ anton() {
   cd "$pkg_dir" && unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"
 }
 agentipull() {
-  echo "Pulling agentihooks..."
-  agenticore hooks sync && agentihooks init
-  echo "Done — ref: $(git -C "${AGENTICORE_SHARED_FS_ROOT:-$HOME/.agenticore}/agentihooks" rev-parse --short HEAD 2>/dev/null || echo '?')"
+  # agentihooks ships as a PyPI dep — no re-sync. Pull content repos (bundle +
+  # agentihub) and re-run agentihooks init so whitelist/profile state catches
+  # up. Pass "--with-agentihooks" to also re-sync the agentihooks clone (only
+  # meaningful when AGENTICORE_AGENTIHOOKS_URL override is set).
+  local target="bundle,agentihub"
+  if [ "${1:-}" = "--with-agentihooks" ]; then target="all"; fi
+  echo "Pulling content repos (target=$target)..."
+  for t in ${target//,/ }; do agenticore hooks sync --target "$t"; done
+  agentihooks init
+  echo "Done."
 }
 
 # wkt-get — list agenticore worktrees, pick one, cd into it
@@ -55,7 +62,7 @@ helpme() {
   echo "    gc               Auto-commit with AI message"
   echo "    gs / gp          Git status / push"
   echo "    wkt-get [q]      List worktrees, cd into one"
-  echo "    agentipull       Re-sync override repos + re-run agentihooks init"
+  echo "    agentipull       Re-sync bundle+agentihub + run agentihooks init (agentihooks is a pip dep; pass --with-agentihooks to also re-pull a URL-override clone)"
   echo "    helpme           Show this help"
   echo ""
   echo "  Installed Tools:"

@@ -407,19 +407,22 @@ Clone or update companion repos (agentihooks, bundle, agentihub) and rebuild pro
 Runs locally — does not require a running server.
 
 ```bash
-# Sync all repos
+# Sync all repos (agentihooks target is a no-op unless URL override is set)
 agenticore hooks sync
 
-# Sync a specific repo
+# Sync a specific content repo (the common case)
+agenticore hooks sync --target bundle
 agenticore hooks sync --target agentihub
 
-# Override agentihooks URL
+# Re-pull the agentihooks clone (only meaningful when AGENTICORE_AGENTIHOOKS_URL
+# is set; otherwise agentihooks comes from PyPI and does not re-sync — restart
+# the pod for a new pip-resolved version)
 agenticore hooks sync --target agentihooks --url https://github.com/org/agentihooks
 ```
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--target` | choice | `all` | Which repo: `all`, `agentihooks`, `bundle`, `agentihub` |
+| `--target` | choice | `all` | Which repo: `all`, `agentihooks` (URL-override only), `bundle`, `agentihub` |
 | `--url` | str | env var | Git URL override (agentihooks target only) |
 
 ## Client Configuration
