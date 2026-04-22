@@ -255,6 +255,33 @@ def _tick_loop(argv_prefix: list[str], interval: int) -> None:
         time.sleep(interval)
 
 
+def _seed_own_project_dir() -> None:
+    """Pre-create ``~/.claude/projects/<encoded>/memory/`` for this agent's
+    own package directory, so the first consume tick has a target to
+    populate on a fresh PVC.
+
+    The encoding mirrors Claude Code's: absolute path with ``/`` → ``-``
+    and a leading ``-``. Idempotent — only mkdirs, never overwrites.
+    """
+    # Resolve this agent's package dir. On anton dev pods it's
+    # /shared/agentihub/agents/<agent>/package; config exposes it as
+    # AGENT_MODE_PACKAGE_DIR via the agenticore config loader.
+    from agenticore.config import get_config
+    cfg = get_config()
+    pkg = getattr(getattr(cfg, "agent_mode", None), "package_dir", None)
+    if not pkg:
+        _log.debug("cold-seed: package_dir unresolved — skipping")
+        return
+    pkg_abs = str(Path(pkg).resolve())
+    encoded = pkg_abs.replace("/", "-")
+    if not encoded.startswith("-"):
+        encoded = "-" + encoded
+    home = Path(os.environ.get("HOME") or Path.home())
+    target = home / ".claude" / "projects" / encoded / "memory"
+    target.mkdir(parents=True, exist_ok=True)
+    _log.info("cold-seed: ensured %s", target)
+
+
 def setup_memory_mirror() -> None:
     """Entry point. Called as a background daemon thread from
     ``initialize_agent_mode``. Safe to call regardless of config — self-gates
@@ -281,6 +308,16 @@ def setup_memory_mirror() -> None:
     except Exception as exc:
         _log.warning("Memory mirror prereq install failed: %s", exc)
         return
+
+    # Cold-PVC seed — consume_main walks ``~/.claude/projects/<encoded>/`` to
+    # decide where to drop memory. On a fresh PVC that dir doesn't exist yet
+    # (Claude Code hasn't run), so the first tick merges 0 projects and
+    # memory never lands until a human session happens. Pre-create the dir
+    # for this agent's own package so the mirror has a target to populate.
+    try:
+        _seed_own_project_dir()
+    except Exception as exc:
+        _log.warning("Memory mirror cold-seed failed (non-fatal): %s", exc)
 
     _log.info("Memory mirror: role=%s remote=%s — running initial sync", role, remote)
     try:
