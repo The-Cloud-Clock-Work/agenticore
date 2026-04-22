@@ -180,6 +180,22 @@ def _run_sync(argv_prefix: list[str], cwd: Path | None) -> subprocess.CompletedP
     )
 
 
+def _run_install(argv_prefix: list[str], cwd: Path | None) -> subprocess.CompletedProcess:
+    """Run ``agentihooks memory-sync install`` — the authoritative setup path.
+    Probes remote, ensures git repo + origin remote, seeds if needed.
+    For consumer role it also skips gitfoam. Idempotent — safe to call every
+    boot. Should be called BEFORE the tick loop on cold PVC so origin/main
+    is reachable by the time ticks fire."""
+    cmd = argv_prefix + ["memory-sync", "install"]
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        cwd=str(cwd) if cwd else None,
+    )
+
+
 def _install_prereqs(role: str, remote: str) -> None:
     _write_helper()
     _wire_git_credential()
@@ -319,9 +335,29 @@ def setup_memory_mirror() -> None:
     except Exception as exc:
         _log.warning("Memory mirror cold-seed failed (non-fatal): %s", exc)
 
-    _log.info("Memory mirror: role=%s remote=%s — running initial sync", role, remote)
+    cwd = None if argv_prefix[0].endswith("agentihooks") else Path("/shared/agentihooks")
+
+    # Run the authoritative install path once — probes the remote, ensures
+    # the mirror repo exists with origin remote configured, seeds main if
+    # empty. Idempotent. Without this, cold boots have raced with flaky
+    # subprocess state and ticks silently no-op'd for the first N minutes.
+    _log.info("Memory mirror: role=%s remote=%s — running memory-sync install", role, remote)
     try:
-        proc = _run_sync(argv_prefix, cwd=None if argv_prefix[0].endswith("agentihooks") else Path("/shared/agentihooks"))
+        proc = _run_install(argv_prefix, cwd=cwd)
+        if proc.returncode != 0:
+            _log.warning(
+                "memory-sync install exit=%d: %s",
+                proc.returncode,
+                (proc.stderr or proc.stdout or "").strip()[:400],
+            )
+        else:
+            _log.info("memory-sync install complete")
+    except Exception as exc:
+        _log.warning("memory-sync install failed: %s", exc)
+
+    _log.info("Memory mirror: running initial sync")
+    try:
+        proc = _run_sync(argv_prefix, cwd=cwd)
         if proc.returncode != 0:
             _log.warning(
                 "Initial memory-sync exit=%d: %s",
