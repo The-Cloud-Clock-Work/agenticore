@@ -200,20 +200,25 @@ def _tick_loop(argv_prefix: list[str], interval: int) -> None:
             cwd = Path(candidate)
             break
 
+    _log.info("memory-mirror tick loop entering (interval=%ds, cwd=%s)", interval, cwd)
+    tick_count = 0
     while True:
+        tick_count += 1
         try:
             proc = _run_sync(argv_prefix, cwd)
             if proc.returncode != 0:
                 _log.warning(
-                    "memory-mirror tick exit=%d: %s",
+                    "memory-mirror tick #%d exit=%d: %s",
+                    tick_count,
                     proc.returncode,
                     (proc.stderr or proc.stdout or "").strip()[:400],
                 )
             else:
                 tail = (proc.stdout or "").strip().splitlines()[-1:] or [""]
-                _log.debug("memory-mirror tick: %s", tail[0][:200])
+                # Log every tick at INFO for observability — one line/min is cheap.
+                _log.info("memory-mirror tick #%d ok: %s", tick_count, tail[0][:200])
         except Exception as exc:
-            _log.warning("memory-mirror tick error: %s", exc)
+            _log.warning("memory-mirror tick #%d error: %s", tick_count, exc)
         time.sleep(interval)
 
 
