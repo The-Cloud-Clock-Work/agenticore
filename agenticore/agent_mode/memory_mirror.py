@@ -271,6 +271,59 @@ def _tick_loop(argv_prefix: list[str], interval: int) -> None:
         time.sleep(interval)
 
 
+def _ensure_origin_main_ref(mirror_dir: str) -> None:
+    """Direct in-process ``git fetch origin main`` on the mirror repo.
+
+    Empirically the first fetch triggered by the sync-now subprocess at cold
+    boot lands its success message in stdout but does NOT actually create the
+    ``refs/remotes/origin/main`` ref. The cause is opaque (likely env
+    ordering around the credential helper in the subprocess spawn path).
+    Doing the fetch inline, in the parent process, reliably creates the ref,
+    and subsequent tick subprocesses then consume normally.
+    """
+    import subprocess as _sp
+
+    if not Path(mirror_dir).joinpath(".git").is_dir():
+        _log.warning("ensure-origin-main: mirror is not a git repo — skipping")
+        return
+    for attempt in range(3):
+        r = _sp.run(
+            [
+                "git",
+                "-C",
+                mirror_dir,
+                "fetch",
+                "--prune",
+                "origin",
+                "refs/heads/main:refs/remotes/origin/main",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        check = _sp.run(
+            ["git", "-C", mirror_dir, "rev-parse", "--verify", "refs/remotes/origin/main"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if check.returncode == 0 and check.stdout.strip():
+            _log.info(
+                "ensure-origin-main: origin/main=%s (attempt %d)",
+                check.stdout.strip()[:12],
+                attempt + 1,
+            )
+            return
+        _log.warning(
+            "ensure-origin-main attempt %d failed: fetch_rc=%d stderr=%s",
+            attempt + 1,
+            r.returncode,
+            (r.stderr or "").strip()[:200],
+        )
+        time.sleep(2)
+    _log.error("ensure-origin-main: FAILED after 3 attempts — consume will no-op until next tick converges")
+
+
 def _seed_own_project_dir() -> None:
     """Pre-create ``~/.claude/projects/<encoded>/memory/`` for this agent's
     own package directory, so the first consume tick has a target to
@@ -354,6 +407,13 @@ def setup_memory_mirror() -> None:
             _log.info("memory-sync install complete")
     except Exception as exc:
         _log.warning("memory-sync install failed: %s", exc)
+
+    # In-process fetch of origin/main — empirically required on cold PVC
+    # because the subprocess fetch doesn't always create the ref on first try.
+    try:
+        _ensure_origin_main_ref("/shared/.agentihooks/memory-mirror")
+    except Exception as exc:
+        _log.warning("ensure-origin-main failed (non-fatal): %s", exc)
 
     _log.info("Memory mirror: running initial sync")
     try:
