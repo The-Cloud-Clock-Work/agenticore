@@ -200,10 +200,16 @@ def _tick_loop(argv_prefix: list[str], interval: int) -> None:
             cwd = Path(candidate)
             break
 
-    _log.info("memory-mirror tick loop entering (interval=%ds, cwd=%s)", interval, cwd)
+    role = _role()
+    _log.info("memory-mirror tick loop entering (interval=%ds, cwd=%s, role=%s)", interval, cwd, role)
     tick_count = 0
+    ok_count = 0
+    fail_count = 0
+    consecutive_failures = 0
+    fail_threshold = max(2, int(os.environ.get("MEMORY_MIRROR_ALERT_AFTER", "3")))
     while True:
         tick_count += 1
+        ok = False
         try:
             proc = _run_sync(argv_prefix, cwd)
             if proc.returncode != 0:
@@ -215,10 +221,37 @@ def _tick_loop(argv_prefix: list[str], interval: int) -> None:
                 )
             else:
                 tail = (proc.stdout or "").strip().splitlines()[-1:] or [""]
-                # Log every tick at INFO for observability — one line/min is cheap.
                 _log.info("memory-mirror tick #%d ok: %s", tick_count, tail[0][:200])
+                ok = True
         except Exception as exc:
             _log.warning("memory-mirror tick #%d error: %s", tick_count, exc)
+
+        if ok:
+            ok_count += 1
+            if consecutive_failures >= fail_threshold:
+                _log.info(
+                    "memory-mirror RECOVERED after %d consecutive failures", consecutive_failures
+                )
+            consecutive_failures = 0
+        else:
+            fail_count += 1
+            consecutive_failures += 1
+            if consecutive_failures == fail_threshold:
+                _log.error(
+                    "memory-mirror DEGRADED: %d consecutive tick failures — "
+                    "check git credentials / remote reachability",
+                    consecutive_failures,
+                )
+        # Structured metric line — grep-able by loki / OTEL log-to-metric rules.
+        # Format: memory_mirror_metric role=<r> ticks=<n> ok=<n> fail=<n> consecutive_failures=<n>
+        _log.info(
+            "memory_mirror_metric role=%s ticks=%d ok=%d fail=%d consecutive_failures=%d",
+            role,
+            tick_count,
+            ok_count,
+            fail_count,
+            consecutive_failures,
+        )
         time.sleep(interval)
 
 
