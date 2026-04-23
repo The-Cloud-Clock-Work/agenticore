@@ -393,23 +393,10 @@ def initialize_agent_mode() -> list[threading.Thread]:
     t_relay.start()
     bg_threads.append(t_relay)
 
-    # Memory mirror — cross-agent auto-memory sync. Self-gates on
-    # MEMORY_MIRROR_ROLE; no-op unless explicitly enabled.
-    from agenticore.agent_mode.memory_mirror import setup_memory_mirror
-
-    def _bg_memory_mirror() -> None:
-        try:
-            setup_memory_mirror()
-        except Exception as e:  # noqa: BLE001
-            _log.warning("Memory mirror setup error (non-fatal, background): %s", e)
-
-    t_mirror = threading.Thread(
-        target=_bg_memory_mirror,
-        name="memory-mirror",
-        daemon=True,
-    )
-    t_mirror.start()
-    bg_threads.append(t_mirror)
+    # Memory mirror is fully owned by agentihooks in v5 — consumer/contributor
+    # pulls fire on UserPromptSubmit / Stop hooks; authority runs the 60s
+    # daemon via the agentihooks sync_daemon. agenticore no longer carries a
+    # memory-mirror bootstrap thread.
 
     # Step 6: Telegram channel (already Popen/detached)
     _log_telegram_status()
