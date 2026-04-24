@@ -305,6 +305,63 @@ def _install_event_relay_hook() -> None:
     _log.info("Event relay hooks wired in settings.json (PostToolUse + Stop + Notification)")
 
 
+def _run_bootstrap_script() -> None:
+    """Run the operator-defined bootstrap script (if any).
+
+    Path comes from ``AGENTICORE_BOOTSTRAP_SCRIPT`` env. Empty/unset → no-op.
+    Non-zero exit is logged but never fatal — agent continues to start.
+
+    Use cases: install agent-specific CLI tools (e.g. ``gh`` for memory-mirror
+    contributor), mint runtime tokens, prime caches, fix up PVC-persisted
+    state that Helm changes don't propagate to automatically.
+
+    Runs after agentihooks init so the script can safely call
+    ``agentihooks`` CLI and import the ``hooks`` package.
+    """
+    script = os.getenv("AGENTICORE_BOOTSTRAP_SCRIPT", "").strip()
+    if not script:
+        _log.debug("No AGENTICORE_BOOTSTRAP_SCRIPT set — skipping")
+        return
+    script_path = Path(script)
+    if not script_path.exists():
+        _log.warning("AGENTICORE_BOOTSTRAP_SCRIPT %s does not exist — skipping", script)
+        return
+    _log.info("Running bootstrap script: %s", script)
+    t0 = time.monotonic()
+    try:
+        if not os.access(script_path, os.X_OK):
+            script_path.chmod(script_path.stat().st_mode | stat.S_IEXEC)
+        result = subprocess.run(
+            ["bash", str(script_path)],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.stdout:
+            for line in result.stdout.strip().splitlines()[-20:]:
+                _log.info("bootstrap: %s", line)
+        if result.returncode != 0:
+            _log.warning(
+                "Bootstrap script exited %d: %s",
+                result.returncode,
+                (result.stderr or "").strip()[:500],
+            )
+        else:
+            _log.info("Bootstrap script OK (%.2fs)", time.monotonic() - t0)
+    except subprocess.TimeoutExpired:
+        _log.warning("Bootstrap script timed out after 180s: %s", script)
+    except Exception as exc:  # pragma: no cover
+        _log.warning("Bootstrap script error: %s", exc)
+
+
+def _bg_run_bootstrap_script() -> None:
+    """Background wrapper for _run_bootstrap_script. Swallows all exceptions."""
+    try:
+        _run_bootstrap_script()
+    except Exception as exc:  # pragma: no cover
+        _log.warning("Bootstrap thread crashed: %s", exc)
+
+
 def _bg_install_event_relay_hook() -> None:
     """Wrapper for background thread — catches all exceptions.
 
@@ -397,6 +454,18 @@ def initialize_agent_mode() -> list[threading.Thread]:
     # pulls fire on UserPromptSubmit / Stop hooks; authority runs the 60s
     # daemon via the agentihooks sync_daemon. agenticore no longer carries a
     # memory-mirror bootstrap thread.
+
+    # Step 5.5: Per-agent bootstrap script. Operator-controlled hook for
+    # installing CLI tools (e.g. gh for contributor memory-mirror), minting
+    # tokens, priming caches, or any other agent-specific prep that
+    # agenticore shouldn't know about. Non-fatal; agent starts regardless.
+    t_bootstrap = threading.Thread(
+        target=_bg_run_bootstrap_script,
+        name="bootstrap-script",
+        daemon=True,
+    )
+    t_bootstrap.start()
+    bg_threads.append(t_bootstrap)
 
     # Step 6: Telegram channel (already Popen/detached)
     _log_telegram_status()
