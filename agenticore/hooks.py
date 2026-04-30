@@ -412,17 +412,13 @@ def sync_agentihooks(url: str = "") -> Optional[Path]:
        on agentihooks itself. Returns the path.
 
     2. ``AGENTICORE_AGENTIHOOKS_URL`` AND ``AGENTICORE_AGENTIHOOKS_BRANCH``
-       both set: agenticore stays out. An external mechanism (sidecar /
-       volume mount / operator-managed clone) is expected to ensure
-       agentihooks is importable. Returns ``None``.
+       both set: clone the repo and ``uv pip install -e <clone>``. The
+       cloned source becomes the active agentihooks. Use this to run a
+       branch / fork (e.g. dev) that isn't on PyPI yet. Returns the
+       clone path.
 
-    3. Default (URL+BRANCH unset): ``uv pip install agentihooks`` from PyPI.
-       Returns ``None``.
-
-    No more clone-and-overlay. The previous overlay path silently produced
-    non-editable installs at PID-1 boot for reasons that defied capture.
-    Either install editable from a known local path, or stay out and let
-    something else handle it, or use PyPI cleanly.
+    3. Default (URL+BRANCH unset): ``uv pip install agentihooks`` from
+       PyPI. Returns ``None``.
     """
     cfg = get_config()
 
@@ -442,16 +438,16 @@ def sync_agentihooks(url: str = "") -> Optional[Path]:
             return path
         logger.warning("AGENTICORE_AGENTIHOOKS_PATH %s does not exist; falling back", path)
 
-    # 2. URL+BRANCH both set → external mechanism owns install; stay out.
+    # 2. URL+BRANCH both set → clone + editable install from the clone.
     resolved_url = url or cfg.agentihooks_url
     branch = cfg.agentihooks_branch
     if resolved_url and branch:
-        logger.info(
-            "agentihooks: URL+BRANCH set (%s @ %s) — external owns install; staying out",
-            resolved_url,
-            branch,
-        )
-        return None
+        dest = _install_dir()
+        _clone_or_fetch(resolved_url, dest, branch)
+        _pip_install_editable(dest)
+        os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(dest)
+        logger.info("agentihooks editable from URL → %s (branch=%s)", dest, branch)
+        return dest
 
     # 3. Default: install from PyPI.
     _pip_install_pypi("agentihooks")
