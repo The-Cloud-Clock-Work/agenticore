@@ -92,6 +92,45 @@ def _install_dir() -> Path:
     return hooks or Path.home() / ".agenticore" / "agentihooks"
 
 
+def _resolve_agentihooks_home(cfg=None) -> str:
+    """Return the AGENTIHOOKS_HOME path for this process.
+
+    Resolution order:
+      1. Explicit AGENTIHOOKS_HOME env var (operator override) — wins.
+      2. Dev mode → ``$HOME/.agentihooks`` (don't pod-namespace local devs).
+      3. K8s with AGENTICORE_SHARED_FS_ROOT set → ``<shared_fs>/.agentihooks-<pod>``.
+         Pod name resolved from AGENTICORE_POD_NAME (Downward API), then
+         HOSTNAME (kubelet sets it to pod name on StatefulSet pods), then
+         the literal "default" as last resort.
+      4. Else → ``$HOME/.agentihooks`` (the agentihooks built-in default).
+    """
+    explicit = os.getenv("AGENTIHOOKS_HOME", "")
+    if explicit:
+        return explicit
+    if cfg is None:
+        cfg = get_config()
+    if cfg.dev_mode:
+        return str(Path.home() / ".agentihooks")
+    shared = cfg.repos.shared_fs_root or os.getenv("AGENTICORE_SHARED_FS_ROOT", "")
+    if shared:
+        pod = cfg.repos.pod_name or os.getenv("HOSTNAME", "") or "default"
+        return f"{shared}/.agentihooks-{pod}"
+    return str(Path.home() / ".agentihooks")
+
+
+def export_agentihooks_home(cfg=None) -> str:
+    """Resolve and export AGENTIHOOKS_HOME into ``os.environ``.
+
+    Idempotent. Subprocesses spawned after this call inherit the variable
+    automatically (every ``subprocess.run`` call site in agenticore omits
+    ``env=`` and relies on parent-env inheritance).
+    """
+    home = _resolve_agentihooks_home(cfg)
+    os.environ["AGENTIHOOKS_HOME"] = home
+    logger.info("AGENTIHOOKS_HOME → %s", home)
+    return home
+
+
 def _clone_or_fetch(url: str, dest: Path, branch: str = "") -> None:
     """Clone or update agentihooks repo, flock/Redis-protected."""
     t0 = time.monotonic()
@@ -324,7 +363,7 @@ def _pip_install_editable(path: Path) -> None:
     """
     logger.info("Overlaying agentihooks with editable install: %s", path)
     result = subprocess.run(
-        ["uv", "pip", "install", "--quiet", "-e", str(path)],
+        ["uv", "pip", "install", "--quiet", "--reinstall", "-e", str(path)],
         check=False,
         capture_output=True,
         text=True,

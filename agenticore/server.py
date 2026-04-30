@@ -1506,6 +1506,14 @@ def main():
 
     cfg = get_config()
 
+    # Export AGENTIHOOKS_HOME into os.environ so every downstream
+    # subprocess.run("agentihooks ...") inherits the per-pod path.
+    # Must happen before the parallel sync block below — sync_agentihooks
+    # may call uv (no agentihooks deps) but _finish_agentihooks_init runs
+    # `agentihooks init` later in lifespan and needs the env var set.
+    from agenticore.hooks import export_agentihooks_home
+    export_agentihooks_home(cfg)
+
     print("Starting Agenticore...", file=sys.stderr)
 
     # ── Phase 1: fire all independent tasks in parallel ──────────────
