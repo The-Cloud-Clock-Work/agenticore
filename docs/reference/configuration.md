@@ -66,7 +66,6 @@ langfuse:
 
 agentihooks_path: ""
 agentihooks_url: ""
-agentihooks_sync_interval: 300
 agentihooks_bundle_url: ""
 agentihooks_bundle_sync_interval: 300
 agentihub_url: ""
@@ -164,7 +163,6 @@ development against a live checkout or a non-PyPI fork/branch.
 | `AGENTICORE_AGENTIHOOKS_PATH` | `agentihooks_path` | (none) | Dev loopback: `uv pip install -e <path>` over the PyPI version. Wins over URL. |
 | `AGENTICORE_AGENTIHOOKS_URL` | `agentihooks_url` | (none) | Bleeding-edge override: clone ONCE at boot, `uv pip install -e`. No periodic re-sync. |
 | `AGENTICORE_AGENTIHOOKS_BRANCH` | `agentihooks_branch` | (empty) | Git ref checked out when URL is set. |
-| `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | `agentihooks_sync_interval` | `300` | **DEPRECATED** — no-op. agentihooks is a versioned pip package; restart the pod to upgrade. |
 | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | `agentihooks_bundle_url` | (none) | Git URL for the bundle content repo. Passed as `--bundle` to `agentihooks init`. |
 | `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | `agentihooks_bundle_sync_interval` | `300` | Bundle hot-reload interval in seconds. `0` disables. |
 | `AGENTIHOOKS_PROFILE` | (env only) | `coding` | Profile name passed to `agentihooks init --profile`. |
@@ -220,7 +218,6 @@ path.
 
 | Repo | Watcher thread | Interval variable | Default |
 |------|---------------|-------------------|---------|
-| agentihooks | (none — PyPI dep, restart to upgrade) | `AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` | deprecated no-op |
 | agentihooks-bundle | `agentihooks-bundle-watcher` | `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | 300s |
 | agentihub | `agentihub-watcher` | `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | 300s |
 

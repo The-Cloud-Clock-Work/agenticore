@@ -147,13 +147,11 @@ class TestLoadConfig:
         assert cfg.repos.jobs_dir == ""
         assert cfg.repos.pod_name == ""
 
-    def test_agentihooks_url_and_sync_interval(self, monkeypatch):
-        """AGENTICORE_AGENTIHOOKS_URL and AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL load from env."""
+    def test_agentihooks_url_loads_from_env(self, monkeypatch):
+        """AGENTICORE_AGENTIHOOKS_URL loads from env."""
         monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_URL", "https://github.com/org/agentihooks")
-        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL", "600")
         cfg = get_config()
         assert cfg.agentihooks_url == "https://github.com/org/agentihooks"
-        assert cfg.agentihooks_sync_interval == 600
 
 
 @pytest.mark.unit

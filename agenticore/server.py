@@ -1297,7 +1297,12 @@ def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optio
         from agenticore.hooks import start_bundle_watcher
 
         start_bundle_watcher(
-            cfg.agentihooks_bundle_url, bundle_path, cfg.agentihooks_bundle_sync_interval, cfg.agentihooks_bundle_branch
+            cfg.agentihooks_bundle_url,
+            bundle_path,
+            cfg.agentihooks_bundle_sync_interval,
+            cfg.agentihooks_bundle_branch,
+            hooks_path=hooks_path,
+            repo_dir=pkg_dir,
         )
 
 

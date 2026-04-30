@@ -78,9 +78,6 @@ container image — **no clone, no watcher.** Pod restart picks up a new release
 a newer PyPI version). Set `AGENTICORE_AGENTIHOOKS_URL` to override with a one-
 shot clone + editable install for bleeding-edge testing; set
 `AGENTICORE_AGENTIHOOKS_PATH` for a dev loopback over a mounted checkout.
-`AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` is retained as a deprecated no-op for
-backwards compatibility.
-
 ### Agentihooks Bundle
 
 The **agentihooks-bundle** repo (`AGENTICORE_AGENTIHOOKS_BUNDLE_URL`) provides
