@@ -639,7 +639,9 @@ def _build_rest_app():
                     pkg_dir = (
                         Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
                     )
-                    run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir)
+                    run_agentihooks_init(
+                        hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir, force=True,
+                    )
                     results["agentihooks"] = "ok"
                 except Exception as e:
                     results["agentihooks"] = f"error: {e}"
@@ -1286,7 +1288,24 @@ def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optio
     from agenticore.hooks import run_agentihooks_init
 
     pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
-    run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path, repo_dir=pkg_dir)
+
+    # --force only when state.json doesn't exist at AGENTIHOOKS_HOME — this
+    # is fresh provisioning (new pod, new per-pod path, or recovered drift).
+    # On normal pod restarts where state.json already exists, init runs
+    # idempotently with no --force so existing profile/state isn't wiped.
+    agentihooks_home = Path(os.environ.get("AGENTIHOOKS_HOME", str(Path.home() / ".agentihooks")))
+    state_json = agentihooks_home / "state.json"
+    is_first_provisioning = not state_json.exists()
+    if is_first_provisioning:
+        logger.info("agentihooks: fresh provisioning (no state.json at %s) — running init --force", state_json)
+    else:
+        logger.info("agentihooks: state.json present at %s — running init (no --force)", state_json)
+    run_agentihooks_init(
+        hooks_path=hooks_path,
+        bundle_path=bundle_path,
+        repo_dir=pkg_dir,
+        force=is_first_provisioning,
+    )
 
     if cfg.dev_mode:
         logger.info("dev mode: agentihooks init complete (no watchers)")

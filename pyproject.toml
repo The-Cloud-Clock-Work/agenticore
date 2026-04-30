@@ -20,7 +20,10 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "agentihooks>=1.8.0",
+    # agentihooks intentionally NOT a build-time dep. Image only ships uv;
+    # agenticore boot installs agentihooks at runtime — either from PyPI
+    # (when AGENTICORE_AGENTIHOOKS_URL+BRANCH are unset) or via volume-mount /
+    # external mechanism (when both are set, agenticore stays out).
     "fastmcp>=2.0",
     "redis>=7.0",
     "uvicorn[standard]>=0.30",
