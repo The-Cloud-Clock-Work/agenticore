@@ -1213,8 +1213,12 @@ def main():
 
     args = parser.parse_args()
     if not args.command:
-        parser.print_help()
-        sys.exit(0)
+        # No subcommand → default to `serve`. Keeps the standard Docker
+        # pattern: image runs the long-lived process by default, ops
+        # verbs (status, run, jobs, ...) are still reachable by passing
+        # the subcommand explicitly via `kubectl exec ... agenticore X`.
+        args.command = "serve"
+        args.func = _cmd_serve
 
     args.func(args)
 

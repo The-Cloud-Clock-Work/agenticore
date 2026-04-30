@@ -53,6 +53,23 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm -rf /tmp/awscliv2.zip /tmp/aws && \
     aws --version
 
+# GitHub CLI — baked dependency for memory-mirror v5 propose_pr Stop hook
+# and any agent role that opens PRs from inside the pod. Installed from
+# the upstream release tarball (matches what agentihub bootstrap.sh used
+# to do at runtime; now baked so bootstrap.sh can be retired).
+RUN GH_VER="2.60.1" && \
+    case "$(uname -m)" in \
+        x86_64) GH_ARCH=amd64 ;; \
+        aarch64) GH_ARCH=arm64 ;; \
+        *) echo "unsupported arch for gh: $(uname -m)"; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_${GH_ARCH}.tar.gz" -o /tmp/gh.tgz && \
+    tar -C /tmp -xzf /tmp/gh.tgz && \
+    cp "/tmp/gh_${GH_VER}_linux_${GH_ARCH}/bin/gh" /usr/local/bin/gh && \
+    chmod +x /usr/local/bin/gh && \
+    rm -rf /tmp/gh.tgz "/tmp/gh_${GH_VER}_linux_${GH_ARCH}" && \
+    gh --version | head -1
+
 # Bun (required by Claude Code channel plugins: Telegram, Discord, etc.)
 RUN curl -fsSL https://bun.sh/install | bash && \
     cp --dereference /root/.bun/bin/bun /usr/local/bin/bun
@@ -116,4 +133,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf http://localhost:8200/health || exit 1
 
 ENTRYPOINT ["tini", "--"]
-CMD ["python", "-m", "agenticore", "serve"]
+CMD ["agenticore"]
