@@ -85,9 +85,6 @@ clone + editable install (bleeding-edge fork/branch), or set
 PATH wins over URL. There is no periodic re-sync — restart the pod to pick up
 a newer PyPI release (bump the floor in agenticore's `pyproject.toml`, or
 rebuild the image to pull the latest resolved version).
-`AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL` is retained as a deprecated no-op for
-backwards compatibility.
-
 ---
 
 ## Prerequisites

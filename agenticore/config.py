@@ -136,9 +136,6 @@ class Config:
     agentihooks_url: str = ""
     agentihooks_bundle_url: str = ""
     agentihooks_bundle_path: str = ""  # AGENTICORE_AGENTIHOOKS_BUNDLE_PATH — dev mode mount
-    agentihooks_sync_interval: int = (
-        300  # DEPRECATED — no-op (agentihooks is a PyPI dep, restart to upgrade). Kept for YAML/env backwards compat.
-    )
     agentihooks_bundle_sync_interval: int = 300
     agentihub_url: str = ""
     agentihub_path: str = ""
@@ -345,9 +342,6 @@ def load_config(config_path: Optional[str] = None) -> Config:
     agentihooks_url = _env("AGENTICORE_AGENTIHOOKS_URL", raw.get("agentihooks_url", ""))
     agentihooks_bundle_url = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", raw.get("agentihooks_bundle_url", ""))
     agentihooks_bundle_path = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_PATH", raw.get("agentihooks_bundle_path", ""))
-    agentihooks_sync_interval = _env_int(
-        "AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL", str(raw.get("agentihooks_sync_interval", 300))
-    )
     agentihub_url = _env("AGENTICORE_AGENTIHUB_URL", raw.get("agentihub_url", ""))
     agentihub_path = _env("AGENTICORE_AGENTIHUB_PATH", raw.get("agentihub_path", ""))
     agentihooks_bundle_sync_interval = _env_int(
@@ -376,7 +370,6 @@ def load_config(config_path: Optional[str] = None) -> Config:
         agentihooks_url=agentihooks_url,
         agentihooks_bundle_url=agentihooks_bundle_url,
         agentihooks_bundle_path=agentihooks_bundle_path,
-        agentihooks_sync_interval=agentihooks_sync_interval,
         agentihooks_bundle_sync_interval=agentihooks_bundle_sync_interval,
         agentihub_url=agentihub_url,
         agentihub_path=agentihub_path,

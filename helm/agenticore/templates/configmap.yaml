@@ -27,7 +27,6 @@ data:
   {{- if .Values.agentihooks.path }}
   AGENTICORE_AGENTIHOOKS_PATH: {{ .Values.agentihooks.path | quote }}
   {{- end }}
-  AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL: {{ .Values.agentihooks.syncInterval | quote }}
   {{- if .Values.agentihooks.bundleUrl }}
   AGENTICORE_AGENTIHOOKS_BUNDLE_URL: {{ .Values.agentihooks.bundleUrl | quote }}
   {{- end }}

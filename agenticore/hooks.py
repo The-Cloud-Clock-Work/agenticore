@@ -129,8 +129,17 @@ def _clone_or_fetch(url: str, dest: Path, branch: str = "") -> None:
     logger.info("_clone_or_fetch agentihooks done in %.2fs", time.monotonic() - t0)
 
 
-def start_bundle_watcher(url: str, dest: Path, interval: int, branch: str = "") -> Optional[threading.Thread]:
-    """Daemon thread that periodically re-fetches the agentihooks bundle repo."""
+def start_bundle_watcher(
+    url: str,
+    dest: Path,
+    interval: int,
+    branch: str = "",
+    hooks_path: Optional[Path] = None,
+    repo_dir: Optional[Path] = None,
+) -> Optional[threading.Thread]:
+    """Daemon thread that periodically re-fetches the agentihooks bundle repo
+    and re-runs ``agentihooks init`` so updated rules/skills/settings.json
+    propagate to the live pod's ``~/.claude/`` without a restart."""
     if get_config().dev_mode:
         logger.info("dev mode: skipping bundle watcher")
         return None
@@ -150,6 +159,14 @@ def start_bundle_watcher(url: str, dest: Path, interval: int, branch: str = "") 
             except Exception as exc:
                 logger.warning("agentihooks-bundle hot-reload failed: %s", exc)
                 mgmt.warning("hot-reload agentihooks-bundle FAIL: %s", exc)
+                continue
+            try:
+                run_agentihooks_init(hooks_path=hooks_path, bundle_path=dest, repo_dir=repo_dir)
+                logger.info("agentihooks-bundle init re-applied (%s)", dest)
+                mgmt.info("hot-reload agentihooks-bundle init OK")
+            except Exception as exc:
+                logger.warning("agentihooks-bundle init re-apply failed: %s", exc)
+                mgmt.warning("hot-reload agentihooks-bundle init FAIL: %s", exc)
 
     t = threading.Thread(target=_watch, name="agentihooks-bundle-watcher", daemon=True)
     t.start()

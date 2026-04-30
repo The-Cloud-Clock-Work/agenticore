@@ -116,8 +116,6 @@ spec:
             {{- if ((.Values.agentihooks).url) }}
             - name: AGENTICORE_AGENTIHOOKS_URL
               value: {{ .Values.agentihooks.url | quote }}
-            - name: AGENTICORE_AGENTIHOOKS_SYNC_INTERVAL
-              value: {{ .Values.agentihooks.syncInterval | default 300 | quote }}
             {{- end }}
             {{- if ((.Values.agentihooks).path) }}
             - name: AGENTICORE_AGENTIHOOKS_PATH

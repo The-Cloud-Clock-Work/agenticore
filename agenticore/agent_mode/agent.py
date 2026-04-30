@@ -83,24 +83,37 @@ def build_claude_cmd(
     # System prompt resolution
     use_append = append_system_prompt if append_system_prompt is not None else am.append_system_prompt
 
-    if system_prompt:
-        # Explicit inline override — always replaces
-        cmd.extend(["--system-prompt", system_prompt])
-    else:
-        # Check for system.md in package dir
-        system_md_path = Path(am.package_dir) / "system.md"
-        if system_md_path.exists():
-            if use_append:
-                cmd.extend(["--append-system-prompt-file", str(system_md_path)])
-            else:
-                cmd.extend(["--system-prompt-file", str(system_md_path)])
-
-    # Inject auto-discovered capabilities
     from agenticore.capabilities import render_capabilities_prompt
 
     caps_prompt = render_capabilities_prompt()
-    if caps_prompt:
-        cmd.extend(["--append-system-prompt", caps_prompt])
+
+    if system_prompt:
+        # Explicit inline override — always replaces
+        cmd.extend(["--system-prompt", system_prompt])
+        if caps_prompt:
+            cmd.extend(["--append-system-prompt", caps_prompt])
+    else:
+        # Merge package system.md + capabilities into a single prompt payload.
+        # Claude CLI >=2.1 rejects passing both --append-system-prompt and
+        # --append-system-prompt-file in the same invocation, so we collapse
+        # them into one string before emitting the flag.
+        system_md_path = Path(am.package_dir) / "system.md"
+        file_prompt = ""
+        if system_md_path.exists():
+            try:
+                file_prompt = system_md_path.read_text().strip()
+            except Exception as e:
+                _log.warning("Failed to read system.md at %s: %s", system_md_path, e)
+
+        if use_append:
+            merged = "\n\n".join(p for p in (file_prompt, caps_prompt) if p)
+            if merged:
+                cmd.extend(["--append-system-prompt", merged])
+        else:
+            if file_prompt:
+                cmd.extend(["--system-prompt-file", str(system_md_path)])
+            if caps_prompt:
+                cmd.extend(["--append-system-prompt", caps_prompt])
 
     # Optional flags
     resolved_effort = effort or am.effort
@@ -497,6 +510,16 @@ class AgentExecutor:
             result["is_error"] = True
             if not result["result"]:
                 result["result"] = error_text or f"Claude exited with code {proc.returncode}"
+
+        # Surface a concrete error message so HTTP callers (and LibreChat) see
+        # the real failure instead of a generic "Agent error". digest_claude_output
+        # writes subprocess failures into result["result"]; the actual stderr
+        # from the CLI is in error_text. Prefer stderr when it has content,
+        # otherwise fall back to the result text.
+        if result["is_error"] and not result.get("error"):
+            stderr_trim = (error_text or "").strip()
+            result_trim = (result.get("result") or "").strip()
+            result["error"] = stderr_trim or result_trim or f"Claude exited with code {proc.returncode}"
 
         # Terminal-signal fallback: connectors must always see an on_final
         # (or on_error) per turn. OnceSink de-dupes if the Redis tailer
