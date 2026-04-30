@@ -1289,17 +1289,27 @@ def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optio
 
     pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
 
-    # Boot init is always --force. Pod boot is the provisioning event —
-    # one clean baseline per pod lifecycle. After this single call, the
-    # bundle watcher does periodic re-init without --force to pick up
-    # bundle changes idempotently.
-    logger.info("agentihooks: boot init — running with --force (one clean baseline per pod)")
+    # Boot init is split in two: agentihooks `init --force --repo X` routes
+    # into the per-repo branch in cmd_init_unified and returns before
+    # install_global ever runs, leaving state.json with no
+    # targets.global.profile (so `agentihooks --query` prints "not
+    # installed"). Run --force WITHOUT --repo first to populate the global
+    # target with the default profile, then layer per-repo wiring on top.
+    logger.info("agentihooks: boot init — global install with --force (clean baseline)")
     run_agentihooks_init(
         hooks_path=hooks_path,
         bundle_path=bundle_path,
-        repo_dir=pkg_dir,
+        repo_dir=None,
         force=True,
     )
+    if pkg_dir:
+        logger.info("agentihooks: boot init — per-repo wiring (%s)", pkg_dir)
+        run_agentihooks_init(
+            hooks_path=hooks_path,
+            bundle_path=bundle_path,
+            repo_dir=pkg_dir,
+            force=False,
+        )
 
     if cfg.dev_mode:
         logger.info("dev mode: agentihooks init complete (no watchers)")
