@@ -1514,8 +1514,19 @@ def main():
     """
     t0 = time.monotonic()
 
-    # Auto-reap orphaned child processes (zombie prevention when running as PID 1)
-    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+    # SIGCHLD handling intentionally left as default. Previously this set
+    # signal.SIG_IGN for "auto-reap orphans as PID 1", but SIG_IGN makes
+    # the kernel reap children BEFORE the parent's wait() — which is what
+    # subprocess.run does internally. Result: subprocess.run sees ECHILD
+    # ("No child process") and the wrapped tool (uv, git, agentihooks)
+    # silently fails. Empirically: `uv pip install -e` crashed at boot
+    # with "Failed to inspect ... No child process (os error 10)".
+    #
+    # A custom WNOHANG reaper would race with subprocess.run for the same
+    # PID. Default behavior (kernel makes zombies, parent wait()s) is
+    # correct for our subprocess pattern. If genuine orphan zombie
+    # buildup becomes an issue, fix it at the entrypoint level (tini or
+    # equivalent reaper), not here.
 
     cfg = get_config()
 
