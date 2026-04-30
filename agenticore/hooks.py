@@ -478,7 +478,7 @@ def run_agentihooks_init(
             for line in (link_result.stdout or "").strip().splitlines():
                 logger.info("agentihooks: %s", line)
 
-    cmd = ["agentihooks", "init"]
+    cmd = ["agentihooks", "init", "--force"]
     if profile:
         cmd.extend(["--profile", profile])
     if bundle_path and bundle_path.exists():
@@ -572,7 +572,7 @@ def render_mcp_whitelist(repo_dir: Path, disable_servers: Optional[list] = None)
 
     try:
         profile = get_config().agentihooks_profile
-        cmd = ["agentihooks", "init", "--repo", str(repo_dir)]
+        cmd = ["agentihooks", "init", "--force", "--repo", str(repo_dir)]
         if profile:
             cmd.extend(["--profile", profile])
 
