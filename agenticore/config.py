@@ -131,7 +131,7 @@ class Config:
     langfuse: LangfuseConfig = field(default_factory=LangfuseConfig)
     agent_mode: AgentModeConfig = field(default_factory=AgentModeConfig)
     agentibridge: AgentiBridgeConfig = field(default_factory=AgentiBridgeConfig)
-    agentihooks_profile: str = "coding"  # AGENTIHOOKS_PROFILE — active profile for this agent
+    agentihooks_profile: str = ""  # AGENTIHOOKS_PROFILE — active profile; empty = let agentihooks pick its default
     agentihooks_path: str = ""
     agentihooks_url: str = ""
     agentihooks_bundle_url: str = ""
@@ -337,7 +337,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
         agent_id=_env("AGENTIBRIDGE_AGENT_ID", agentibridge_raw.get("agent_id", "")),
     )
 
-    agentihooks_profile = _env("AGENTIHOOKS_PROFILE", raw.get("agentihooks_profile", "coding"))
+    agentihooks_profile = _env("AGENTIHOOKS_PROFILE", raw.get("agentihooks_profile", ""))
     agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
     agentihooks_url = _env("AGENTICORE_AGENTIHOOKS_URL", raw.get("agentihooks_url", ""))
     agentihooks_bundle_url = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", raw.get("agentihooks_bundle_url", ""))

@@ -478,7 +478,9 @@ def run_agentihooks_init(
             for line in (link_result.stdout or "").strip().splitlines():
                 logger.info("agentihooks: %s", line)
 
-    cmd = ["agentihooks", "init", "--profile", profile]
+    cmd = ["agentihooks", "init"]
+    if profile:
+        cmd.extend(["--profile", profile])
     if bundle_path and bundle_path.exists():
         cmd.extend(["--bundle", str(bundle_path)])
     if repo_dir and repo_dir.exists():
@@ -523,7 +525,7 @@ def run_agentihooks_init(
     logger.info(
         "agentihooks init complete in %.2fs (profile=%s, bundle=%s, repo=%s)",
         time.monotonic() - t0,
-        profile,
+        profile or "(agentihooks default)",
         bundle_path,
         repo_dir,
     )
@@ -570,7 +572,9 @@ def render_mcp_whitelist(repo_dir: Path, disable_servers: Optional[list] = None)
 
     try:
         profile = get_config().agentihooks_profile
-        cmd = ["agentihooks", "init", "--repo", str(repo_dir), "--profile", profile]
+        cmd = ["agentihooks", "init", "--repo", str(repo_dir)]
+        if profile:
+            cmd.extend(["--profile", profile])
 
         logger.info("Pre-call MCP render: %s", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)

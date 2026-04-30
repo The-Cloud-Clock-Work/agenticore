@@ -282,7 +282,7 @@ async def execute_plan(
     Args:
         plan_id: Plan ID returned by plan_task
         repo_url: Override repo URL (defaults to the one used when planning)
-        profile: Execution profile (default: coding)
+        profile: Execution profile (default: empty — agentihooks picks its built-in default)
         wait: Block until execution completes
         file_path: Path to a .mcp.json on the shared FS to inject into the execution job config (optional)
 
