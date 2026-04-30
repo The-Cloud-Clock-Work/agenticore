@@ -362,12 +362,19 @@ def _pip_install_editable(path: Path) -> None:
     version stays active if the overlay fails.
     """
     logger.info("Overlaying agentihooks with editable install: %s", path)
+    # Pin the target venv explicitly. Without --python, uv auto-detects via
+    # VIRTUAL_ENV/cwd and at PID-1 boot has been observed to silently install
+    # to a different/non-editable location while still returning exit 0.
+    venv_python = os.environ.get("AGENTICORE_VENV_PYTHON", "/opt/venv/bin/python")
     result = subprocess.run(
-        ["uv", "pip", "install", "--quiet", "--reinstall", "-e", str(path)],
+        ["uv", "pip", "install", "--python", venv_python, "--reinstall", "-e", str(path)],
         check=False,
         capture_output=True,
         text=True,
     )
+    if result.stdout:
+        for line in result.stdout.strip().splitlines():
+            logger.info("uv: %s", line)
     if result.returncode != 0:
         logger.warning(
             "uv pip install -e %s failed (exit %d): %s",
