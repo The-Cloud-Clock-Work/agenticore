@@ -1540,13 +1540,12 @@ def main():
 
     cfg = get_config()
 
-    # Export AGENTIHOOKS_HOME into os.environ so every downstream
-    # subprocess.run("agentihooks ...") inherits the per-pod path.
-    # Must happen before the parallel sync block below — sync_agentihooks
-    # may call uv (no agentihooks deps) but _finish_agentihooks_init runs
-    # `agentihooks init` later in lifespan and needs the env var set.
-    from agenticore.hooks import export_agentihooks_home
-    export_agentihooks_home(cfg)
+    # AGENTIHOOKS_HOME comes from PodSpec or the agentihooks library default
+    # ($HOME/.agentihooks). Agenticore does not resolve or export it — the
+    # earlier `_resolve_agentihooks_home` helper auto-namespaced even when the
+    # operator wanted the lib default, which created a path mismatch between
+    # the python process and exec-shell agentihooks CLI. Single source of
+    # truth now: the chart sets the var explicitly, or it defaults.
 
     print("Starting Agenticore...", file=sys.stderr)
 
