@@ -473,6 +473,7 @@ def initialize_agent_mode() -> list[threading.Thread]:
     _log.info("=== Agent Mode Ready (%.2fs) ===", time.monotonic() - t0)
     _log.info("  Package dir: %s", am.package_dir)
     from agenticore.agent_mode.agent import _active_profile_claude
+
     pc = _active_profile_claude()
     _log.info("  Default model: %s (from profile)", pc.model)
     _log.info("  Max turns: %d (from profile)", pc.max_turns)

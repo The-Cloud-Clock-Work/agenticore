@@ -43,14 +43,14 @@ def _build_registry() -> list[Capability]:
     )
 
     from agenticore.agent_mode.agent import _active_profile_claude
+
     _pc = _active_profile_claude()
     caps.append(
         Capability(
             name="agent_mode",
             enabled=cfg.agent_mode.enabled,
             description=(
-                f"Running in AGENT_MODE as a persistent AI agent. "
-                f"Model: {_pc.model}. Max turns: {_pc.max_turns}."
+                f"Running in AGENT_MODE as a persistent AI agent. Model: {_pc.model}. Max turns: {_pc.max_turns}."
             ),
         )
     )
