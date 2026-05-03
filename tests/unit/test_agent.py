@@ -99,13 +99,19 @@ class TestBuildClaudeCmd:
 
     @patch.dict(os.environ, _BASE_ENV)
     def test_system_md_append_mode(self, tmp_path):
+        """Append mode merges system.md content into a single --append-system-prompt
+        flag (Claude CLI >=2.1 rejects passing both --append-system-prompt
+        and --append-system-prompt-file in the same invocation)."""
         pkg_dir = tmp_path / "pkg"
         pkg_dir.mkdir()
         (pkg_dir / "system.md").write_text("Be helpful.")
         with patch.dict(os.environ, {"AGENT_MODE_PACKAGE_DIR": str(pkg_dir)}):
             reset_config()
             cmd = build_claude_cmd("task", append_system_prompt=True)
-            assert "--append-system-prompt-file" in cmd
+            assert "--append-system-prompt" in cmd
+            assert "--append-system-prompt-file" not in cmd
+            idx = cmd.index("--append-system-prompt")
+            assert "Be helpful." in cmd[idx + 1]
 
     @patch.dict(os.environ, _BASE_ENV)
     def test_system_md_replace_mode(self, tmp_path):
