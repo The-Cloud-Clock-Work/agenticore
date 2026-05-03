@@ -26,6 +26,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from agenticore.config import get_config
+from agenticore.agent_mode.agent import _active_profile_claude
 
 logger = logging.getLogger(__name__)
 
@@ -612,7 +613,8 @@ def _build_rest_app():
         if cfg.agent_mode.enabled:
             info["agent_mode"] = True
             info["package_dir"] = cfg.agent_mode.package_dir
-            info["default_model"] = cfg.agent_mode.model
+            from agenticore.agent_mode.agent import _active_profile_claude
+            info["default_model"] = _active_profile_claude().model
         return JSONResponse(info)
 
     def _do_sync(target: str) -> dict:
@@ -1059,7 +1061,7 @@ def _build_rest_app():
                     "object": "list",
                     "data": [
                         {
-                            "id": cfg.agent_mode.model or "agenticore-agent",
+                            "id": _active_profile_claude().model or "agenticore-agent",
                             "object": "model",
                             "created": 0,
                             "owned_by": "agenticore",

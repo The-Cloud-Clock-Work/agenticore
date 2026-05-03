@@ -251,7 +251,7 @@ def _build_job_cmd(cfg, profile, job, base_ref, cwd):
     cli_profile = copy.deepcopy(profile)
     cli_profile.claude.worktree = False
     cli_args = build_cli_args(cli_profile, job.task, variables)
-    cmd = [cfg.claude.binary] + cli_args
+    cmd = ["claude"] + cli_args
     if job.session_id:
         cmd.extend(["--resume", job.session_id])
     env = _build_env(cwd)
@@ -462,7 +462,7 @@ async def _execute_claude(job, cmd, cwd, env, profile, cfg, rdir=None):
         )
     except FileNotFoundError as exc:
         cwd_exists = Path(cwd).exists() if cwd else "N/A"
-        binary_found = shutil.which(cfg.claude.binary)
+        binary_found = shutil.which("claude")
         return update_job(
             job.id,
             status="failed",
@@ -514,7 +514,7 @@ def _build_plan_cmd(cfg, job):
     """Build CLI command for a planning job — read-only, text output."""
     prompt = _PLAN_PROMPT_TEMPLATE.format(task=job.task)
     cmd = [
-        cfg.claude.binary,
+        "claude",
         "--output-format",
         "text",
         "--max-turns",
@@ -572,7 +572,7 @@ async def _run_plan_job(job: Job, plan) -> Job:
         return update_job(job.id, status="failed", error="Planning timeout", exit_code=-1, ended_at=_now_iso())
     except FileNotFoundError as exc:
         cwd_exists = Path(cwd).exists() if cwd else "N/A"
-        binary_found = shutil.which(cfg.claude.binary)
+        binary_found = shutil.which("claude")
         update_plan(plan.id, status="failed")
         return update_job(
             job.id,
