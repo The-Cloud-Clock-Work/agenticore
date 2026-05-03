@@ -9,9 +9,11 @@ import pytest
 
 from agenticore.agent_mode.agent import (
     AgentExecutor,
+    _active_profile_claude,
     _load_system_prompt,
     build_claude_cmd,
     digest_claude_output,
+    reset_profile_claude_cache,
     reset_system_prompt_cache,
 )
 from agenticore.config import reset_config
@@ -21,9 +23,11 @@ from agenticore.config import reset_config
 def _reset():
     reset_config()
     reset_system_prompt_cache()
+    reset_profile_claude_cache()
     yield
     reset_config()
     reset_system_prompt_cache()
+    reset_profile_claude_cache()
 
 
 _BASE_ENV = {
@@ -1069,3 +1073,189 @@ class TestExecuteStreamingParser:
         merged = "".join(chunks)
         assert "secret thought" not in merged
         assert "visible answer" in merged
+
+
+# ── _active_profile_claude / profile-driven build_claude_cmd ─────────────────
+
+
+@pytest.mark.unit
+class TestActiveProfileClaude:
+    """Profile resolver replaces the old AGENT_MODE_* env var pathway."""
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": ""})
+    def test_no_profile_env_returns_default_profile_claude(self):
+        """No AGENTIHOOKS_PROFILE → fallback to default ProfileClaude."""
+        from agenticore.profiles import ProfileClaude
+
+        pc = _active_profile_claude()
+        assert isinstance(pc, ProfileClaude)
+        assert pc.model == "sonnet"  # ProfileClaude default
+        assert pc.permission_mode == "bypassPermissions"
+        assert pc.output_format == "json"
+        assert pc.max_turns == 80
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "definitely-not-a-real-profile"})
+    def test_unresolvable_profile_falls_back_to_default(self):
+        """Unknown profile name → still returns a default ProfileClaude (never None)."""
+        from agenticore.profiles import ProfileClaude
+
+        pc = _active_profile_claude()
+        assert isinstance(pc, ProfileClaude)
+        assert pc.model == "sonnet"
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "test-profile"})
+    @patch("agenticore.agent_mode.agent.get_profile") if False else lambda f: f  # placeholder, real patch below
+    def test_resolved_profile_returns_its_claude(self):
+        """When the profile loads, return profile.claude unchanged."""
+        from agenticore.profiles import Profile, ProfileClaude
+
+        custom = Profile(
+            name="test-profile",
+            claude=ProfileClaude(
+                model="opus",
+                permission_mode="acceptEdits",
+                output_format="stream-json",
+                effort="high",
+                max_turns=42,
+            ),
+        )
+        with patch("agenticore.agent_mode.agent.get_profile", return_value=custom):
+            pc = _active_profile_claude()
+        assert pc.model == "opus"
+        assert pc.permission_mode == "acceptEdits"
+        assert pc.output_format == "stream-json"
+        assert pc.effort == "high"
+        assert pc.max_turns == 42
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "test-profile"})
+    def test_result_is_cached(self):
+        """_active_profile_claude caches across calls until reset_profile_claude_cache."""
+        with patch("agenticore.agent_mode.agent.get_profile") as mock_gp:
+            from agenticore.profiles import Profile, ProfileClaude
+
+            mock_gp.return_value = Profile(name="test-profile", claude=ProfileClaude(model="opus"))
+            first = _active_profile_claude()
+            second = _active_profile_claude()
+            third = _active_profile_claude()
+        assert first is second is third
+        assert mock_gp.call_count == 1  # only the first call hits the loader
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "test-profile"})
+    def test_reset_clears_cache(self):
+        """reset_profile_claude_cache forces re-resolution on the next call."""
+        from agenticore.profiles import Profile, ProfileClaude
+
+        with patch("agenticore.agent_mode.agent.get_profile") as mock_gp:
+            mock_gp.return_value = Profile(name="test-profile", claude=ProfileClaude(model="opus"))
+            _active_profile_claude()
+            reset_profile_claude_cache()
+            _active_profile_claude()
+        assert mock_gp.call_count == 2
+
+
+@pytest.mark.unit
+class TestBuildClaudeCmdProfileDriven:
+    """build_claude_cmd reads CLI flag values from the active profile."""
+
+    def _patch_profile(self, **claude_kwargs):
+        """Helper: returns a context manager that makes get_profile return a custom Profile."""
+        from agenticore.profiles import Profile, ProfileClaude
+
+        prof = Profile(name="custom", claude=ProfileClaude(**claude_kwargs))
+        return patch("agenticore.agent_mode.agent.get_profile", return_value=prof)
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
+    def test_model_from_profile(self):
+        with self._patch_profile(model="opus"):
+            cmd = build_claude_cmd("task")
+        assert "--model" in cmd
+        assert "opus" in cmd
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
+    def test_permission_mode_from_profile(self):
+        with self._patch_profile(permission_mode="acceptEdits"):
+            cmd = build_claude_cmd("task")
+        i = cmd.index("--permission-mode")
+        assert cmd[i + 1] == "acceptEdits"
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
+    def test_output_format_from_profile(self):
+        with self._patch_profile(output_format="stream-json"):
+            cmd = build_claude_cmd("task")
+        i = cmd.index("--output-format")
+        assert cmd[i + 1] == "stream-json"
+        # stream-json branch should add --verbose + --include-partial-messages
+        assert "--verbose" in cmd
+        assert "--include-partial-messages" in cmd
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
+    def test_effort_from_profile(self):
+        with self._patch_profile(effort="high"):
+            cmd = build_claude_cmd("task")
+        i = cmd.index("--effort")
+        assert cmd[i + 1] == "high"
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
+    def test_max_turns_from_profile(self):
+        with self._patch_profile(max_turns=42):
+            cmd = build_claude_cmd("task")
+        i = cmd.index("--max-turns")
+        assert cmd[i + 1] == "42"
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
+    def test_per_request_overrides_profile(self):
+        """Per-request kwargs still win over the profile's defaults."""
+        with self._patch_profile(model="opus", effort="low", max_turns=10):
+            cmd = build_claude_cmd(
+                "task",
+                model="haiku",
+                effort="high",
+                max_turns=99,
+                permission_mode="default",
+                output_format="json",
+            )
+        assert "haiku" in cmd
+        assert cmd[cmd.index("--effort") + 1] == "high"
+        assert cmd[cmd.index("--max-turns") + 1] == "99"
+        assert cmd[cmd.index("--permission-mode") + 1] == "default"
+        assert cmd[cmd.index("--output-format") + 1] == "json"
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": ""})
+    def test_no_profile_uses_profile_claude_defaults(self):
+        """No AGENTIHOOKS_PROFILE → ProfileClaude() defaults still produce valid CLI."""
+        cmd = build_claude_cmd("task")
+        assert "claude" in cmd
+        assert cmd[cmd.index("--model") + 1] == "sonnet"
+        assert cmd[cmd.index("--permission-mode") + 1] == "bypassPermissions"
+        assert cmd[cmd.index("--output-format") + 1] == "json"
+        # ProfileClaude.effort defaults to None → no --effort flag
+        assert "--effort" not in cmd
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
+    def test_legacy_agent_mode_env_vars_no_longer_drive_cmd(self):
+        """The deleted AGENT_MODE_* env vars must NOT influence build_claude_cmd."""
+        # Set legacy env vars that previously shaped the command
+        with patch.dict(
+            os.environ,
+            {
+                "AGENT_MODE_MODEL": "haiku",
+                "AGENT_MODE_PERMISSION_MODE": "plan",
+                "AGENT_MODE_OUTPUT_FORMAT": "stream-json",
+                "AGENT_MODE_EFFORT": "high",
+                "AGENT_MODE_MAX_TURNS": "999",
+            },
+        ):
+            with self._patch_profile(model="opus", permission_mode="acceptEdits"):
+                cmd = build_claude_cmd("task")
+        # Profile values, not env values
+        assert "opus" in cmd and "haiku" not in cmd
+        assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
+        # max_turns = ProfileClaude default 80, not 999
+        assert cmd[cmd.index("--max-turns") + 1] == "80"
+
+    @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
+    def test_binary_is_literal_claude_not_configurable(self):
+        """cfg.claude.binary was removed — command starts with literal 'claude'."""
+        with self._patch_profile():
+            cmd = build_claude_cmd("task")
+        assert cmd[0] == "claude"
