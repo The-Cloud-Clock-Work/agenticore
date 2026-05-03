@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from agenticore.config import get_config
+from agenticore.profiles import ProfileClaude, get_profile
 
 _log = logging.getLogger(__name__)
 
@@ -41,11 +42,11 @@ def _load_system_prompt(package_dir: str) -> Optional[str]:
 # ── Active profile resolution (agentihooks profile owns CLI behavior) ─────
 
 
-_cached_profile_claude: "Optional['ProfileClaude']" = None
+_cached_profile_claude: Optional[ProfileClaude] = None
 _profile_claude_loaded = False
 
 
-def _active_profile_claude() -> "ProfileClaude":
+def _active_profile_claude() -> ProfileClaude:
     """Return the ProfileClaude config from the active agentihooks profile.
 
     Resolution: AGENTIHOOKS_PROFILE → ``get_profile()``. If unset or the
@@ -57,8 +58,6 @@ def _active_profile_claude() -> "ProfileClaude":
     global _cached_profile_claude, _profile_claude_loaded
     if _profile_claude_loaded:
         return _cached_profile_claude  # type: ignore[return-value]
-    from agenticore.profiles import ProfileClaude, get_profile
-
     name = os.getenv("AGENTIHOOKS_PROFILE", "").strip()
     pc: Optional[ProfileClaude] = None
     if name:
