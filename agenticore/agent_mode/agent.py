@@ -37,6 +37,48 @@ def _load_system_prompt(package_dir: str) -> Optional[str]:
     return _cached_system_prompt
 
 
+
+# ── Active profile resolution (agentihooks profile owns CLI behavior) ─────
+
+
+_cached_profile_claude: "Optional['ProfileClaude']" = None
+_profile_claude_loaded = False
+
+
+def _active_profile_claude() -> "ProfileClaude":
+    """Return the ProfileClaude config from the active agentihooks profile.
+
+    Resolution: AGENTIHOOKS_PROFILE → ``get_profile()``. If unset or the
+    profile cannot be loaded, returns a default ``ProfileClaude()`` instance
+    so callers always get a valid object.
+
+    Cached for the lifetime of the process.
+    """
+    global _cached_profile_claude, _profile_claude_loaded
+    if _profile_claude_loaded:
+        return _cached_profile_claude  # type: ignore[return-value]
+    from agenticore.profiles import ProfileClaude, get_profile
+
+    name = os.getenv("AGENTIHOOKS_PROFILE", "").strip()
+    pc: Optional[ProfileClaude] = None
+    if name:
+        prof = get_profile(name)
+        if prof is not None:
+            pc = prof.claude
+    if pc is None:
+        pc = ProfileClaude()
+    _cached_profile_claude = pc
+    _profile_claude_loaded = True
+    return pc
+
+
+def reset_profile_claude_cache() -> None:
+    """Reset the cached ProfileClaude (for testing)."""
+    global _cached_profile_claude, _profile_claude_loaded
+    _cached_profile_claude = None
+    _profile_claude_loaded = False
+
+
 def reset_system_prompt_cache() -> None:
     """Reset the cached system prompt (for testing)."""
     global _cached_system_prompt, _system_prompt_loaded
@@ -69,16 +111,17 @@ def build_claude_cmd(
     """
     cfg = get_config()
     am = cfg.agent_mode
+    pc = _active_profile_claude()
 
-    cmd = [cfg.claude.binary, "-p"]
-    resolved_fmt = output_format or am.output_format
+    cmd = ["claude", "-p"]
+    resolved_fmt = output_format or pc.output_format
     cmd.extend(["--output-format", resolved_fmt])
     if resolved_fmt == "stream-json":
         cmd.append("--verbose")
         cmd.append("--include-partial-messages")
-    cmd.extend(["--model", model or am.model])
-    cmd.extend(["--max-turns", str(max_turns or am.max_turns)])
-    cmd.extend(["--permission-mode", permission_mode or am.permission_mode])
+    cmd.extend(["--model", model or pc.model])
+    cmd.extend(["--max-turns", str(max_turns or pc.max_turns)])
+    cmd.extend(["--permission-mode", permission_mode or pc.permission_mode])
 
     # System prompt resolution
     use_append = append_system_prompt if append_system_prompt is not None else am.append_system_prompt
@@ -116,7 +159,7 @@ def build_claude_cmd(
                 cmd.extend(["--append-system-prompt", caps_prompt])
 
     # Optional flags
-    resolved_effort = effort or am.effort
+    resolved_effort = effort or (pc.effort or "")
     if resolved_effort:
         cmd.extend(["--effort", resolved_effort])
     if max_budget_usd > 0:
@@ -653,7 +696,7 @@ class AgentExecutor:
 
         resolved_timeout = timeout or am.timeout
         rid = request_uuid or external_uuid
-        mdl = sse_model_name or model or am.model
+        mdl = sse_model_name or model or _active_profile_claude().model
 
         proc, stdin_data = await self._spawn_subprocess(cmd, cwd, env, context)
 

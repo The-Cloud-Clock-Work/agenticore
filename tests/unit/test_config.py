@@ -15,7 +15,6 @@ _CLEAN_ENV = {
     "AGENTICORE_PORT": "",
     "AGENTICORE_HOST": "",
     "AGENTICORE_TRANSPORT": "",
-    "AGENTICORE_CLAUDE_BINARY": "",
     "AGENTIHOOKS_PROFILE": "",
     "AGENTICORE_REPOS_ROOT": "",
     "AGENTICORE_API_KEYS": "",
@@ -50,7 +49,6 @@ class TestLoadConfig:
         cfg = load_config(str(tmp_path / "nonexistent.yml"))
         assert cfg.server.port == 8200
         assert cfg.server.host == "127.0.0.1"
-        assert cfg.claude.binary == "claude"
         assert cfg.agentihooks_profile == ""
         assert cfg.redis.key_prefix == "agenticore"
         assert cfg.otel.enabled is True
@@ -63,7 +61,6 @@ class TestLoadConfig:
             yaml.dump(
                 {
                     "server": {"port": 9000, "host": "0.0.0.0"},
-                    "claude": {"binary": "/usr/bin/claude"},
                     "redis": {"url": "redis://myhost:6379/1"},
                 }
             )
@@ -71,7 +68,6 @@ class TestLoadConfig:
         cfg = load_config(str(config_file))
         assert cfg.server.port == 9000
         assert cfg.server.host == "0.0.0.0"
-        assert cfg.claude.binary == "/usr/bin/claude"
         assert cfg.redis.url == "redis://myhost:6379/1"
 
     @patch.dict(
@@ -79,7 +75,6 @@ class TestLoadConfig:
         {
             "AGENTICORE_PORT": "9999",
             "AGENTICORE_HOST": "10.0.0.1",
-            "AGENTICORE_CLAUDE_BINARY": "/opt/claude",
             "REDIS_URL": "redis://env:6379/2",
         },
     )
@@ -97,7 +92,6 @@ class TestLoadConfig:
         cfg = load_config(str(config_file))
         assert cfg.server.port == 9999
         assert cfg.server.host == "10.0.0.1"
-        assert cfg.claude.binary == "/opt/claude"
         assert cfg.redis.url == "redis://env:6379/2"
 
     @patch.dict(os.environ, {"AGENTICORE_API_KEYS": "key1,key2,key3"})

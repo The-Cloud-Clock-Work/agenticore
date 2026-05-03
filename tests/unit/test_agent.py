@@ -216,17 +216,9 @@ class TestBuildClaudeCmd:
         cmd = build_claude_cmd("task", output_format="json")
         assert "--include-partial-messages" not in cmd
 
-    @patch.dict(os.environ, {**_BASE_ENV, "AGENT_MODE_EFFORT": "medium"})
-    def test_config_effort_default(self):
-        """Config-level effort used when no per-request override."""
-        reset_config()
-        cmd = build_claude_cmd("task")
-        assert "--effort" in cmd
-        assert "medium" in cmd
-
-    @patch.dict(os.environ, {**_BASE_ENV, "AGENT_MODE_EFFORT": "medium"})
+    @patch.dict(os.environ, {**_BASE_ENV})
     def test_request_effort_overrides_config(self):
-        """Per-request effort overrides config default."""
+        """Per-request effort overrides profile default."""
         reset_config()
         cmd = build_claude_cmd("task", effort="high")
         assert "high" in cmd

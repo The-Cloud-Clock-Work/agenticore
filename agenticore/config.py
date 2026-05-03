@@ -44,9 +44,12 @@ class ReposConfig:
 
 @dataclass
 class ClaudeConfig:
-    binary: str = "claude"
-    timeout: int = 3600
-    config_dir: str = ""  # DEPRECATED — kept for backward compat warning only
+    """Claude CLI integration config.
+
+    Binary path, timeout, and per-flag behavior (model, permission, format,
+    effort) are owned by the active agentihooks profile (ProfileClaude).
+    """
+
     default_mcp_file: str = ""  # AGENTICORE_DEFAULT_MCP_FILE — injected into every job
     claude_home_dir: str = ""  # CLAUDE_CODE_HOME_DIR — home dir root (e.g. /shared)
 
@@ -84,17 +87,19 @@ class GithubConfig:
 
 @dataclass
 class AgentModeConfig:
+    """Runtime ops config for AGENT_MODE pods.
+
+    Claude CLI behavior (model, max_turns, permission_mode, output_format,
+    effort) is owned by the active agentihooks profile — see ``ProfileClaude``
+    in ``profiles.py``. Do not duplicate those fields here.
+    """
+
     enabled: bool = False
     package_dir: str = "/app/package"
     evaluation_dir: str = "/app/evaluation"
     repo_url: str = ""
     repo_branch: str = "main"
     agent: str = ""  # AGENTIHUB_AGENT — which agent to load from agentihub
-    model: str = "sonnet"
-    max_turns: int = 80
-    permission_mode: str = "bypassPermissions"
-    output_format: str = "json"
-    effort: str = ""
     timeout: int = 3600
     max_retry_attempts: int = 3
     session_ttl: int = 86400
@@ -235,20 +240,15 @@ def load_config(config_path: Optional[str] = None) -> Config:
         worktree_root=_env("AGENTICORE_WORKTREE_ROOT", repos_raw.get("worktree_root", "")),
     )
 
-    # Claude — env overrides
-    config_dir = _env("AGENTICORE_CLAUDE_CONFIG_DIR", claude_raw.get("config_dir", ""))
-    if config_dir:
-        _log.warning(
-            "AGENTICORE_CLAUDE_CONFIG_DIR is deprecated — Claude Code uses ~/.claude/ by default. "
-            "Set CLAUDE_CODE_HOME_DIR instead for discovery."
-        )
+    # Claude — env overrides.
+    # binary, config_dir, and timeout are owned by the active agentihooks
+    # profile (ProfileClaude) — not configured here. Only DEFAULT_MCP_FILE
+    # and CLAUDE_CODE_HOME_DIR are environment-driven (cluster-wide MCP
+    # injection + per-pod ~/.claude/ root).
     claude_home_dir = _env("CLAUDE_CODE_HOME_DIR", claude_raw.get("claude_home_dir", ""))
     if not claude_home_dir:
         claude_home_dir = str(Path.home())
     claude = ClaudeConfig(
-        binary=_env("AGENTICORE_CLAUDE_BINARY", claude_raw.get("binary", "claude")),
-        timeout=_env_int("AGENTICORE_CLAUDE_TIMEOUT", str(claude_raw.get("timeout", 3600))),
-        config_dir=config_dir,
         default_mcp_file=_env("AGENTICORE_DEFAULT_MCP_FILE", claude_raw.get("default_mcp_file", "")),
         claude_home_dir=claude_home_dir,
     )
@@ -308,11 +308,6 @@ def load_config(config_path: Optional[str] = None) -> Config:
         repo_url=_env("PACKAGE_REPO_URL", ""),
         repo_branch=_env("PACKAGE_REPO_BRANCH", "main"),
         agent=_env("AGENTIHUB_AGENT", ""),
-        model=_env("AGENT_MODE_MODEL", "sonnet"),
-        max_turns=_env_int("AGENT_MODE_MAX_TURNS", "80"),
-        permission_mode=_env("AGENT_MODE_PERMISSION_MODE", "bypassPermissions"),
-        output_format=_env("AGENT_MODE_OUTPUT_FORMAT", "json"),
-        effort=_env("AGENT_MODE_EFFORT", ""),
         timeout=_env_int("AGENT_MODE_TIMEOUT", "3600"),
         max_retry_attempts=_env_int("AGENT_MODE_MAX_RETRIES", "3"),
         session_ttl=_env_int("AGENT_MODE_SESSION_TTL", "86400"),
