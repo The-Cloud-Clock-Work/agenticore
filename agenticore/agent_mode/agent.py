@@ -38,7 +38,6 @@ def _load_system_prompt(package_dir: str) -> Optional[str]:
     return _cached_system_prompt
 
 
-
 # ── Active profile resolution (agentihooks profile owns CLI behavior) ─────
 
 

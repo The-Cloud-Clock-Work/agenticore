@@ -89,9 +89,6 @@ class TestAgentModeConfig:
         cfg = load_config(str(tmp_path / "x.yml"))
         assert cfg.agent_mode.repo_branch == "develop"
 
-    def test_effort_override(self, tmp_path):
-        cfg = load_config(str(tmp_path / "x.yml"))
-
     @patch.dict(os.environ, {**_AGENT_CLEAN_ENV, "AGENT_MODE_SESSION_TTL": "7200"})
     def test_session_ttl_override(self, tmp_path):
         cfg = load_config(str(tmp_path / "x.yml"))
@@ -101,9 +98,3 @@ class TestAgentModeConfig:
     def test_max_retries_override(self, tmp_path):
         cfg = load_config(str(tmp_path / "x.yml"))
         assert cfg.agent_mode.max_retry_attempts == 5
-
-    def test_permission_mode_override(self, tmp_path):
-        cfg = load_config(str(tmp_path / "x.yml"))
-
-    def test_output_format_override(self, tmp_path):
-        cfg = load_config(str(tmp_path / "x.yml"))

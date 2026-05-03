@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -614,6 +613,7 @@ def _build_rest_app():
             info["agent_mode"] = True
             info["package_dir"] = cfg.agent_mode.package_dir
             from agenticore.agent_mode.agent import _active_profile_claude
+
             info["default_model"] = _active_profile_claude().model
         return JSONResponse(info)
 
@@ -642,7 +642,10 @@ def _build_rest_app():
                         Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
                     )
                     run_agentihooks_init(
-                        hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir, force=True,
+                        hooks_path=install_path,
+                        bundle_path=bundle_path,
+                        repo_dir=pkg_dir,
+                        force=True,
                     )
                     results["agentihooks"] = "ok"
                 except Exception as e:
