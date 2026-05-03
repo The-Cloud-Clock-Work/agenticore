@@ -62,22 +62,25 @@ class TestSyncAgentihooks:
     when PATH or URL overrides are set; otherwise the package installed in
     the venv is authoritative."""
 
-    def test_no_override_returns_none_no_pip_no_clone(self, monkeypatch):
-        """No PATH / URL / dev_mode → PyPI is authoritative, no work done."""
+    def test_no_override_falls_through_to_pypi(self, monkeypatch):
+        """No PATH / URL → fall through to ``uv pip install agentihooks`` from PyPI."""
         monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_PATH", raising=False)
         monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_URL", raising=False)
 
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = ""
             mock_cfg.return_value.agentihooks_path = ""
+            mock_cfg.return_value.agentihooks_branch = ""
             mock_cfg.return_value.dev_mode = False
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
-                with patch("agenticore.hooks._pip_install_editable") as mock_pip:
-                    result = sync_agentihooks()
+                with patch("agenticore.hooks._pip_install_editable") as mock_pip_e:
+                    with patch("agenticore.hooks._pip_install_pypi") as mock_pypi:
+                        result = sync_agentihooks()
 
         assert result is None
         mock_clone.assert_not_called()
-        mock_pip.assert_not_called()
+        mock_pip_e.assert_not_called()
+        mock_pypi.assert_called_once_with("agentihooks")
 
     def test_path_override_runs_pip_install_e_no_clone(self, monkeypatch, tmp_path):
         """PATH set → uv pip install -e <path>, no clone."""
@@ -120,7 +123,7 @@ class TestSyncAgentihooks:
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = ""
             mock_cfg.return_value.agentihooks_path = ""
-            mock_cfg.return_value.agentihooks_branch = ""
+            mock_cfg.return_value.agentihooks_branch = "main"
             mock_cfg.return_value.dev_mode = False
             mock_cfg.return_value.repos.shared_fs_root = ""
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
@@ -140,7 +143,7 @@ class TestSyncAgentihooks:
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = "https://github.com/other/repo"
             mock_cfg.return_value.agentihooks_path = ""
-            mock_cfg.return_value.agentihooks_branch = ""
+            mock_cfg.return_value.agentihooks_branch = "main"
             mock_cfg.return_value.dev_mode = False
             mock_cfg.return_value.repos.shared_fs_root = ""
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
@@ -157,7 +160,7 @@ class TestSyncAgentihooks:
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = "https://github.com/config/repo"
             mock_cfg.return_value.agentihooks_path = ""
-            mock_cfg.return_value.agentihooks_branch = ""
+            mock_cfg.return_value.agentihooks_branch = "main"
             mock_cfg.return_value.dev_mode = False
             mock_cfg.return_value.repos.shared_fs_root = ""
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:

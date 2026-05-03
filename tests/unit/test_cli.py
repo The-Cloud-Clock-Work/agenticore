@@ -891,11 +891,13 @@ class TestCmdUpdate:
 
 @pytest.mark.unit
 class TestMainEntrypoint:
-    def test_no_command_shows_help(self, capsys):
+    def test_no_command_defaults_to_serve(self, capsys):
+        """No subcommand → defaults to `serve`. Patch run_sse_server so the
+        test does not actually launch uvicorn (which would block forever)."""
         with patch("sys.argv", ["agenticore"]):
-            with pytest.raises(SystemExit) as exc_info:
+            with patch("agenticore.server.run_sse_server") as mock_serve:
                 main()
-            assert exc_info.value.code == 0
+            mock_serve.assert_called_once()
 
     def test_version_flag(self, capsys):
         with patch("sys.argv", ["agenticore", "--version"]):
