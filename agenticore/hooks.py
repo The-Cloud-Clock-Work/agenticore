@@ -316,49 +316,74 @@ def _clone_or_fetch_bundle(url: str, dest: Path, branch: str = "") -> None:
     logger.info("_clone_or_fetch_bundle done in %.2fs", time.monotonic() - t0)
 
 
-def _pip_install_editable(path: Path) -> None:
-    """Overlay the PyPI-installed agentihooks with an editable install from *path*.
+def _venv_python() -> str:
+    return os.environ.get("AGENTICORE_VENV_PYTHON", "/opt/venv/bin/python")
 
-    Best-effort: logs a warning on failure but does not raise. The PyPI
-    version stays active if the overlay fails.
+
+def _log_uv_output(result: subprocess.CompletedProcess) -> None:
+    if result.stdout:
+        for line in result.stdout.strip().splitlines():
+            logger.info("uv: %s", line)
+    if result.stderr:
+        for line in result.stderr.strip().splitlines():
+            logger.info("uv stderr: %s", line)
+
+
+def _pip_install_editable(path: Path) -> None:
+    """Editable install from a local path. Used by dev-mode PATH override only.
+
+    Raises on failure — agentihooks is required for the agent to function.
     """
-    logger.info("Overlaying agentihooks with editable install: %s", path)
+    logger.info("uv pip install -e %s", path)
     result = subprocess.run(
-        ["uv", "pip", "install", "--quiet", "-e", str(path)],
+        ["uv", "pip", "install", "--python", _venv_python(), "--reinstall", "-e", str(path)],
         check=False,
         capture_output=True,
         text=True,
     )
+    _log_uv_output(result)
     if result.returncode != 0:
-        logger.warning(
-            "uv pip install -e %s failed (exit %d): %s",
-            path,
-            result.returncode,
-            (result.stderr or "").strip(),
-        )
+        raise RuntimeError(f"uv pip install -e {path} failed (exit {result.returncode})")
+
+
+def _pip_install_pypi(pkg: str) -> None:
+    """Install a package from PyPI into the agenticore venv via uv.
+
+    Raises on failure — agentihooks is required for the agent to function.
+    """
+    logger.info("uv pip install %s (from PyPI)", pkg)
+    result = subprocess.run(
+        ["uv", "pip", "install", "--python", _venv_python(), pkg],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    _log_uv_output(result)
+    if result.returncode != 0:
+        raise RuntimeError(f"uv pip install {pkg} failed (exit {result.returncode})")
 
 
 def sync_agentihooks(url: str = "") -> Optional[Path]:
-    """Resolve + optionally overlay the PyPI-installed agentihooks package.
+    """Install agentihooks at runtime. Image is lean — only ``uv`` is baked.
 
-    PyPI is the default: ``pip install agenticore`` pulls agentihooks
-    transitively. This function only does work when an override is requested.
+    Resolution order:
 
-    Order of resolution (PATH wins over URL):
+    1. ``AGENTICORE_AGENTIHOOKS_PATH`` set (or dev_mode with pre-mounted path):
+       ``uv pip install -e <PATH>`` — local editable loopback for dev work
+       on agentihooks itself. Returns the path.
 
-    1. ``AGENTICORE_AGENTIHOOKS_PATH`` set (or dev_mode pre-mounted path):
-       ``uv pip install -e <PATH>`` over the PyPI version. Dev loopback.
-    2. ``AGENTICORE_AGENTIHOOKS_URL`` set: clone once to the computed install
-       dir, ``uv pip install -e <dest>``. Bleeding-edge fork / branch test.
-    3. Neither set: no-op. The PyPI version is authoritative.
+    2. ``AGENTICORE_AGENTIHOOKS_URL`` AND ``AGENTICORE_AGENTIHOOKS_BRANCH``
+       both set: clone the repo and ``uv pip install -e <clone>``. The
+       cloned source becomes the active agentihooks. Use this to run a
+       branch / fork (e.g. dev) that isn't on PyPI yet. Returns the
+       clone path.
 
-    No periodic re-sync — pod restart picks up a new version.
-
-    Returns the overlaid path, or ``None`` when running from PyPI.
+    3. Default (URL+BRANCH unset): ``uv pip install agentihooks`` from
+       PyPI. Returns ``None``.
     """
     cfg = get_config()
 
-    # 1. PATH override (dev loopback). In dev_mode we also accept a path
+    # 1. PATH override (dev loopback). In dev_mode also accept a path
     # surfaced by resolve_repo_paths() from pre-mounted volumes.
     path_str = cfg.agentihooks_path or os.getenv("AGENTICORE_AGENTIHOOKS_PATH", "")
     if not path_str and cfg.dev_mode:
@@ -370,26 +395,24 @@ def sync_agentihooks(url: str = "") -> Optional[Path]:
         if path.exists():
             _pip_install_editable(path)
             os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(path)
-            logger.info("agentihooks overlay via PATH → %s", path)
+            logger.info("agentihooks editable from PATH → %s", path)
             return path
         logger.warning("AGENTICORE_AGENTIHOOKS_PATH %s does not exist; falling back", path)
 
-    # 2. URL override (clone once, no watcher).
+    # 2. URL+BRANCH both set → clone + editable install from the clone.
     resolved_url = url or cfg.agentihooks_url
-    if resolved_url:
+    branch = cfg.agentihooks_branch
+    if resolved_url and branch:
         dest = _install_dir()
-        _clone_or_fetch(resolved_url, dest, cfg.agentihooks_branch)
+        _clone_or_fetch(resolved_url, dest, branch)
         _pip_install_editable(dest)
         os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(dest)
-        logger.info(
-            "agentihooks overlay via URL → %s (branch=%s)",
-            dest,
-            cfg.agentihooks_branch or "HEAD",
-        )
+        logger.info("agentihooks editable from URL → %s (branch=%s)", dest, branch)
         return dest
 
-    # 3. PyPI default — trust what's in the venv.
-    logger.debug("agentihooks: PyPI install (no PATH/URL override)")
+    # 3. Default: install from PyPI.
+    _pip_install_pypi("agentihooks")
+    logger.info("agentihooks: installed from PyPI via uv")
     return None
 
 
@@ -418,20 +441,29 @@ def run_agentihooks_init(
     hooks_path: Optional[Path] = None,
     bundle_path: Optional[Path] = None,
     repo_dir: Optional[Path] = None,
+    force: bool = False,
 ) -> None:
     """Run ``agentihooks init`` with profile and optional bundle/repo.
 
-    Assumes the ``agentihooks`` CLI is already on PATH — either from the PyPI
-    dependency (default) or overlaid by :func:`sync_agentihooks` when a
-    PATH/URL override is set. The ``hooks_path`` parameter is accepted for
-    backwards compatibility with existing call sites but is no longer used
-    for installation.
+    Assumes the ``agentihooks`` CLI is already on PATH — installed by
+    :func:`sync_agentihooks` at boot. The ``hooks_path`` parameter is
+    accepted for backwards compatibility with existing call sites but is
+    no longer used for installation.
+
+    *force* controls whether ``--force`` is passed to agentihooks. ``--force``
+    wipes scoped state (state.json, ~/.claude assets) and re-installs from
+    a clean slate — operator's drift-recovery tool, NOT a per-restart
+    hammer. Default is False. Caller decides:
+
+    - First-time provisioning of a new ``AGENTIHOOKS_HOME`` (no state.json)
+      → force=True
+    - Boot when state.json already exists → force=False (idempotent rerun)
+    - Bundle watcher periodic refresh → force=False
+    - Operator-triggered ``/admin/sync`` → force=True
 
     When *repo_dir* is given, ``--repo <dir>`` is passed so agentihooks
     processes the per-repo ``.agentihooks.json`` whitelist and writes
     ``disabledMcpServers`` into ``~/.claude.json`` for that project path.
-    This also registers a project target in ``state.json`` so the daemon
-    can auto-reconcile on file changes.
     """
     del hooks_path  # Accepted for backwards compat; install is handled in sync_agentihooks.
     t0 = time.monotonic()
@@ -478,7 +510,9 @@ def run_agentihooks_init(
             for line in (link_result.stdout or "").strip().splitlines():
                 logger.info("agentihooks: %s", line)
 
-    cmd = ["agentihooks", "init", "--force"]
+    cmd = ["agentihooks", "init"]
+    if force:
+        cmd.append("--force")
     if profile:
         cmd.extend(["--profile", profile])
     if bundle_path and bundle_path.exists():

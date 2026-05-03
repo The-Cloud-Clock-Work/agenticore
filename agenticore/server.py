@@ -639,7 +639,9 @@ def _build_rest_app():
                     pkg_dir = (
                         Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
                     )
-                    run_agentihooks_init(hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir)
+                    run_agentihooks_init(
+                        hooks_path=install_path, bundle_path=bundle_path, repo_dir=pkg_dir, force=True,
+                    )
                     results["agentihooks"] = "ok"
                 except Exception as e:
                     results["agentihooks"] = f"error: {e}"
@@ -1286,7 +1288,28 @@ def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optio
     from agenticore.hooks import run_agentihooks_init
 
     pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
-    run_agentihooks_init(hooks_path=hooks_path, bundle_path=bundle_path, repo_dir=pkg_dir)
+
+    # Boot init is split in two: agentihooks `init --force --repo X` routes
+    # into the per-repo branch in cmd_init_unified and returns before
+    # install_global ever runs, leaving state.json with no
+    # targets.global.profile (so `agentihooks --query` prints "not
+    # installed"). Run --force WITHOUT --repo first to populate the global
+    # target with the default profile, then layer per-repo wiring on top.
+    logger.info("agentihooks: boot init — global install with --force (clean baseline)")
+    run_agentihooks_init(
+        hooks_path=hooks_path,
+        bundle_path=bundle_path,
+        repo_dir=None,
+        force=True,
+    )
+    if pkg_dir:
+        logger.info("agentihooks: boot init — per-repo wiring (%s)", pkg_dir)
+        run_agentihooks_init(
+            hooks_path=hooks_path,
+            bundle_path=bundle_path,
+            repo_dir=pkg_dir,
+            force=False,
+        )
 
     if cfg.dev_mode:
         logger.info("dev mode: agentihooks init complete (no watchers)")
@@ -1501,10 +1524,28 @@ def main():
     """
     t0 = time.monotonic()
 
-    # Auto-reap orphaned child processes (zombie prevention when running as PID 1)
-    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+    # SIGCHLD handling intentionally left as default. Previously this set
+    # signal.SIG_IGN for "auto-reap orphans as PID 1", but SIG_IGN makes
+    # the kernel reap children BEFORE the parent's wait() — which is what
+    # subprocess.run does internally. Result: subprocess.run sees ECHILD
+    # ("No child process") and the wrapped tool (uv, git, agentihooks)
+    # silently fails. Empirically: `uv pip install -e` crashed at boot
+    # with "Failed to inspect ... No child process (os error 10)".
+    #
+    # A custom WNOHANG reaper would race with subprocess.run for the same
+    # PID. Default behavior (kernel makes zombies, parent wait()s) is
+    # correct for our subprocess pattern. If genuine orphan zombie
+    # buildup becomes an issue, fix it at the entrypoint level (tini or
+    # equivalent reaper), not here.
 
     cfg = get_config()
+
+    # AGENTIHOOKS_HOME comes from PodSpec or the agentihooks library default
+    # ($HOME/.agentihooks). Agenticore does not resolve or export it — the
+    # earlier `_resolve_agentihooks_home` helper auto-namespaced even when the
+    # operator wanted the lib default, which created a path mismatch between
+    # the python process and exec-shell agentihooks CLI. Single source of
+    # truth now: the chart sets the var explicitly, or it defaults.
 
     print("Starting Agenticore...", file=sys.stderr)
 
