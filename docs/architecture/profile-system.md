@@ -10,7 +10,7 @@ profile is a directory containing a `profile.yml` for Agenticore metadata and a
 `.claude/` directory with native Claude Code configuration files.
 
 Agenticore does **not** bundle any profiles. Profiles come from two external
-sources: your [agentihooks](https://github.com/The-Cloud-Clock-Work/agentihooks)
+sources: your [agentihooks](https://github.com/The-Cloud-Clockwork/agentihooks)
 integration and your user directory.
 
 ## Profile Directory Layout

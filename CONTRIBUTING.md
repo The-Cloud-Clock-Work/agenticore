@@ -13,7 +13,7 @@ Thank you for your interest in contributing to Agenticore! This guide will help 
 
 ```bash
 # Clone the repository
-git clone https://github.com/The-Cloud-Clock-Work/agenticore.git
+git clone https://github.com/The-Cloud-Clockwork/agenticore.git
 cd agenticore
 
 # Create a virtual environment
@@ -89,8 +89,8 @@ ruff format agenticore/ tests/
 
 ## Reporting Issues
 
-- Use the [bug report template](https://github.com/The-Cloud-Clock-Work/agenticore/issues/new?template=bug_report.md) for bugs.
-- Use the [feature request template](https://github.com/The-Cloud-Clock-Work/agenticore/issues/new?template=feature_request.md) for ideas.
+- Use the [bug report template](https://github.com/The-Cloud-Clockwork/agenticore/issues/new?template=bug_report.md) for bugs.
+- Use the [feature request template](https://github.com/The-Cloud-Clockwork/agenticore/issues/new?template=feature_request.md) for ideas.
 
 ## Code of Conduct
 

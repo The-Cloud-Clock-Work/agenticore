@@ -9,7 +9,7 @@ Five-minute walkthrough. Port-forward an agent pod, send a request, watch thinki
 
 ## Prerequisites
 
-- A deployed agent pod running `ghcr.io/the-cloud-clock-work/agenticore:dev` or later
+- A deployed agent pod running `ghcr.io/the-cloud-clockwork/agenticore:dev` or later
 - `kubectl` access to the namespace (default examples use `anton-dev`)
 - `curl`, `jq`, `python3` locally
 
@@ -161,7 +161,7 @@ Verify the new image SHA matches what's on GHCR:
 
 ```bash
 # What's on GHCR
-gh api "/orgs/The-Cloud-Clock-Work/packages/container/agenticore/versions?per_page=3" \
+gh api "/orgs/The-Cloud-Clockwork/packages/container/agenticore/versions?per_page=3" \
   --jq '.[] | select(.metadata.container.tags[]? == "dev") | .name' | head -1
 
 # What the pod is running

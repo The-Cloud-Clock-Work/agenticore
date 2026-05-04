@@ -216,7 +216,7 @@ agenticore update [--source SOURCE]
 
 ```bash
 agenticore update
-agenticore update --source git+https://github.com/The-Cloud-Clock-Work/agenticore.git
+agenticore update --source git+https://github.com/The-Cloud-Clockwork/agenticore.git
 agenticore update --source /path/to/agenticore
 ```
 
