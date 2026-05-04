@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: "weekly"
     reviewers:
-      - "The-Cloud-Clock-Work/maintainers"
+      - "The-Cloud-Clockwork/maintainers"
     labels:
       - "dependencies"
 
@@ -14,7 +14,7 @@ updates:
     schedule:
       interval: "weekly"
     reviewers:
-      - "The-Cloud-Clock-Work/maintainers"
+      - "The-Cloud-Clockwork/maintainers"
     labels:
       - "dependencies"
       - "ci"

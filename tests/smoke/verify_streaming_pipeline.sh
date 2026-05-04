@@ -101,7 +101,7 @@ log_pf "pod.imageID = $pod_image_id"
 
 ghcr_dev_sha=""
 if command -v gh >/dev/null 2>&1; then
-    ghcr_dev_sha=$(gh api "/orgs/The-Cloud-Clock-Work/packages/container/agenticore/versions?per_page=20" \
+    ghcr_dev_sha=$(gh api "/orgs/The-Cloud-Clockwork/packages/container/agenticore/versions?per_page=20" \
         --jq '[.[] | select(.metadata.container.tags[]? == "dev")] | .[0].name' 2>/dev/null || echo "")
 fi
 log_pf "ghcr.:dev = $ghcr_dev_sha"

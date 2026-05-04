@@ -120,7 +120,7 @@ jobs:
         if: steps.anthropic.outputs.reachable == 'true'
         env:
           SMOKE_AGENTICORE_URL: http://localhost:8200
-          SMOKE_DATASET_REPO: https://github.com/The-Cloud-Clock-Work/bridge-smoke-dataset
+          SMOKE_DATASET_REPO: https://github.com/The-Cloud-Clockwork/bridge-smoke-dataset
           LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
           LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}

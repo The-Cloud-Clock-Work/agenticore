@@ -34,11 +34,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/The-Cloud-Clock-Work/agenticore"
-Repository = "https://github.com/The-Cloud-Clock-Work/agenticore"
-Issues = "https://github.com/The-Cloud-Clock-Work/agenticore/issues"
-Documentation = "https://github.com/The-Cloud-Clock-Work/agenticore/tree/main/docs"
-Changelog = "https://github.com/The-Cloud-Clock-Work/agenticore/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/The-Cloud-Clockwork/agenticore"
+Repository = "https://github.com/The-Cloud-Clockwork/agenticore"
+Issues = "https://github.com/The-Cloud-Clockwork/agenticore/issues"
+Documentation = "https://github.com/The-Cloud-Clockwork/agenticore/tree/main/docs"
+Changelog = "https://github.com/The-Cloud-Clockwork/agenticore/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 telegram = ["aiogram>=3.15,<4"]

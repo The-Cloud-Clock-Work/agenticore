@@ -28,7 +28,7 @@ RUN uv pip install --no-cache ".[telegram]"
 # ── Stage 2: Runtime ─────────────────────────────────────────────
 FROM python:3.13-slim
 
-LABEL org.opencontainers.image.source="https://github.com/The-Cloud-Clock-Work/agenticore"
+LABEL org.opencontainers.image.source="https://github.com/The-Cloud-Clockwork/agenticore"
 LABEL org.opencontainers.image.description="Claude Code runner and orchestrator"
 LABEL org.opencontainers.image.licenses="MIT"
 

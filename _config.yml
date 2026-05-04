@@ -1,11 +1,11 @@
 # Jekyll configuration for Agenticore GitHub Pages
-# https://the-cloud-clock-work.github.io/agenticore
+# https://the-cloud-clockwork.github.io/agenticore
 
 title: Agenticore
 description: >-
   Claude Code runner and orchestrator.
   Manages job lifecycle, profile-based execution, auto-PR creation, and OTEL observability.
-url: "https://the-cloud-clock-work.github.io"
+url: "https://the-cloud-clockwork.github.io"
 baseurl: "/agenticore"
 
 remote_theme: just-the-docs/just-the-docs@v0.10.0
@@ -26,22 +26,22 @@ mermaid:
 
 # Auxiliary navigation (top-right links)
 aux_links:
-  GitHub: "https://github.com/The-Cloud-Clock-Work/agenticore"
+  GitHub: "https://github.com/The-Cloud-Clockwork/agenticore"
   PyPI: "https://pypi.org/project/agenticore/"
 aux_links_new_tab: true
 
 # Edit on GitHub footer link
 gh_edit_link: true
 gh_edit_link_text: "Edit this page on GitHub"
-gh_edit_repository: "https://github.com/The-Cloud-Clock-Work/agenticore"
+gh_edit_repository: "https://github.com/The-Cloud-Clockwork/agenticore"
 gh_edit_branch: "main"
 gh_edit_view_mode: "edit"
 
 # Footer
 footer_content: >-
   Agenticore is open source under the
-  <a href="https://github.com/The-Cloud-Clock-Work/agenticore/blob/main/LICENSE">MIT License</a>.
-  Maintained by <a href="https://github.com/The-Cloud-Clock-Work">The Cloud Clockwork</a>.
+  <a href="https://github.com/The-Cloud-Clockwork/agenticore/blob/main/LICENSE">MIT License</a>.
+  Maintained by <a href="https://github.com/The-Cloud-Clockwork">The Cloud Clockwork</a>.
 
 # Back to top link
 back_to_top: true
