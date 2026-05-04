@@ -16,12 +16,12 @@ Agenticore manages the full job lifecycle — repo cloning, profile-based execut
 
 <div class="hero-actions text-center mb-8" markdown="0">
   <a href="#quick-start" class="btn btn-primary fs-5 mr-2">Get Started</a>
-  <a href="https://github.com/The-Cloud-Clock-Work/agenticore" class="btn fs-5" target="_blank">View on GitHub</a>
+  <a href="https://github.com/The-Cloud-Clockwork/agenticore" class="btn fs-5" target="_blank">View on GitHub</a>
 </div>
 
 [![PyPI](https://img.shields.io/pypi/v/agenticore)](https://pypi.org/project/agenticore/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/The-Cloud-Clock-Work/agenticore/blob/main/LICENSE)
-[![Tests](https://github.com/The-Cloud-Clock-Work/agenticore/actions/workflows/test.yml/badge.svg)](https://github.com/The-Cloud-Clock-Work/agenticore/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/The-Cloud-Clockwork/agenticore/blob/main/LICENSE)
+[![Tests](https://github.com/The-Cloud-Clockwork/agenticore/actions/workflows/test.yml/badge.svg)](https://github.com/The-Cloud-Clockwork/agenticore/actions/workflows/test.yml)
 [![Docker](https://img.shields.io/docker/v/tccw/agenticore?label=Docker%20Hub)](https://hub.docker.com/r/tccw/agenticore)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
 {: .text-center .mb-8 }
@@ -254,5 +254,5 @@ Continuous static analysis via [SonarQube](https://sonar.homeofanton.com/dashboa
 
 [Get Started](docs/getting-started/quickstart){: .btn .btn-primary .fs-5 .mr-2 }
 [Documentation](docs/){: .btn .fs-5 .mr-2 }
-[View on GitHub](https://github.com/The-Cloud-Clock-Work/agenticore){: .btn .fs-5 }
+[View on GitHub](https://github.com/The-Cloud-Clockwork/agenticore){: .btn .fs-5 }
 {: .text-center }

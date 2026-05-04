@@ -25,7 +25,7 @@ All four locations must be updated together for a release.
 
 ```bash
 # Clone
-git clone https://github.com/The-Cloud-Clock-Work/agenticore.git
+git clone https://github.com/The-Cloud-Clockwork/agenticore.git
 cd agenticore
 
 # Install with dev dependencies
@@ -111,7 +111,7 @@ The `agenticore update` command upgrades the installed package:
 agenticore update
 
 # From git
-agenticore update --source git+https://github.com/The-Cloud-Clock-Work/agenticore.git
+agenticore update --source git+https://github.com/The-Cloud-Clockwork/agenticore.git
 
 # From local path
 agenticore update --source /path/to/agenticore

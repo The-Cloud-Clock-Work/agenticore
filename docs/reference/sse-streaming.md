@@ -274,7 +274,7 @@ Replay a past run from disk (no network):
 ./tests/smoke/verify_streaming_pipeline.sh <agent> --replay <run-id>
 ```
 
-See [`tests/smoke/verify_streaming_pipeline.sh`](https://github.com/The-Cloud-Clock-Work/agenticore/blob/dev/tests/smoke/verify_streaming_pipeline.sh) for details.
+See [`tests/smoke/verify_streaming_pipeline.sh`](https://github.com/The-Cloud-Clockwork/agenticore/blob/dev/tests/smoke/verify_streaming_pipeline.sh) for details.
 
 ## Fail modes and diagnostics
 
@@ -310,8 +310,8 @@ What this unlocks: every agenticore-backed agent is now a **fully auditable, tra
 
 Pipeline images at this milestone:
 ```
-ghcr.io/the-cloud-clock-work/agenticore:dev-d72c201
-ghcr.io/the-cloud-clock-work/agenticore:dev   (floating)
+ghcr.io/the-cloud-clockwork/agenticore:dev-d72c201
+ghcr.io/the-cloud-clockwork/agenticore:dev   (floating)
 ```
 
 ### 2026-04-14 — 95% green in LibreChat (`b88b3e8`)

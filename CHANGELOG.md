@@ -102,8 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI/CD workflows: test, build, release, docker-publish, publish-pypi, docs-audit, smoke-test
 - Documentation site with 16 files
 
-[1.4.0]: https://github.com/The-Cloud-Clock-Work/agenticore/compare/v1.3.1...v1.4.0
-[1.3.1]: https://github.com/The-Cloud-Clock-Work/agenticore/compare/v1.3.0...v1.3.1
-[1.3.0]: https://github.com/The-Cloud-Clock-Work/agenticore/compare/v0.11.0...v1.3.0
-[0.1.1]: https://github.com/The-Cloud-Clock-Work/agenticore/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/The-Cloud-Clock-Work/agenticore/releases/tag/v0.1.0
+[1.4.0]: https://github.com/The-Cloud-Clockwork/agenticore/compare/v1.3.1...v1.4.0
+[1.3.1]: https://github.com/The-Cloud-Clockwork/agenticore/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/The-Cloud-Clockwork/agenticore/compare/v0.11.0...v1.3.0
+[0.1.1]: https://github.com/The-Cloud-Clockwork/agenticore/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/The-Cloud-Clockwork/agenticore/releases/tag/v0.1.0

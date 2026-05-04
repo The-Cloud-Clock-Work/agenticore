@@ -23,7 +23,7 @@ Get Agenticore running and submit your first job in under 5 minutes.
 ### From source (development)
 
 ```bash
-git clone https://github.com/The-Cloud-Clock-Work/agenticore.git
+git clone https://github.com/The-Cloud-Clockwork/agenticore.git
 cd agenticore
 pip install -e .
 ```
@@ -31,7 +31,7 @@ pip install -e .
 ### With Docker
 
 ```bash
-git clone https://github.com/The-Cloud-Clock-Work/agenticore.git
+git clone https://github.com/The-Cloud-Clockwork/agenticore.git
 cd agenticore
 touch .env
 docker compose up --build -d

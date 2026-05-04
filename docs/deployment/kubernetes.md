@@ -125,7 +125,7 @@ kubectl create secret generic agenticore-secrets \
 
 ```bash
 helm install agenticore \
-  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  oci://ghcr.io/the-cloud-clockwork/charts/agenticore \
   --version 0.1.5 \
   --set storage.className=nfs-client
 ```
@@ -144,7 +144,7 @@ Or via `--set`:
 
 ```bash
 helm install agenticore \
-  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  oci://ghcr.io/the-cloud-clockwork/charts/agenticore \
   --set agentihooks.url="https://github.com/your-org/agentihooks" \
   --set agentihooks.syncInterval=300 \
   --set storage.className=nfs-client
@@ -174,7 +174,7 @@ Full reference: [`charts/agenticore/values.yaml`](../../charts/agenticore/values
 
 ```bash
 helm upgrade agenticore \
-  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  oci://ghcr.io/the-cloud-clockwork/charts/agenticore \
   --version 0.1.6
 ```
 
@@ -186,7 +186,7 @@ Enable with:
 
 ```bash
 helm upgrade agenticore \
-  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  oci://ghcr.io/the-cloud-clockwork/charts/agenticore \
   --set keda.enabled=true \
   --set keda.redisAddress=redis:6379
 ```
@@ -259,7 +259,7 @@ agenticore job <id> --json | jq '.pod_name'
 
 # Dry-run install to validate templates
 helm install agenticore \
-  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  oci://ghcr.io/the-cloud-clockwork/charts/agenticore \
   --version 0.1.5 \
   --dry-run --debug \
   --set storage.className=standard
