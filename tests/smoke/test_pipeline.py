@@ -20,7 +20,7 @@ import pytest
 AGENTICORE_URL = os.getenv("SMOKE_AGENTICORE_URL", "http://localhost:8200")
 DATASET_REPO = os.getenv(
     "SMOKE_DATASET_REPO",
-    "https://github.com/The-Cloud-Clock-Work/bridge-smoke-dataset",
+    "https://github.com/The-Cloud-Clockwork/bridge-smoke-dataset",
 )
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")

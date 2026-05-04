@@ -38,7 +38,7 @@ EXPECT_BLOCKED[notebooklm-agent]="tools-code tools-observe tools-infra tools-age
 
 # --- Live test definitions: "allow_prompt|block_prompt" ---
 declare -A LIVE_TESTS
-LIVE_TESTS[anton-agent]="Call agentibridge list_agents now. If unavailable say TOOL_NOT_FOUND.|Call github list_issues for The-Cloud-Clock-Work/antoncore. If unavailable say TOOL_NOT_FOUND."
+LIVE_TESTS[anton-agent]="Call agentibridge list_agents now. If unavailable say TOOL_NOT_FOUND.|Call github list_issues for The-Cloud-Clockwork/antoncore. If unavailable say TOOL_NOT_FOUND."
 LIVE_TESTS[finops-agent]="Call grafana search_dashboards with query api. If unavailable say TOOL_NOT_FOUND.|Call litellm_tools list_models. If unavailable say TOOL_NOT_FOUND."
 LIVE_TESTS[publishing-agent]="Call github get_me. If unavailable say TOOL_NOT_FOUND.|Call grafana list_datasources. If unavailable say TOOL_NOT_FOUND."
 LIVE_TESTS[notebooklm-agent]="Check if mediagen tools exist. List them or say TOOL_NOT_FOUND.|Call github list_issues for any repo. If unavailable say TOOL_NOT_FOUND."

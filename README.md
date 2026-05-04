@@ -2,10 +2,10 @@
 
 **Two modes, one binary.** Run a fleet of Claude Code agents that clone repos and ship PRs — or expose any customized Claude Code agent as a real-time, OpenAI-compatible chat completion endpoint with **token-by-token thinking and tool deltas**. Flip between modes with one environment variable.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/The-Cloud-Clock-Work/agenticore/blob/main/LICENSE)
-[![Tests](https://github.com/The-Cloud-Clock-Work/agenticore/actions/workflows/test.yml/badge.svg)](https://github.com/The-Cloud-Clock-Work/agenticore/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/The-Cloud-Clockwork/agenticore/blob/main/LICENSE)
+[![Tests](https://github.com/The-Cloud-Clockwork/agenticore/actions/workflows/test.yml/badge.svg)](https://github.com/The-Cloud-Clockwork/agenticore/actions/workflows/test.yml)
 [![Docker](https://img.shields.io/docker/v/tccw/agenticore?label=Docker%20Hub)](https://hub.docker.com/r/tccw/agenticore)
-[![Helm](https://img.shields.io/badge/Helm-GHCR-blue)](https://ghcr.io/the-cloud-clock-work/charts/agenticore)
+[![Helm](https://img.shields.io/badge/Helm-GHCR-blue)](https://ghcr.io/the-cloud-clockwork/charts/agenticore)
 [![PyPI](https://img.shields.io/pypi/v/agenticore)](https://pypi.org/project/agenticore/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
 
@@ -302,7 +302,7 @@ pip install agenticore
 Or from source:
 
 ```bash
-git clone https://github.com/The-Cloud-Clock-Work/agenticore.git
+git clone https://github.com/The-Cloud-Clockwork/agenticore.git
 cd agenticore
 pip install -e .
 ```
@@ -355,12 +355,12 @@ kubectl create secret generic agenticore-secrets \
 
 # Install (fleet mode)
 helm install agenticore \
-  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  oci://ghcr.io/the-cloud-clockwork/charts/agenticore \
   --set storage.className=your-rwx-storage-class
 
 # Install (agent mode)
 helm install my-agent \
-  oci://ghcr.io/the-cloud-clock-work/charts/agenticore \
+  oci://ghcr.io/the-cloud-clockwork/charts/agenticore \
   --set storage.className=your-rwx-storage-class \
   --set agentMode.enabled=true \
   --set agentMode.agentName=my-agent
