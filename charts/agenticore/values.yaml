@@ -15,7 +15,7 @@ fullnameOverride: ""
 # Image
 # -----------------------------------------------------------------------------
 image:
-  repository: tccw/agenticore
+  repository: ghcr.io/the-cloud-clockwork/agenticore
   tag: latest          # overridden by CI with the release tag (e.g. v0.1.5)
   pullPolicy: IfNotPresent
 
