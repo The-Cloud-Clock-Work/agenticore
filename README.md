@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/The-Cloud-Clockwork/agenticore/blob/main/LICENSE)
 [![Tests](https://github.com/The-Cloud-Clockwork/agenticore/actions/workflows/test.yml/badge.svg)](https://github.com/The-Cloud-Clockwork/agenticore/actions/workflows/test.yml)
-[![Docker](https://img.shields.io/docker/v/tcc/agenticore?label=Docker%20Hub)](https://hub.docker.com/r/tcc/agenticore)
+[![Docker](https://img.shields.io/docker/v/tccw/agenticore?label=Docker%20Hub)](https://hub.docker.com/r/tccw/agenticore)
 [![Helm](https://img.shields.io/badge/Helm-GHCR-blue)](https://ghcr.io/the-cloud-clockwork/charts/agenticore)
 [![PyPI](https://img.shields.io/pypi/v/agenticore)](https://pypi.org/project/agenticore/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://python.org)
@@ -381,7 +381,7 @@ docker run -d -p 8200:8200 \
   -e ANTHROPIC_AUTH_TOKEN=sk-ant-... \
   -e REDIS_URL=redis://your-redis:6379/0 \
   -e GITHUB_TOKEN=ghp_... \
-  tccw/agenticore
+  ghcr.io/the-cloud-clockwork/agenticore
 
 # Production (agent mode)
 docker run -d -p 8200:8200 \
@@ -390,7 +390,7 @@ docker run -d -p 8200:8200 \
   -e AGENTICORE_TRANSPORT=sse \
   -e ANTHROPIC_AUTH_TOKEN=sk-ant-... \
   -e REDIS_URL=redis://your-redis:6379/0 \
-  tccw/agenticore
+  ghcr.io/the-cloud-clockwork/agenticore
 ```
 
 ## Authentication

@@ -158,7 +158,7 @@ helm install agenticore \
 | `storage.size` | `100Gi` | PVC size |
 | `replicas` | `2` | Static replica count (ignored when KEDA enabled) |
 | `image.tag` | `latest` | Agenticore image tag |
-| `image.repository` | `tccw/agenticore` | Container image |
+| `image.repository` | `the-cloud-clockwork/agenticore` | Container image |
 | `config.agentihooksProfile` | `coding` | Active profile (set by agentihooks) |
 | `config.maxParallelJobs` | `3` | Max Claude subprocesses per pod |
 | `keda.enabled` | `false` | Enable KEDA autoscaling |
@@ -300,6 +300,6 @@ They require manual image tag substitution before applying.
 
 ```bash
 # Replace image tag placeholder, then apply
-sed -i 's|agenticore:latest|tccw/agenticore:v0.1.5|g' k8s/statefulset.yaml
+sed -i 's|agenticore:latest|the-cloud-clockwork/agenticore:v0.1.5|g' k8s/statefulset.yaml
 kubectl apply -f k8s/
 ```
