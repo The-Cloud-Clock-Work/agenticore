@@ -1,6 +1,7 @@
 ---
 title: Quickstart
 nav_order: 1
+parent: Getting Started
 ---
 
 # Quickstart

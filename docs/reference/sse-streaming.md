@@ -1,6 +1,7 @@
 ---
 title: SSE Streaming
 nav_order: 4
+parent: Reference
 ---
 
 # SSE Streaming

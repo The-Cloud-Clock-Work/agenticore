@@ -1,6 +1,7 @@
 ---
 title: Internals
 nav_order: 1
+parent: Architecture
 ---
 
 # Architecture Internals

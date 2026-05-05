@@ -1,6 +1,7 @@
 ---
 title: Agent Mode
 nav_order: 5
+parent: Architecture
 ---
 
 # Agent Mode

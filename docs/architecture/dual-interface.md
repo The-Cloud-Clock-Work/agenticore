@@ -1,6 +1,7 @@
 ---
 title: Dual Interface
 nav_order: 2
+parent: Architecture
 ---
 
 # Dual Interface: MCP + REST

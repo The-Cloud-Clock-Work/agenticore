@@ -1,6 +1,7 @@
 ---
 title: Self-Describing Capabilities
 nav_order: 7
+parent: Architecture
 ---
 
 # Self-Describing Capabilities

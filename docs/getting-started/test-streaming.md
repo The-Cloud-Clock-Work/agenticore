@@ -1,6 +1,7 @@
 ---
 title: Test Streaming
 nav_order: 4
+parent: Getting Started
 ---
 
 # Test SSE Streaming Yourself
