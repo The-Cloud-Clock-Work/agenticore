@@ -1,6 +1,7 @@
 ---
 title: OTEL Pipeline
 nav_order: 3
+parent: Deployment
 ---
 
 # OTEL Observability Pipeline

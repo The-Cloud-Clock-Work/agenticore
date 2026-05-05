@@ -1,6 +1,7 @@
 ---
 title: Profile System
 nav_order: 3
+parent: Architecture
 ---
 
 # Profile System

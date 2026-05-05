@@ -1,6 +1,7 @@
 ---
 title: Docker Compose
 nav_order: 1
+parent: Deployment
 ---
 
 # Docker Compose Deployment

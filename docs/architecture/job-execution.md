@@ -1,6 +1,7 @@
 ---
 title: Job Execution
 nav_order: 4
+parent: Architecture
 ---
 
 # Job Execution

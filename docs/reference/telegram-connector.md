@@ -1,6 +1,7 @@
 ---
 title: Telegram Connector
 nav_order: 9
+parent: Reference
 ---
 
 # Telegram Connector

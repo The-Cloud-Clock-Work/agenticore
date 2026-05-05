@@ -1,6 +1,7 @@
 ---
 title: Connecting Clients
 nav_order: 2
+parent: Getting Started
 ---
 
 # Connecting Clients

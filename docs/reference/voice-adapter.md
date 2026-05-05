@@ -1,6 +1,7 @@
 ---
 title: Voice Adapter
 nav_order: 8
+parent: Reference
 ---
 
 # Voice Adapter
