@@ -1,3 +1,8 @@
+---
+title: Progress Sink
+parent: Architecture
+nav_order: 9
+---
 # ProgressSink — canonical progress-event contract for connectors
 
 ## Why this exists
