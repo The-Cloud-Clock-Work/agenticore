@@ -88,6 +88,40 @@ Request (MCP or REST)
 
 ---
 
+## Agent Mode — packages instead of repos
+{: .fs-7 .fw-600 }
+
+Agenticore has two operating modes. Standard mode clones a repo, runs Claude inside it, and opens a PR. **Agent Mode** flips the relationship: Agenticore mounts a pre-built **agent package** as the container's identity (system prompt, MCP servers, hooks, skills, runners), then exposes a completions API. The package *is* the agent.
+
+```
+Standard Mode:   Request → clone repo → materialize profile → claude --worktree → PR
+Agent Mode:      Request → load package from agentihub → claude -p "task" → SSE / result
+```
+
+Packages live in [**agentihub**](https://github.com/The-Cloud-Clockwork/agentihub-example) — a separate repo (or any repo following the convention) that holds agent identities. On startup, Agenticore clones the hub, copies `agents/<name>/package/` into the container, validates it, runs the package's `runners/`, caches the system prompt, and starts serving.
+
+```
+agents/
+└── publishing/
+    ├── agent.yml              # name, model, max_turns, permission_mode, mcp_categories
+    ├── package/               # mounted at /app/package/
+    │   ├── CLAUDE.md          # system prompt
+    │   ├── system.md          # extended instructions
+    │   ├── .claude/settings.json
+    │   ├── .mcp.json
+    │   ├── prompts/
+    │   └── runners/
+    └── evaluation/            # eval harness
+```
+
+Set `AGENTICORE_AGENTIHUB_URL` and `AGENTICORE_AGENTIHUB_AGENT` and Agenticore boots straight into Agent Mode. A background watcher re-fetches every `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` seconds (default 300; `0` disables) so package updates roll out without redeploying the runtime.
+
+**Public reference**: [`agentihub-example`](https://github.com/The-Cloud-Clockwork/agentihub-example) — a working `publishing` agent showing the full layout (agent.yml + package/ + evaluation/). Fork it to ship your own.
+
+[Agent Mode deep-dive →]({{ site.baseurl }}/docs/architecture/agent-mode/){: .btn .btn-green }
+
+---
+
 ## Quick Start
 {: #quick-start }
 

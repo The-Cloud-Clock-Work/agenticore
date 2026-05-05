@@ -40,13 +40,14 @@ lifecycle and purpose.
 
 ### The Agentihub Connection
 
-Agent packages come from [agentihub](https://github.com/The-Cloud-Clockwork/agentihub)
-— a separate repo holding agent identities (CLAUDE.md, prompts, evaluation).
+Agent packages come from an **agentihub** — a separate repo holding agent identities (CLAUDE.md, prompts, evaluation).
 
-On startup, `agent_mode/initializer.py` clones agentihub (via `AGENTICORE_AGENTIHUB_URL`)
+> **Public example**: [`agentihub-example`](https://github.com/The-Cloud-Clockwork/agentihub-example) ships a working `publishing` agent that walks through the full layout (`agent.yml` + `package/` + `evaluation/`). Clone it, point Agenticore at it, and you have a fully provisioned Agent Mode container. Fork it to author your own.
+
+On startup, `agent_mode/initializer.py` clones the hub (via `AGENTICORE_AGENTIHUB_URL`)
 and copies `agents/{name}/package/` → `/app/package/`. The container then
 validates the package, runs startup scripts, caches the system prompt, and
-waits for requests. A background watcher re-fetches the agentihub repo every
+waits for requests. A background watcher re-fetches the hub every
 `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` seconds (default 300, `0` disables).
 
 [Agentihooks](https://github.com/The-Cloud-Clockwork/agentihooks) provides the
