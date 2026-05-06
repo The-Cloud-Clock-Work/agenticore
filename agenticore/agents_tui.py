@@ -343,7 +343,19 @@ def _kubectl_exec_curl(pod: AgenticorePod, method: str, path: str, body: Optiona
 def _kubectl_exec_sync(pod: AgenticorePod) -> dict:
     try:
         result = subprocess.run(
-            ["kubectl", "exec", "-n", pod.namespace, pod.name, "-c", pod.container, "--", "agenticore", "hooks", "sync"],
+            [
+                "kubectl",
+                "exec",
+                "-n",
+                pod.namespace,
+                pod.name,
+                "-c",
+                pod.container,
+                "--",
+                "agenticore",
+                "hooks",
+                "sync",
+            ],
             capture_output=True,
             text=True,
             timeout=60,
@@ -622,7 +634,9 @@ def _render_list(
                 kind_col = f"{BL}{'orchestrator':<30}{R}"
             phase_color = GR if p.phase == "Running" else YL if p.phase == "Pending" else RD
             ns_label = p.namespace or "—"
-            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{p.name:<30}{R} {kind_col} {phase_color}{p.phase:<12}{R} {YL}{ns_label}{R}")
+            _write(
+                t, f"  {GRB}[{idx}]{R}  {LGB}{p.name:<30}{R} {kind_col} {phase_color}{p.phase:<12}{R} {YL}{ns_label}{R}"
+            )
             idx += 1
 
         if filtered_pods and filtered_local:
