@@ -41,6 +41,7 @@ LGB = "\033[1;38;5;250m"
 @dataclass
 class AgenticorePod:
     name: str
+    namespace: str
     phase: str
     agent_mode: bool
     agent_name: str
@@ -131,9 +132,16 @@ def _prompt_multiline(t, msg="") -> str:
 
 
 def discover_pods() -> list[AgenticorePod]:
+    """Discover agenticore pods across ALL namespaces.
+
+    A pod is considered an agenticore pod when one of its containers exposes
+    the AGENTICORE_TRANSPORT env var. Namespace is taken from the pod's own
+    metadata so callers can dispatch kubectl operations against the correct
+    namespace without any hardcoded assumption.
+    """
     try:
         result = subprocess.run(
-            ["kubectl", "get", "pods", "-o", "json"],
+            ["kubectl", "get", "pods", "--all-namespaces", "-o", "json"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -153,7 +161,9 @@ def discover_pods() -> list[AgenticorePod]:
 
     pods = []
     for item in data.get("items", []):
-        name = item.get("metadata", {}).get("name", "")
+        meta = item.get("metadata", {})
+        name = meta.get("name", "")
+        namespace = meta.get("namespace", "")
         phase = item.get("status", {}).get("phase", "Unknown")
         containers = item.get("spec", {}).get("containers", [])
 
@@ -168,6 +178,7 @@ def discover_pods() -> list[AgenticorePod]:
             pods.append(
                 AgenticorePod(
                     name=name,
+                    namespace=namespace,
                     phase=phase,
                     agent_mode=envs.get("AGENT_MODE", "").lower() == "true",
                     agent_name=envs.get("AGENTIHUB_AGENT", ""),
@@ -180,27 +191,37 @@ def discover_pods() -> list[AgenticorePod]:
     return pods
 
 
-def _get_namespace() -> str:
-    try:
-        result = subprocess.run(
-            ["kubectl", "config", "view", "--minify", "-o", "jsonpath={.contexts[0].context.namespace}"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return result.stdout.strip() or "default"
-    except Exception:
-        return "default"
+def _namespaces_summary(pods: list[AgenticorePod]) -> str:
+    """Human-readable summary of namespaces represented in the pod list."""
+    seen = sorted({p.namespace for p in pods if p.namespace})
+    if not seen:
+        return "all-namespaces (no pods)"
+    if len(seen) == 1:
+        return seen[0]
+    return ", ".join(seen)
+
+
+def _state_path() -> Path:
+    return Path.home() / ".agenticore" / "state.json"
 
 
 def _read_state() -> dict:
-    state_path = Path.home() / ".agenticore" / "state.json"
+    state_path = _state_path()
     if state_path.exists():
         try:
             return json.loads(state_path.read_text())
         except Exception:
             pass
     return {}
+
+
+def _write_agentihub_to_state(path: Path) -> None:
+    """Persist a user-chosen agentihub directory into ~/.agenticore/state.json."""
+    state = _read_state()
+    state.setdefault("agentihub", {})["path"] = str(path)
+    sp = _state_path()
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    sp.write_text(json.dumps(state, indent=2))
 
 
 def _resolve_agentihub_dir(agentihub_dir: str = "") -> Optional[Path]:
@@ -289,6 +310,8 @@ def _kubectl_exec_curl(pod: AgenticorePod, method: str, path: str, body: Optiona
     cmd = [
         "kubectl",
         "exec",
+        "-n",
+        pod.namespace,
         pod.name,
         "-c",
         pod.container,
@@ -320,7 +343,7 @@ def _kubectl_exec_curl(pod: AgenticorePod, method: str, path: str, body: Optiona
 def _kubectl_exec_sync(pod: AgenticorePod) -> dict:
     try:
         result = subprocess.run(
-            ["kubectl", "exec", pod.name, "-c", pod.container, "--", "agenticore", "hooks", "sync"],
+            ["kubectl", "exec", "-n", pod.namespace, pod.name, "-c", pod.container, "--", "agenticore", "hooks", "sync"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -361,9 +384,12 @@ def _headless_require_pod(pod_name: Optional[str]) -> AgenticorePod:
 def headless_list(agentihub_dir: str = ""):
     pods = discover_pods()
     local_agents = discover_local_agents(agentihub_dir)
+    namespaces = sorted({p.namespace for p in pods if p.namespace})
+    hub = _resolve_agentihub_dir(agentihub_dir)
     _headless_output(
         {
-            "namespace": _get_namespace(),
+            "namespaces": namespaces,
+            "agentihub": str(hub) if hub else None,
             "pods": [asdict(p) for p in pods],
             "local_agents": [asdict(a) for a in local_agents],
         }
@@ -543,21 +569,29 @@ def _action_health(t, pod: AgenticorePod):
 
 
 def _action_exec(pod: AgenticorePod):
-    os.execvp("kubectl", ["kubectl", "exec", "-it", pod.name, "-c", pod.container, "--", "bash"])
+    os.execvp(
+        "kubectl",
+        ["kubectl", "exec", "-it", "-n", pod.namespace, pod.name, "-c", pod.container, "--", "bash"],
+    )
 
 
 def _action_logs(pod: AgenticorePod):
-    os.execvp("kubectl", ["kubectl", "logs", "-f", pod.name, "-c", pod.container])
+    os.execvp(
+        "kubectl",
+        ["kubectl", "logs", "-f", "-n", pod.namespace, pod.name, "-c", pod.container],
+    )
 
 
 # ── TUI screens ──────────────────────────────────────────────────────────────
 
 
-def _render_header(t, namespace: str):
+def _render_header(t, namespace: str, agentihub: Optional[Path] = None):
     W = 50
     _write(t, f"  {GRB}{'━' * W}{R}")
     _write(t, f"  {GRB}  ◆ Agenticore Agents{R}  {YL}K8S{R}")
-    _write(t, f"  {LG}  namespace: {namespace}{R}")
+    _write(t, f"  {LG}  namespaces: {namespace}{R}")
+    hub_label = str(agentihub) if agentihub else f"{RDB}<unset — press 'c'>{LG}"
+    _write(t, f"  {LG}  agentihub:  {hub_label}{R}")
     _write(t, f"  {GRB}{'━' * W}{R}")
     _write(t, "")
 
@@ -587,7 +621,8 @@ def _render_list(
             else:
                 kind_col = f"{BL}{'orchestrator':<30}{R}"
             phase_color = GR if p.phase == "Running" else YL if p.phase == "Pending" else RD
-            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{p.name:<30}{R} {kind_col} {phase_color}{p.phase:<12}{R} {YL}K8S{R}")
+            ns_label = p.namespace or "—"
+            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{p.name:<30}{R} {kind_col} {phase_color}{p.phase:<12}{R} {YL}{ns_label}{R}")
             idx += 1
 
         if filtered_pods and filtered_local:
@@ -609,7 +644,8 @@ def _render_footer(t, filter_str: str = ""):
     if filter_str:
         _write(t, f"  {YL}filter: {GRB}'{filter_str}'{R}  {LG}│  clear: /{R}")
     _write(
-        t, f"  {LG}filter: {LGB}/word{R}  {LG}│  select: {LGB}1-N{R}  {LG}│  refresh: {LGB}r{R}  {LG}│  quit: {RDB}q{R}"
+        t,
+        f"  {LG}filter: {LGB}/word{R}  {LG}│  select: {LGB}1-N{R}  {LG}│  agentihub: {LGB}c{R}  {LG}│  refresh: {LGB}r{R}  {LG}│  quit: {RDB}q{R}",
     )
     _write(t, "")
 
@@ -787,17 +823,48 @@ def _local_action_menu(t, agent: LocalAgent) -> bool:
             _prompt(t)
 
 
+def _action_set_agentihub(t) -> Optional[Path]:
+    """Prompt the operator for an agentihub directory and persist it.
+
+    Returns the validated path on success, or None if the operator cancelled
+    or supplied an invalid path. The new value is written to state.json so
+    subsequent runs pick it up automatically.
+    """
+    _write(t, "")
+    _write(t, f"  {LG}Set agentihub directory{R}")
+    _write(t, f"  {LG}(absolute path containing an `agents/` subdir; empty to cancel){R}")
+    raw = _prompt(t).strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    if not candidate.is_dir():
+        _write(t, f"  {RDB}Not a directory: {candidate}{R}  (press Enter)")
+        t.flush()
+        _prompt(t)
+        return None
+    if not (candidate / "agents").is_dir():
+        _write(t, f"  {RDB}No agents/ subdirectory under: {candidate}{R}  (press Enter)")
+        t.flush()
+        _prompt(t)
+        return None
+    _write_agentihub_to_state(candidate)
+    _write(t, f"  {GR}Saved to ~/.agenticore/state.json{R}  (press Enter)")
+    t.flush()
+    _prompt(t)
+    return candidate
+
+
 def main_interactive(agentihub_dir: str = ""):
-    namespace = _get_namespace()
     pods = discover_pods()
     local_agents = discover_local_agents(agentihub_dir)
+    hub_path = _resolve_agentihub_dir(agentihub_dir)
     filter_str = ""
 
     t = open("/dev/tty", "w")
 
     while True:
         _clear(t)
-        _render_header(t, namespace)
+        _render_header(t, _namespaces_summary(pods), hub_path)
         filtered_pods, filtered_local = _render_list(t, pods, local_agents, filter_str)
         _render_footer(t, filter_str)
 
@@ -811,6 +878,16 @@ def main_interactive(agentihub_dir: str = ""):
             t.flush()
             pods = discover_pods()
             local_agents = discover_local_agents(agentihub_dir)
+            hub_path = _resolve_agentihub_dir(agentihub_dir)
+            continue
+
+        if raw.lower() == "c":
+            new_hub = _action_set_agentihub(t)
+            if new_hub is not None:
+                # Operator-supplied path takes precedence over CLI flag for this session.
+                agentihub_dir = str(new_hub)
+            local_agents = discover_local_agents(agentihub_dir)
+            hub_path = _resolve_agentihub_dir(agentihub_dir)
             continue
 
         if raw.startswith("/"):
@@ -834,6 +911,7 @@ def main_interactive(agentihub_dir: str = ""):
                 break
             pods = discover_pods()
             local_agents = discover_local_agents(agentihub_dir)
+            hub_path = _resolve_agentihub_dir(agentihub_dir)
 
     t.close()
 
