@@ -220,6 +220,16 @@ def _resolve_agentihub_dir(agentihub_dir: str = "") -> Optional[Path]:
         p = Path(state_hub)
         if p.is_dir():
             return p
+    # Sibling-discovery fallback: walk up from this file looking for an
+    # `agentihub/agents/` next to us. Survives ecosystem dir renames.
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "agentihub"
+        if (candidate / "agents").is_dir():
+            return candidate
+        # Also check siblings of intermediate parents (flat ecosystem layout).
+        for sibling in parent.glob("*/agentihub/agents"):
+            return sibling.parent
     return None
 
 
@@ -572,19 +582,21 @@ def _render_list(
         idx = 1
         for p in filtered_pods:
             if p.agent_mode:
-                kind = f"{CY}agent:{p.agent_name}{R}"
+                kind_plain = f"agent:{p.agent_name}"
+                kind_col = f"{CY}{kind_plain:<30}{R}"
             else:
-                kind = f"{BL}orchestrator{R}"
+                kind_col = f"{BL}{'orchestrator':<30}{R}"
             phase_color = GR if p.phase == "Running" else YL if p.phase == "Pending" else RD
-            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{p.name:<30}{R} {kind:<30} {phase_color}{p.phase:<12}{R} {YL}K8S{R}")
+            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{p.name:<30}{R} {kind_col} {phase_color}{p.phase:<12}{R} {YL}K8S{R}")
             idx += 1
 
         if filtered_pods and filtered_local:
             _write(t, "")
 
         for a in filtered_local:
-            model_str = f"{CY}{a.model}{R}" if a.model else f"{LG}—{R}"
-            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{a.name:<30}{R} {model_str:<30} {LG}{'local':<12}{R} {GR}LOCAL{R}")
+            model_plain = a.model if a.model else "—"
+            model_col = f"{CY}{model_plain:<30}{R}" if a.model else f"{LG}{model_plain:<30}{R}"
+            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{a.name:<30}{R} {model_col} {LG}{'local':<12}{R} {GR}LOCAL{R}")
             idx += 1
 
     _write(t, "")
