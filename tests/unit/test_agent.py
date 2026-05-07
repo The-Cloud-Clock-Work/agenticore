@@ -56,10 +56,11 @@ class TestBuildClaudeCmd:
         cmd = build_claude_cmd("hello world", claude_session_id="sid-1", stateless=True)
         assert cmd[0] == "claude"
         assert "-p" in cmd
-        assert "--output-format" in cmd
-        assert "json" in cmd
+        # Defaults: model=opus, max_turns=50, permission_mode=bypassPermissions.
+        # effort and output_format are no longer in CLAUDE_FLAG_DEFAULTS — profiles opt in.
+        assert "--output-format" not in cmd
         assert "--model" in cmd
-        assert "sonnet" in cmd
+        assert "opus" in cmd
         assert "--max-turns" in cmd
         assert "50" in cmd
         assert "--permission-mode" in cmd
@@ -178,11 +179,10 @@ class TestBuildClaudeCmd:
         assert "haiku" in cmd
 
     @patch.dict(os.environ, _BASE_ENV)
-    def test_default_effort_high_when_empty(self):
-        # CLAUDE_FLAG_DEFAULTS now ships effort=high.
+    def test_default_omits_effort(self):
+        # effort no longer in CLAUDE_FLAG_DEFAULTS — profiles opt in.
         cmd = build_claude_cmd("task")
-        assert "--effort" in cmd
-        assert cmd[cmd.index("--effort") + 1] == "high"
+        assert "--effort" not in cmd
 
     @patch.dict(os.environ, _BASE_ENV)
     def test_no_budget_when_zero(self):
@@ -1092,14 +1092,14 @@ class TestActiveProfileClaude:
 
     @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": ""})
     def test_no_profile_env_returns_default_profile_claude(self):
-        """No AGENTIHOOKS_PROFILE → fallback to default ProfileClaude."""
+        """No AGENTIHOOKS_PROFILE and no command.yml → fallback to default ProfileClaude."""
         from agenticore.profiles import ProfileClaude
 
         pc = _active_profile_claude()
         assert isinstance(pc, ProfileClaude)
-        assert pc.model == "sonnet"  # ProfileClaude default
+        assert pc.model == "opus"  # CLAUDE_FLAG_DEFAULTS
         assert pc.permission_mode == "bypassPermissions"
-        assert pc.output_format == "json"
+        assert pc.output_format == ""  # not in defaults
         assert pc.max_turns == 50
 
     @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "definitely-not-a-real-profile"})
@@ -1109,7 +1109,7 @@ class TestActiveProfileClaude:
 
         pc = _active_profile_claude()
         assert isinstance(pc, ProfileClaude)
-        assert pc.model == "sonnet"
+        assert pc.model == "opus"
 
     @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "test-profile"})
     @patch("agenticore.agent_mode.agent.get_profile") if False else lambda f: f  # placeholder, real patch below
@@ -1233,11 +1233,11 @@ class TestBuildClaudeCmdProfileDriven:
         """No AGENTIHOOKS_PROFILE → ProfileClaude() defaults still produce valid CLI."""
         cmd = build_claude_cmd("task")
         assert "claude" in cmd
-        assert cmd[cmd.index("--model") + 1] == "sonnet"
+        assert cmd[cmd.index("--model") + 1] == "opus"
         assert cmd[cmd.index("--permission-mode") + 1] == "bypassPermissions"
-        assert cmd[cmd.index("--output-format") + 1] == "json"
-        # CLAUDE_FLAG_DEFAULTS now ships effort=high.
-        assert cmd[cmd.index("--effort") + 1] == "high"
+        # output_format and effort are not defaults — must NOT appear.
+        assert "--output-format" not in cmd
+        assert "--effort" not in cmd
 
     @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
     def test_legacy_agent_mode_env_vars_no_longer_drive_cmd(self):

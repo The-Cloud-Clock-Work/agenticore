@@ -55,7 +55,8 @@ class TestHealthAgentMode:
         assert resp.status_code == 200
         data = resp.json()
         assert data["agent_mode"] is True
-        assert data["default_model"] == "sonnet"
+        # CLAUDE_FLAG_DEFAULTS ships model=opus when no command.yml/profile loads.
+        assert data["default_model"] == "opus"
         assert data["package_dir"] == "/tmp/test-pkg"
 
     @patch.dict(os.environ, {"AGENT_MODE": ""})
