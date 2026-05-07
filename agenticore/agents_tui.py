@@ -20,7 +20,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
-import yaml
 
 # ── ANSI ──────────────────────────────────────────────────────────────────────
 R = "\033[0m"
@@ -52,9 +51,6 @@ class AgenticorePod:
 @dataclass
 class LocalAgent:
     name: str
-    description: str
-    model: str
-    effort: str
     package_path: str
 
 
@@ -264,26 +260,14 @@ def discover_local_agents(agentihub_dir: str = "") -> list[LocalAgent]:
         return []
 
     agents = []
-    for agent_yml in sorted(agents_dir.glob("*/agent.yml")):
-        try:
-            data = yaml.safe_load(agent_yml.read_text())
-        except Exception:
+    for entry in sorted(agents_dir.iterdir()):
+        if not entry.is_dir():
             continue
-
-        claude = data.get("claude", {})
-        package_path = agent_yml.parent / "package"
-        if not package_path.is_dir():
+        package_path = entry / "package"
+        # An agent is any dir containing package/CLAUDE.md.
+        if not (package_path / "CLAUDE.md").is_file():
             continue
-
-        agents.append(
-            LocalAgent(
-                name=data.get("name", agent_yml.parent.name),
-                description=data.get("description", ""),
-                model=claude.get("model", ""),
-                effort=claude.get("effort", ""),
-                package_path=str(package_path),
-            )
-        )
+        agents.append(LocalAgent(name=entry.name, package_path=str(package_path)))
 
     return agents
 
@@ -643,9 +627,7 @@ def _render_list(
             _write(t, "")
 
         for a in filtered_local:
-            model_plain = a.model if a.model else "—"
-            model_col = f"{CY}{model_plain:<30}{R}" if a.model else f"{LG}{model_plain:<30}{R}"
-            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{a.name:<30}{R} {model_col} {LG}{'local':<12}{R} {GR}LOCAL{R}")
+            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{a.name:<30}{R} {LG}{'local':<30}{R} {LG}{'local':<12}{R} {GR}LOCAL{R}")
             idx += 1
 
     _write(t, "")
@@ -689,7 +671,7 @@ def _action_menu(t, pod: AgenticorePod, local_agents: list[LocalAgent] = None) -
 
         next_idx = 2
         if local_match:
-            _write(t, f"  {GRB}[{next_idx}]{R}  {LGB}Live Chat{R}  {LG}← --model {local_match.model}{R}")
+            _write(t, f"  {GRB}[{next_idx}]{R}  {LGB}Live Chat{R}  {LG}← claude (local){R}")
             next_idx += 1
 
         _write(t, f"  {GRB}[{next_idx}]{R}  {LGB}Sync repos{R}  {LG}← agenticore hooks sync{R}")
@@ -753,31 +735,11 @@ def _action_menu(t, pod: AgenticorePod, local_agents: list[LocalAgent] = None) -
 
 
 def _build_claude_cmd(agent: LocalAgent) -> list[str]:
-    config_path = Path(agent.package_path).parent / "agent.yml"
-    cmd = ["claude"]
-    if not config_path.exists():
-        return cmd
-
-    try:
-        data = yaml.safe_load(config_path.read_text())
-    except Exception:
-        return cmd
-
-    claude = data.get("claude", {})
-    flag_map = {
-        "model": "--model",
-        "permission_mode": "--permission-mode",
-        "max_turns": "--max-turns",
-        "output_format": "--output-format",
-    }
-    for key, flag in flag_map.items():
-        val = claude.get(key)
-        if val is not None:
-            cmd.extend([flag, str(val)])
-
-    # no_session_persistence requires --print mode, skip for interactive use
-
-    return cmd
+    """Local interactive chat — spawns plain ``claude`` from the package
+    directory. Runtime flags (model, max_turns, permission_mode, …) come
+    from the agentihooks profile that ``agentihooks init`` already
+    provisioned into ``~/.claude/`` for this package."""
+    return ["claude"]
 
 
 def _local_action_menu(t, agent: LocalAgent) -> bool:
@@ -788,14 +750,12 @@ def _local_action_menu(t, agent: LocalAgent) -> bool:
         W = 50
         _write(t, f"  {GRB}{'━' * W}{R}")
         _write(t, f"  {LG}Selected  {GRB}▶{R}  {LGB}{agent.name}{R}  {GR}LOCAL{R}")
-        if agent.description:
-            _write(t, f"  {LG}  {agent.description}{R}")
         _write(t, f"  {GRB}{'━' * W}{R}")
         _write(t, "")
         _write(t, f"  {GRB}[Enter]{R} {LGB}Enter Agent Dir{R}  {LG}← cd {agent.package_path}{R}")
-        _write(t, f"  {GRB}[1]{R}  {LGB}Open Chat{R}  {LG}← --model {agent.model}{R}")
+        _write(t, f"  {GRB}[1]{R}  {LGB}Open Chat{R}  {LG}← claude (local){R}")
         _write(t, f"  {GRB}[2]{R}  {LGB}Open in VS Code{R}  {LG}← code <package>{R}")
-        _write(t, f"  {GRB}[3]{R}  {LGB}View Config{R}  {LG}← agent.yml{R}")
+        _write(t, f"  {GRB}[3]{R}  {LGB}View CLAUDE.md{R}  {LG}← package/CLAUDE.md{R}")
         _write(t, "")
         _write(t, f"  {LG}[b]{R}  {LG}Back{R}   {RDB}[q]{R}  {RD}Quit{R}")
         _write(t, "")
@@ -825,13 +785,13 @@ def _local_action_menu(t, agent: LocalAgent) -> bool:
             t.flush()
             _prompt(t)
         elif choice == "3":
-            config_path = Path(agent.package_path).parent / "agent.yml"
+            claude_md = Path(agent.package_path) / "CLAUDE.md"
             _write(t, "")
-            if config_path.exists():
-                for line in config_path.read_text().splitlines():
+            if claude_md.exists():
+                for line in claude_md.read_text().splitlines():
                     _write(t, f"  {LG}{line}{R}")
             else:
-                _write(t, f"  {RDB}agent.yml not found{R}")
+                _write(t, f"  {RDB}CLAUDE.md not found{R}")
             _write(t, f"\n  {LG}(press Enter){R}", end="")
             t.flush()
             _prompt(t)
