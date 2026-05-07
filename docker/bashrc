@@ -5,11 +5,11 @@ alias cc='claude --dangerously-skip-permissions'
 alias gs='git status'
 alias gp='git push'
 gc() { git add -A && git commit -m "$(claude -p 'Write a short conventional commit message for this diff. Output ONLY the message, nothing else.' <<< "$(git diff --cached --stat)")"; }
-anton() {
+agenti() {
   local pkg_dir
   pkg_dir="$(curl -s http://localhost:8200/health 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("package_dir",""))' 2>/dev/null)"
   if [ -z "$pkg_dir" ] && [ -n "$AGENTIHUB_AGENT" ]; then
-    pkg_dir="${AGENTICORE_SHARED_FS_ROOT:-$HOME}/agentihub/agents/${AGENTIHUB_AGENT}/package"
+    pkg_dir="${AGENTICORE_CLONE_ROOT:-${AGENTICORE_SHARED_FS_ROOT:-$HOME}}/agentihub/agents/${AGENTIHUB_AGENT}/package"
   fi
   pkg_dir="${pkg_dir:-/app/package}"
   [ -d "$pkg_dir" ] || { echo "package_dir not found: $pkg_dir"; return 1; }
@@ -52,30 +52,10 @@ wkt-get() {
 
 # Welcome banner
 helpme() {
-  echo "========================================"
-  echo "  Agenticore - Claude Code Runner"
-  echo "========================================"
-  echo ""
-  echo "  Shell Commands:"
-  echo "    anton [args]     Claude with OAuth auth (credentials.json)"
-  echo "    cc [args]        Claude (skip permissions)"
-  echo "    gc               Auto-commit with AI message"
-  echo "    gs / gp          Git status / push"
-  echo "    wkt-get [q]      List worktrees, cd into one"
-  echo "    agentipull       Re-sync bundle+agentihub + run agentihooks init (agentihooks is a pip dep; pass --with-agentihooks to also re-pull a URL-override clone)"
-  echo "    helpme           Show this help"
-  echo ""
-  echo "  Installed Tools:"
-  echo "    claude           Claude Code CLI"
-  echo "    gh               GitHub CLI"
-  echo "    aws              AWS CLI v2"
-  echo "    uv               Python package manager"
-  echo "    git curl jq vim  Standard dev tools"
-  echo ""
-  echo "  Agenticore CLI:"
+  echo "    agenti           Claude with OAuth auth (cd into agent package)"
   echo "    agenticore       Server management"
   echo "    agentihooks      Hooks/skills/profile manager"
-  echo ""
+  echo "    helpme           Show this help"
 }
 
 # Only print the banner for interactive shells. Non-interactive invocations
