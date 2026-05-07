@@ -322,7 +322,7 @@ Profiles are **directory packages** that configure how Claude Code runs. Each pr
 └── .mcp.json            ← MCP server config merged into the job
 ```
 
-Profiles support inheritance via `extends:` and ship with the [`agentihooks`](https://pypi.org/project/agentihooks/) PyPI package (a pip dependency of agenticore). Personal overrides live in `~/.agenticore/profiles/`; set `AGENTICORE_AGENTIHOOKS_PATH` for a dev loopback against a local agentihooks checkout. Full reference: [Profile System docs](docs/architecture/profile-system.md).
+Profiles support inheritance via `extends:` and ship with the [`agentihooks`](https://pypi.org/project/agentihooks/) PyPI package (a pip dependency of agenticore). Personal overrides live in `~/.agenticore/profiles/`; set `AGENTICORE_AGENTIHOOKS_URL` to clone a fork (or bind-mount your local checkout at `<SHARED_FS_ROOT>/agentihooks`) for editable-install dev loopback. Full reference: [Profile System docs](docs/architecture/profile-system.md).
 
 ## Helm (Kubernetes)
 
@@ -436,11 +436,10 @@ The bundled `docker-compose.yml` includes an OTEL Collector pre-wired to push tr
 | `GITHUB_TOKEN` | _(empty)_ | GitHub token for auto-PR (fleet mode) |
 | `AGENTIHOOKS_PROFILE` | `coding` | Active profile (fleet mode) |
 | `AGENTICORE_CLAUDE_TIMEOUT` | `3600` | Max claude runtime in seconds |
-| `AGENTICORE_AGENTIHOOKS_PATH` | _(empty)_ | Dev loopback: `uv pip install -e <path>` over the PyPI agentihooks (wins over URL) |
-| `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Override: clone ONCE + `uv pip install -e`. Default install is from PyPI. |
-| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | _(empty)_ | Git URL to clone the bundle content repo |
-| `AGENTICORE_AGENTIHUB_URL` | _(empty)_ | Git URL for agentihub repo (agent mode) |
-| `AGENTICORE_SHARED_FS_ROOT` | _(empty)_ | Shared FS root (Kubernetes mode) |
+| `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Clone ONCE to `<SHARED_FS_ROOT>/<dir-from-url>` + `uv pip install -e`. Default install is from PyPI. |
+| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | _(empty)_ | Git URL to clone the bundle content repo (optional) |
+| `AGENTICORE_AGENTIHUB_URL` | _(empty)_ | Git URL for agentihub repo (required for agent mode) |
+| `AGENTICORE_SHARED_FS_ROOT` | _(empty)_ | Base directory for all clones — `/shared` in k8s, `$HOME` locally |
 
 Full reference: [Configuration docs](docs/reference/configuration.md).
 
@@ -510,27 +509,31 @@ ruff format --check agenticore/ tests/
 or build the Docker image. You do **not** need to clone it to get a working
 runtime. A pod restart is the upgrade path — no periodic re-sync watcher.
 
-When you're iterating on agentihooks itself and want the mounted checkout to
-be the live runtime, use one of the two override escape hatches:
+When you're iterating on agentihooks itself, set `AGENTICORE_AGENTIHOOKS_URL`
+and let the runtime clone (or bind-mount the checkout at the same destination
+to skip the clone). Either way, `uv pip install -e` runs against the resolved
+path so edits to the source land live on the next Python import.
 
 | Env var | Behaviour |
 |---|---|
-| `AGENTICORE_AGENTIHOOKS_PATH=<local path>` | At boot: `uv pip install -e <path>` overlays the PyPI version. Ideal for docker-compose / k8s dev pods with the repo bind-mounted. **Wins over URL.** |
-| `AGENTICORE_AGENTIHOOKS_URL=<git url>` (+ optional `_BRANCH`) | At boot: clone ONCE to `{SHARED_FS_ROOT}/agentihooks`, then `uv pip install -e`. For smoke-testing a fork or branch without a PyPI release. |
-| *(neither set)* | Container runs the PyPI-installed version. Default. |
+| `AGENTICORE_AGENTIHOOKS_URL=<git url>` (+ optional `_BRANCH`) | At boot: clone ONCE to `<SHARED_FS_ROOT>/<dir-from-url>`, then `uv pip install -e`. A pre-mounted checkout at the same destination is trusted as-is (no fetch). |
+| *(unset)* | Container runs the PyPI-installed version. Default. |
 
-`docker-compose.dev.yml` wires the loopback out of the box:
+`docker-compose.dev.yml` wires the loopback by bind-mounting your local
+checkout at the URL-derived destination:
 
 ```yaml
 volumes:
-  - /home/iamroot/dev/agentihooks:/opt/agentihooks-src
+  - /home/iamroot/dev/agentihooks:/shared/agentihooks
 environment:
-  AGENTICORE_AGENTIHOOKS_PATH: /opt/agentihooks-src
+  AGENTICORE_SHARED_FS_ROOT: /shared
+  AGENTICORE_AGENTIHOOKS_URL: https://github.com/your-org/agentihooks
 ```
 
 Edit the mounted checkout → re-run the server (or let Python re-import on
-worker restart). The clone+watcher machinery from the old model is gone;
-bundle and agentihub content repos retain their watchers. See
+worker restart). All clone+watcher machinery is gone; bundle and agentihub
+refresh on-demand via `agenticore hooks sync`, `POST /admin/sync`, or pod
+restart. See
 [`docs/reference/configuration.md`](docs/reference/configuration.md#agentihooks)
 for full env-var semantics.
 

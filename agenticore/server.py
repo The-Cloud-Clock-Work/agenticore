@@ -1269,11 +1269,7 @@ def _do_sync_bundle(cfg) -> Optional[Path]:
 
 
 def _do_sync_agentihub(cfg) -> Optional[Path]:
-    """Clone/fetch agentihub repo. Thread-safe. Returns hub path."""
-    if cfg.dev_mode:
-        from agenticore.hooks import sync_agentihub
-
-        return sync_agentihub()
+    """Clone/fetch agentihub repo. Thread-safe. Returns hub path or None."""
     if not cfg.agentihub_url:
         return None
     from agenticore.hooks import sync_agentihub
@@ -1282,13 +1278,12 @@ def _do_sync_agentihub(cfg) -> Optional[Path]:
 
 
 def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optional[Path]) -> None:
-    """Run ``agentihooks init`` + start content-repo watchers.
+    """Run ``agentihooks init`` once at boot.
 
-    Init always runs — agentihooks is a PyPI dependency so the CLI is on
-    PATH regardless of whether a PATH/URL overlay was applied. Only the
-    bundle watcher is started here; there is no watcher for agentihooks
-    itself since it is a versioned pip package (pod restart picks up
-    upgrades).
+    agentihooks is a PyPI dependency so the CLI is on PATH regardless of
+    whether a PATH/URL overlay was applied. No background watchers — bundle
+    and agentihub refresh on demand via ``agenticore hooks sync``,
+    ``POST /admin/sync``, or pod restart.
     """
     from agenticore.hooks import run_agentihooks_init
 
@@ -1315,34 +1310,6 @@ def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optio
             repo_dir=pkg_dir,
             force=False,
         )
-
-    if cfg.dev_mode:
-        logger.info("dev mode: agentihooks init complete (no watchers)")
-        return
-
-    # Start content-repo watcher (daemon thread — safe from main thread).
-    if bundle_path and cfg.agentihooks_bundle_url and cfg.agentihooks_bundle_sync_interval > 0:
-        from agenticore.hooks import start_bundle_watcher
-
-        start_bundle_watcher(
-            cfg.agentihooks_bundle_url,
-            bundle_path,
-            cfg.agentihooks_bundle_sync_interval,
-            cfg.agentihooks_bundle_branch,
-            hooks_path=hooks_path,
-            repo_dir=pkg_dir,
-        )
-
-
-def _start_agentihub_watcher_if_needed(cfg, hub_path: Optional[Path]) -> None:
-    """Start agentihub watcher daemon thread if configured."""
-    if cfg.dev_mode or not hub_path or not cfg.agentihub_url:
-        return
-    if cfg.agentihub_sync_interval > 0:
-        from agenticore.hooks import start_agentihub_watcher
-
-        start_agentihub_watcher(cfg.agentihub_url, hub_path, cfg.agentihub_sync_interval, cfg.agentihub_branch)
-
 
 def _auto_register_with_bridge(cfg):
     """Register with AgentiBridge for A2A discovery. Best-effort — never blocks startup."""
@@ -1591,7 +1558,7 @@ def main():
         # Wait for all 3 git clones
         hooks_path = _safe_result(f_hooks, "sync_agentihooks")
         bundle_path = _safe_result(f_bundle, "sync_bundle")
-        hub_path = _safe_result(f_hub, "sync_agentihub")
+        _safe_result(f_hub, "sync_agentihub")
 
         t2 = time.monotonic()
         logger.info("boot phase1 done in %.2fs (setup=%.2fs git=%.2fs)", t2 - t0, t1 - t0, t2 - t1)
@@ -1603,7 +1570,6 @@ def main():
         logger.warning("agentihooks init failed: %s — profiles may be unavailable", e)
 
     _enable_installed_plugins()  # must run AFTER agentihooks regenerates settings.json
-    _start_agentihub_watcher_if_needed(cfg, hub_path)
 
     # Bridge future — don't care about result, already submitted
     _safe_result(f_bridge, "bridge_registration")

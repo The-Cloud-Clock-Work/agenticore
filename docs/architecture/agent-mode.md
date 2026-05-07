@@ -45,10 +45,11 @@ Agent packages come from an **agentihub** — a separate repo holding agent iden
 > **Public example**: [`agentihub-example`](https://github.com/The-Cloud-Clockwork/agentihub-example) ships a working `publishing` agent that walks through the full layout (`agent.yml` + `package/` + `evaluation/`). Clone it, point Agenticore at it, and you have a fully provisioned Agent Mode container. Fork it to author your own.
 
 On startup, `agent_mode/initializer.py` clones the hub (via `AGENTICORE_AGENTIHUB_URL`)
-and copies `agents/{name}/package/` → `/app/package/`. The container then
-validates the package, runs startup scripts, caches the system prompt, and
-waits for requests. A background watcher re-fetches the hub every
-`AGENTICORE_AGENTIHUB_SYNC_INTERVAL` seconds (default 300, `0` disables).
+and points `package_dir` at `agents/{name}/package/` directly (no copy). The
+container then validates the package, runs startup scripts, caches the system
+prompt, and waits for requests. There is no background watcher — refresh the
+hub on demand via `agenticore hooks sync --repo agentihub`,
+`POST /admin/sync?target=agentihub`, or pod restart.
 
 [Agentihooks](https://github.com/The-Cloud-Clockwork/agentihooks) provides the
 Claude Code runner (hooks, MCP tools, guardrails) but is **not** involved in

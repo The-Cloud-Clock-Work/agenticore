@@ -24,20 +24,12 @@ data:
   {{- if .Values.agentihooks.url }}
   AGENTICORE_AGENTIHOOKS_URL: {{ .Values.agentihooks.url | quote }}
   {{- end }}
-  {{- if .Values.agentihooks.path }}
-  AGENTICORE_AGENTIHOOKS_PATH: {{ .Values.agentihooks.path | quote }}
-  {{- end }}
   {{- if .Values.agentihooks.bundleUrl }}
   AGENTICORE_AGENTIHOOKS_BUNDLE_URL: {{ .Values.agentihooks.bundleUrl | quote }}
   {{- end }}
-  AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL: {{ .Values.agentihooks.bundleSyncInterval | quote }}
   {{- if ((.Values.agentihub).url) }}
   AGENTICORE_AGENTIHUB_URL: {{ .Values.agentihub.url | quote }}
   {{- end }}
-  {{- if ((.Values.agentihub).path) }}
-  AGENTICORE_AGENTIHUB_PATH: {{ .Values.agentihub.path | quote }}
-  {{- end }}
-  AGENTICORE_AGENTIHUB_SYNC_INTERVAL: {{ .Values.agentihub.syncInterval | default 300 | quote }}
   # hooks-utils MCP tool restrictions — inherited by Claude subprocesses
   MCP_CATEGORIES: {{ .Values.agentihooks.mcpCategories | quote }}
   ALLOWED_TOOLS: {{ .Values.agentihooks.allowedTools | quote }}

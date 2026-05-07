@@ -35,8 +35,8 @@ class TestAgentModeConfig:
     def test_defaults(self, tmp_path):
         cfg = load_config(str(tmp_path / "x.yml"))
         assert cfg.agent_mode.enabled is False
-        assert cfg.agent_mode.package_dir == "/app/package"
-        assert cfg.agent_mode.evaluation_dir == "/app/evaluation"
+        assert cfg.agent_mode.package_dir == ""
+        assert cfg.agent_mode.evaluation_dir == ""
         assert cfg.agent_mode.repo_url == ""
         assert cfg.agent_mode.repo_branch == "main"
         assert cfg.agent_mode.timeout == 3600

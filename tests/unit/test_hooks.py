@@ -1,24 +1,24 @@
 """Unit tests for agenticore.hooks module."""
 
-import os
 from pathlib import Path
 from unittest.mock import ANY, patch
 
 import pytest
 
-from agenticore.config import reset_config
+from agenticore.config import RuntimePaths, reset_config
 from agenticore.hooks import (
+    _dir_from_url,
     _install_dir,
-    start_bundle_watcher,
-    start_agentihub_watcher,
     sync_agentihooks,
+    sync_agentihub,
+    sync_bundle,
 )
 
 
 @pytest.fixture(autouse=True)
 def _reset_config_singleton(monkeypatch):
     """Reset the cached config singleton before every test in this module so
-    env-var changes (AGENTICORE_AGENTIHOOKS_PATH, AGENTICORE_SHARED_FS_ROOT)
+    env-var changes (AGENTICORE_AGENTIHOOKS_URL, AGENTICORE_SHARED_FS_ROOT)
     take effect on the next get_config() call.
     """
     reset_config()
@@ -36,42 +36,54 @@ class TestNoAuthenticatedUrlImport:
 
 
 @pytest.mark.unit
-class TestInstallDir:
-    def test_explicit_path(self, monkeypatch, tmp_path):
-        """Explicit AGENTICORE_AGENTIHOOKS_PATH env var wins."""
-        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_PATH", str(tmp_path))
-        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
-        assert _install_dir() == tmp_path
+class TestDirFromUrl:
+    def test_strips_dot_git(self):
+        assert _dir_from_url("https://github.com/foo/bar.git") == "bar"
 
-    def test_shared_fs(self, monkeypatch, tmp_path):
-        """AGENTICORE_SHARED_FS_ROOT → {root}/agentihooks."""
-        monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_PATH", raising=False)
+    def test_no_dot_git(self):
+        assert _dir_from_url("https://github.com/foo/bar") == "bar"
+
+    def test_trailing_slash(self):
+        assert _dir_from_url("https://github.com/foo/bar/") == "bar"
+
+    def test_real_repo_names(self):
+        assert _dir_from_url("https://github.com/x/agentihooks-bundle.git") == "agentihooks-bundle"
+        assert _dir_from_url("https://github.com/x/agentihub") == "agentihub"
+        assert _dir_from_url("https://github.com/x/agentihooks.git") == "agentihooks"
+
+
+@pytest.mark.unit
+class TestInstallDir:
+    def test_url_under_shared_fs(self, monkeypatch, tmp_path):
+        """URL set + SHARED_FS_ROOT set → {root}/<dir-from-url>."""
+        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_URL", "https://github.com/x/agentihooks")
         monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(tmp_path))
         assert _install_dir() == tmp_path / "agentihooks"
 
-    def test_local_default(self, monkeypatch):
-        """Falls back to ~/.agenticore/agentihooks."""
-        monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_PATH", raising=False)
+    def test_url_with_dot_git(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_URL", "https://github.com/x/agentihooks.git")
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(tmp_path))
+        assert _install_dir() == tmp_path / "agentihooks"
+
+    def test_no_url_returns_none(self, monkeypatch):
+        """No URL → None (repo isn't part of this deployment)."""
+        monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_URL", raising=False)
         monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
-        assert _install_dir() == Path.home() / ".agenticore" / "agentihooks"
+        assert _install_dir() is None
 
 
 @pytest.mark.unit
 class TestSyncAgentihooks:
-    """agentihooks is a PyPI dependency. sync_agentihooks only does work
-    when PATH or URL overrides are set; otherwise the package installed in
-    the venv is authoritative."""
+    """agentihooks is a PyPI dependency. URL set → clone + editable install
+    + populate cfg.runtime.agentihooks_dir; URL unset → PyPI."""
 
-    def test_no_override_falls_through_to_pypi(self, monkeypatch):
-        """No PATH / URL → fall through to ``uv pip install agentihooks`` from PyPI."""
-        monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_PATH", raising=False)
+    def test_no_url_falls_through_to_pypi(self, monkeypatch):
         monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_URL", raising=False)
 
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = ""
-            mock_cfg.return_value.agentihooks_path = ""
             mock_cfg.return_value.agentihooks_branch = ""
-            mock_cfg.return_value.dev_mode = False
+            mock_cfg.return_value.runtime = RuntimePaths()
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
                 with patch("agenticore.hooks._pip_install_editable") as mock_pip_e:
                     with patch("agenticore.hooks._pip_install_pypi") as mock_pypi:
@@ -82,201 +94,191 @@ class TestSyncAgentihooks:
         mock_pip_e.assert_not_called()
         mock_pypi.assert_called_once_with("agentihooks")
 
-    def test_path_override_runs_pip_install_e_no_clone(self, monkeypatch, tmp_path):
-        """PATH set → uv pip install -e <path>, no clone."""
-        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_PATH", str(tmp_path))
-
-        with patch("agenticore.hooks.get_config") as mock_cfg:
-            mock_cfg.return_value.agentihooks_url = ""
-            mock_cfg.return_value.agentihooks_path = str(tmp_path)
-            mock_cfg.return_value.dev_mode = False
-            with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
-                with patch("agenticore.hooks._pip_install_editable") as mock_pip:
-                    result = sync_agentihooks()
-
-        assert result == tmp_path
-        mock_clone.assert_not_called()
-        mock_pip.assert_called_once_with(tmp_path)
-        assert os.environ.get("AGENTICORE_AGENTIHOOKS_PATH") == str(tmp_path)
-
-    def test_path_wins_over_url(self, monkeypatch, tmp_path):
-        """When both PATH and URL are set, PATH wins — no clone."""
-        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_PATH", str(tmp_path))
-
-        with patch("agenticore.hooks.get_config") as mock_cfg:
-            mock_cfg.return_value.agentihooks_url = "https://github.com/x/y"
-            mock_cfg.return_value.agentihooks_path = str(tmp_path)
-            mock_cfg.return_value.dev_mode = False
-            with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
-                with patch("agenticore.hooks._pip_install_editable") as mock_pip:
-                    result = sync_agentihooks()
-
-        assert result == tmp_path
-        mock_clone.assert_not_called()
-        mock_pip.assert_called_once_with(tmp_path)
-
-    def test_url_override_clones_then_pip_installs(self, monkeypatch, tmp_path):
-        """URL set, PATH unset → clone + uv pip install -e <dest>."""
-        monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_PATH", raising=False)
+    def test_url_clones_then_pip_installs(self, monkeypatch, tmp_path):
+        """URL set → clone + uv pip install -e <dest> + cfg.runtime updated."""
         monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
 
+        dest = tmp_path / "agentihooks-clone"  # does not exist → clone path
+        runtime = RuntimePaths()
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = ""
-            mock_cfg.return_value.agentihooks_path = ""
             mock_cfg.return_value.agentihooks_branch = "main"
-            mock_cfg.return_value.dev_mode = False
+            mock_cfg.return_value.runtime = runtime
             mock_cfg.return_value.repos.shared_fs_root = ""
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
                 with patch("agenticore.hooks._pip_install_editable") as mock_pip:
-                    with patch("agenticore.hooks._install_dir", return_value=tmp_path):
+                    with patch("agenticore.hooks._install_dir", return_value=dest):
                         result = sync_agentihooks("https://github.com/example/agentihooks")
 
-        assert result == tmp_path
-        mock_clone.assert_called_once_with("https://github.com/example/agentihooks", tmp_path, ANY)
-        mock_pip.assert_called_once_with(tmp_path)
-        assert os.environ.get("AGENTICORE_AGENTIHOOKS_PATH") == str(tmp_path)
+        assert result == dest
+        mock_clone.assert_called_once_with("https://github.com/example/agentihooks", dest, ANY)
+        mock_pip.assert_called_once_with(dest)
+        assert runtime.agentihooks_dir == dest
 
-    def test_url_arg_overrides_config(self, monkeypatch, tmp_path):
-        """URL passed directly overrides config value."""
-        monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_PATH", raising=False)
-
+    def test_url_arg_overrides_config(self, tmp_path):
+        dest = tmp_path / "agentihooks-clone"
+        runtime = RuntimePaths()
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = "https://github.com/other/repo"
-            mock_cfg.return_value.agentihooks_path = ""
             mock_cfg.return_value.agentihooks_branch = "main"
-            mock_cfg.return_value.dev_mode = False
+            mock_cfg.return_value.runtime = runtime
             mock_cfg.return_value.repos.shared_fs_root = ""
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
                 with patch("agenticore.hooks._pip_install_editable"):
-                    with patch("agenticore.hooks._install_dir", return_value=tmp_path):
+                    with patch("agenticore.hooks._install_dir", return_value=dest):
                         sync_agentihooks("https://github.com/example/agentihooks")
 
-        mock_clone.assert_called_once_with("https://github.com/example/agentihooks", tmp_path, ANY)
+        mock_clone.assert_called_once_with("https://github.com/example/agentihooks", dest, ANY)
 
-    def test_config_url_used_when_no_arg(self, monkeypatch, tmp_path):
-        """Config URL is used when no URL arg provided."""
-        monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_PATH", raising=False)
-
+    def test_config_url_used_when_no_arg(self, tmp_path):
+        dest = tmp_path / "agentihooks-clone"
+        runtime = RuntimePaths()
         with patch("agenticore.hooks.get_config") as mock_cfg:
             mock_cfg.return_value.agentihooks_url = "https://github.com/config/repo"
-            mock_cfg.return_value.agentihooks_path = ""
             mock_cfg.return_value.agentihooks_branch = "main"
-            mock_cfg.return_value.dev_mode = False
+            mock_cfg.return_value.runtime = runtime
             mock_cfg.return_value.repos.shared_fs_root = ""
             with patch("agenticore.hooks._clone_or_fetch") as mock_clone:
                 with patch("agenticore.hooks._pip_install_editable"):
-                    with patch("agenticore.hooks._install_dir", return_value=tmp_path):
+                    with patch("agenticore.hooks._install_dir", return_value=dest):
                         result = sync_agentihooks()
 
-        assert result == tmp_path
-        mock_clone.assert_called_once_with("https://github.com/config/repo", tmp_path, ANY)
+        assert result == dest
+        mock_clone.assert_called_once_with("https://github.com/config/repo", dest, ANY)
 
 
 @pytest.mark.unit
-class TestBundleWatcher:
-    def test_returns_daemon_thread(self, tmp_path):
-        """start_bundle_watcher returns a started daemon thread."""
-        with patch("agenticore.hooks._clone_or_fetch_bundle"):
-            t = start_bundle_watcher("https://example.com/bundle", tmp_path, interval=9999)
-        assert t.daemon is True
-        assert t.is_alive()
-        t.join(timeout=0)
+class TestSyncBundle:
+    def test_no_url_returns_none(self):
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.agentihooks_bundle_url = ""
+            mock_cfg.return_value.runtime = RuntimePaths()
+            assert sync_bundle() is None
 
-    def test_calls_clone_or_fetch_bundle_after_interval(self, tmp_path):
-        """Watcher thread calls _clone_or_fetch_bundle after each sleep interval."""
-        import agenticore.hooks as hooks_mod
+    def test_url_clones_and_populates_runtime(self, tmp_path):
+        dest = tmp_path / "bundle-clone"
+        runtime = RuntimePaths()
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.agentihooks_bundle_url = "https://github.com/x/agentihooks-bundle"
+            mock_cfg.return_value.agentihooks_bundle_branch = "main"
+            mock_cfg.return_value.runtime = runtime
+            mock_cfg.return_value.repos.shared_fs_root = ""
+            with patch("agenticore.hooks._clone_or_fetch_bundle") as mock_clone:
+                with patch("agenticore.hooks._bundle_dir", return_value=dest):
+                    result = sync_bundle()
 
-        calls = []
-
-        def fake_clone(url, dest, branch=""):
-            calls.append((url, dest))
-
-        call_count = [0]
-
-        def stop_after_one(n):
-            call_count[0] += 1
-            if call_count[0] >= 2:
-                raise SystemExit
-
-        with patch("agenticore.hooks._clone_or_fetch_bundle", side_effect=fake_clone):
-            with patch.object(hooks_mod.time, "sleep", side_effect=stop_after_one):
-                t = start_bundle_watcher("https://example.com/bundle", tmp_path, interval=1)
-                t.join(timeout=2)
-
-        assert len(calls) >= 1
-
-    def test_handles_exception_without_crashing(self, tmp_path, caplog):
-        """Exception in _clone_or_fetch_bundle is caught and logged; thread keeps running."""
-        import logging
-
-        import agenticore.hooks as hooks_mod
-
-        call_count = [0]
-
-        def fail_then_stop(n):
-            call_count[0] += 1
-            if call_count[0] >= 2:
-                raise SystemExit
-
-        with patch("agenticore.hooks._clone_or_fetch_bundle", side_effect=Exception("network error")):
-            with patch.object(hooks_mod.time, "sleep", side_effect=fail_then_stop):
-                with caplog.at_level(logging.WARNING, logger="agenticore.hooks"):
-                    t = start_bundle_watcher("https://example.com/bundle", tmp_path, interval=1)
-                    t.join(timeout=2)
-
-        assert "agentihooks-bundle hot-reload failed" in caplog.text
+        assert result == dest
+        mock_clone.assert_called_once()
+        assert runtime.bundle_dir == dest
 
 
 @pytest.mark.unit
-class TestAgentihubWatcher:
-    def test_returns_daemon_thread(self, tmp_path):
-        """start_agentihub_watcher returns a started daemon thread."""
-        with patch("agenticore.hooks._clone_or_fetch_agentihub"):
-            t = start_agentihub_watcher("https://example.com/agentihub", tmp_path, interval=9999)
-        assert t.daemon is True
-        assert t.is_alive()
-        t.join(timeout=0)
+class TestSyncAgentihub:
+    def test_no_url_returns_none(self):
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.agentihub_url = ""
+            mock_cfg.return_value.runtime = RuntimePaths()
+            assert sync_agentihub() is None
 
-    def test_calls_clone_or_fetch_agentihub_after_interval(self, tmp_path):
-        """Watcher thread calls _clone_or_fetch_agentihub after each sleep interval."""
-        import agenticore.hooks as hooks_mod
+    def test_url_clones_and_populates_runtime(self, tmp_path):
+        dest = tmp_path / "hub-clone"
+        runtime = RuntimePaths()
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.agentihub_url = "https://github.com/x/agentihub"
+            mock_cfg.return_value.agentihub_branch = "main"
+            mock_cfg.return_value.runtime = runtime
+            mock_cfg.return_value.repos.shared_fs_root = ""
+            with patch("agenticore.hooks._clone_or_fetch_agentihub") as mock_clone:
+                with patch("agenticore.hooks._agentihub_install_dir", return_value=dest):
+                    result = sync_agentihub()
 
-        calls = []
+        assert result == dest
+        mock_clone.assert_called_once()
+        assert runtime.hub_dir == dest
 
-        def fake_clone(url, dest, branch=""):
-            calls.append((url, dest))
+    def test_pre_mounted_dir_skips_clone(self, tmp_path):
+        """Pre-existing dir without .git → trust as bind-mount, no clone."""
+        dest = tmp_path / "hub-mount"
+        dest.mkdir()  # exists but no .git
+        runtime = RuntimePaths()
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.agentihub_url = "https://github.com/x/agentihub"
+            mock_cfg.return_value.agentihub_branch = "main"
+            mock_cfg.return_value.runtime = runtime
+            mock_cfg.return_value.repos.shared_fs_root = ""
+            with patch("agenticore.hooks._clone_or_fetch_agentihub") as mock_clone:
+                with patch("agenticore.hooks._agentihub_install_dir", return_value=dest):
+                    result = sync_agentihub()
 
-        call_count = [0]
+        assert result == dest
+        mock_clone.assert_not_called()
+        assert runtime.hub_dir == dest
 
-        def stop_after_one(n):
-            call_count[0] += 1
-            if call_count[0] >= 2:
-                raise SystemExit
+    def test_existing_clone_does_fetch(self, tmp_path):
+        """Pre-existing dir with .git → fetch+reset, not first clone."""
+        dest = tmp_path / "hub-existing"
+        (dest / ".git").mkdir(parents=True)
+        runtime = RuntimePaths()
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.agentihub_url = "https://github.com/x/agentihub"
+            mock_cfg.return_value.agentihub_branch = "main"
+            mock_cfg.return_value.runtime = runtime
+            mock_cfg.return_value.repos.shared_fs_root = ""
+            with patch("agenticore.hooks._clone_or_fetch_agentihub") as mock_clone:
+                with patch("agenticore.hooks._agentihub_install_dir", return_value=dest):
+                    result = sync_agentihub()
 
-        with patch("agenticore.hooks._clone_or_fetch_agentihub", side_effect=fake_clone):
-            with patch.object(hooks_mod.time, "sleep", side_effect=stop_after_one):
-                t = start_agentihub_watcher("https://example.com/agentihub", tmp_path, interval=1)
-                t.join(timeout=2)
+        assert result == dest
+        mock_clone.assert_called_once()
 
-        assert len(calls) >= 1
 
-    def test_handles_exception_without_crashing(self, tmp_path, caplog):
-        """Exception in _clone_or_fetch_agentihub is caught and logged; thread keeps running."""
-        import logging
+@pytest.mark.unit
+class TestHubBundleUrlCollision:
+    """When hub URL == bundle URL, both consumers resolve to the same dir.
+    The clone lock must be path-keyed so concurrent boot-time syncs serialize."""
 
-        import agenticore.hooks as hooks_mod
+    def test_same_url_yields_same_path(self, monkeypatch, tmp_path):
+        from agenticore.hooks import resolve_repo_paths
 
-        call_count = [0]
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(tmp_path))
+        monkeypatch.setenv("AGENTICORE_AGENTIHUB_URL", "https://github.com/x/agentibrain-kernel")
+        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", "https://github.com/x/agentibrain-kernel")
 
-        def fail_then_stop(n):
-            call_count[0] += 1
-            if call_count[0] >= 2:
-                raise SystemExit
+        _, bundle, hub = resolve_repo_paths()
+        assert hub == bundle == tmp_path / "agentibrain-kernel"
 
-        with patch("agenticore.hooks._clone_or_fetch_agentihub", side_effect=Exception("network error")):
-            with patch.object(hooks_mod.time, "sleep", side_effect=fail_then_stop):
-                with caplog.at_level(logging.WARNING, logger="agenticore.hooks"):
-                    t = start_agentihub_watcher("https://example.com/agentihub", tmp_path, interval=1)
-                    t.join(timeout=2)
 
-        assert "agentihub hot-reload failed" in caplog.text
+@pytest.mark.unit
+class TestResolveRepoPaths:
+    def test_url_derived_dirs_under_shared_fs(self, monkeypatch, tmp_path):
+        from agenticore.hooks import resolve_repo_paths
+
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(tmp_path))
+        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_URL", "https://github.com/x/agentihooks.git")
+        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", "https://github.com/x/agentihooks-bundle")
+        monkeypatch.setenv("AGENTICORE_AGENTIHUB_URL", "https://github.com/x/agentihub.git")
+
+        hooks, bundle, hub = resolve_repo_paths()
+        assert hooks == tmp_path / "agentihooks"
+        assert bundle == tmp_path / "agentihooks-bundle"
+        assert hub == tmp_path / "agentihub"
+
+    def test_unset_urls_yield_none(self, monkeypatch, tmp_path):
+        from agenticore.hooks import resolve_repo_paths
+
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(tmp_path))
+        monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_URL", raising=False)
+        monkeypatch.delenv("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", raising=False)
+        monkeypatch.delenv("AGENTICORE_AGENTIHUB_URL", raising=False)
+
+        hooks, bundle, hub = resolve_repo_paths()
+        assert hooks is None and bundle is None and hub is None
+
+    def test_no_shared_fs_root_falls_back_to_local(self, monkeypatch):
+        from agenticore.hooks import resolve_repo_paths
+
+        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
+        monkeypatch.setenv("AGENTICORE_AGENTIHUB_URL", "https://github.com/x/agentihub")
+
+        _, _, hub = resolve_repo_paths()
+        assert hub == Path.home() / ".agenticore" / "agentihub"

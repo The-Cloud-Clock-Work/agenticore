@@ -30,12 +30,10 @@ def _provision_from_agentihub(cfg) -> None:
         _log.debug("AGENTIHUB_AGENT not set — skipping agentihub provision")
         return
 
-    hub_path_str = os.getenv("AGENTICORE_AGENTIHUB_PATH", "")
-    if not hub_path_str:
-        _log.warning("AGENTICORE_AGENTIHUB_PATH not set — hub not available for agent provision")
+    hub_path = cfg.runtime.hub_dir
+    if not hub_path:
+        _log.warning("agentihub clone not available — sync_agentihub did not populate cfg.runtime.hub_dir")
         return
-
-    hub_path = Path(hub_path_str)
     agent_dir = hub_path / "agents" / agent_name
     if not agent_dir.exists():
         # Try aliases: check for aliases.yaml in the hub root, or fuzzy-match
@@ -93,7 +91,7 @@ def _clone_package_repo(repo_url: str, branch: str, target_dir: str) -> None:
         env.update(extra_env)
 
         # Clone to a temp dir, then move contents to target
-        # (target_dir may already have /app/package and /app/evaluation as empty dirs)
+        # (target_dir may already exist as an empty dir from the image baseline)
         target = Path(target_dir)
         if not target.exists():
             target.mkdir(parents=True, exist_ok=True)

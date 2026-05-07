@@ -78,11 +78,11 @@ def _user_profiles_dir() -> Path:
 
 
 def _agentihooks_profiles_dir() -> Optional[Path]:
-    """External agentihooks profiles dir, set via AGENTICORE_AGENTIHOOKS_PATH."""
-    p = os.getenv("AGENTICORE_AGENTIHOOKS_PATH", "")
-    if p:
-        return Path(p) / "profiles"
-    return None
+    """External agentihooks profiles dir — populated by sync_agentihooks."""
+    from agenticore.config import get_config
+
+    p = get_config().runtime.agentihooks_dir
+    return p / "profiles" if p else None
 
 
 # ── Loading ───────────────────────────────────────────────────────────────
@@ -247,7 +247,8 @@ def _load_legacy_profiles(base_dir: Path, profiles: Dict[str, Profile]) -> None:
 
 
 def load_profiles() -> Dict[str, Profile]:
-    """Load all profiles from AGENTICORE_AGENTIHOOKS_PATH and ~/.agenticore/profiles/.
+    """Load all profiles from the agentihooks clone (when present) and
+    ~/.agenticore/profiles/.
 
     Supports both new directory-based profiles and legacy .yml files.
     Later search dirs override earlier ones with the same name.

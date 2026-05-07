@@ -65,13 +65,9 @@ langfuse:
   public_key: ""
   secret_key: ""
 
-agentihooks_path: ""
 agentihooks_url: ""
 agentihooks_bundle_url: ""
-agentihooks_bundle_sync_interval: 300
 agentihub_url: ""
-agentihub_path: ""
-agentihub_sync_interval: 300
 ```
 
 ## Environment Variables
@@ -161,70 +157,56 @@ development against a live checkout or a non-PyPI fork/branch.
 
 | Variable | YAML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `AGENTICORE_AGENTIHOOKS_PATH` | `agentihooks_path` | (none) | Dev loopback: `uv pip install -e <path>` over the PyPI version. Wins over URL. |
-| `AGENTICORE_AGENTIHOOKS_URL` | `agentihooks_url` | (none) | Bleeding-edge override: clone ONCE at boot, `uv pip install -e`. No periodic re-sync. |
+| `AGENTICORE_SHARED_FS_ROOT` | `repos.shared_fs_root` | (empty) | Base directory for all clones — `/shared` in k8s, `$HOME` locally. |
+| `AGENTICORE_AGENTIHOOKS_URL` | `agentihooks_url` | (empty) | Clone ONCE to `<SHARED_FS_ROOT>/<dir-from-url>` + `uv pip install -e`. Default install is from PyPI. |
 | `AGENTICORE_AGENTIHOOKS_BRANCH` | `agentihooks_branch` | (empty) | Git ref checked out when URL is set. |
-| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | `agentihooks_bundle_url` | (none) | Git URL for the bundle content repo. Passed as `--bundle` to `agentihooks init`. |
-| `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | `agentihooks_bundle_sync_interval` | `300` | Bundle hot-reload interval in seconds. `0` disables. |
+| `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | `agentihooks_bundle_url` | (empty) | Git URL for the bundle content repo (optional). Passed as `--bundle` to `agentihooks init`. |
 | `AGENTIHOOKS_PROFILE` | (env only) | `coding` | Profile name passed to `agentihooks init --profile`. |
 
 ### Agentihub
 
 | Variable | YAML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `AGENTICORE_AGENTIHUB_URL` | `agentihub_url` | (none) | Git URL for the agentihub repo (agent packages). Used in agent mode. |
-| `AGENTICORE_AGENTIHUB_PATH` | `agentihub_path` | (none) | Explicit path override. Skips cloning. |
-| `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | `agentihub_sync_interval` | `300` | Agentihub hot-reload interval in seconds. `0` disables. |
-| `AGENTIHUB_AGENT` | (env only) | (none) | Agent name to load (matches `agents/{name}/` directory). |
+| `AGENTICORE_AGENTIHUB_URL` | `agentihub_url` | (empty) | Git URL for the agentihub repo (required for agent mode). Clone lands at `<SHARED_FS_ROOT>/<dir-from-url>`. |
+| `AGENTIHUB_AGENT` | (env only) | (empty) | Agent name to load (matches `agents/{name}/` directory). |
 
 ## Repository Sync
 
-agentihooks itself is a pip dependency — it is NOT cloned. The two **content**
-repos (bundle and agentihub) are cloned at startup and kept up-to-date via
-background watcher threads. Each content repo has a URL (triggers cloning),
-a PATH override (skips cloning), and a SYNC_INTERVAL (controls hot-reload
-frequency).
+agentihooks itself is a pip dependency — only cloned when
+`AGENTICORE_AGENTIHOOKS_URL` is set (clone + editable install over PyPI).
+The bundle is an optional addon. agentihub is required in agent mode. All
+three repos clone ONCE at startup; no background watchers.
 
 ### Which repos to configure
 
 | Deployment | Repos needed | Key variables |
 |------------|-------------|---------------|
-| **Standard mode** (job orchestrator) | bundle | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` |
-| **Agent mode** (purpose-built container) | bundle + agentihub | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL`, `AGENTICORE_AGENTIHUB_URL`, `AGENTIHUB_AGENT` |
-| **Local dev** (pre-cloned repos) | none — use PATH overrides | `AGENTICORE_AGENTIHOOKS_PATH` (editable install), `AGENTICORE_AGENTIHUB_PATH` |
+| **Standard mode** (job orchestrator) | bundle (optional) | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` |
+| **Agent mode** (purpose-built container) | bundle (optional) + hub (required) | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL`, `AGENTICORE_AGENTIHUB_URL`, `AGENTIHUB_AGENT` |
+| **Local dev** (bind-mounted checkouts) | mount at `<SHARED_FS_ROOT>/<dir-from-url>` | `AGENTICORE_SHARED_FS_ROOT`, plus matching URL env vars |
 
 ### Startup flow
 
 ```
 Server start
-  ├─ AGENTICORE_AGENTIHOOKS_PATH set?        (dev loopback)
-  │   └─ uv pip install -e <path>  (overlay PyPI, once, no watcher)
-  ├─ elif AGENTICORE_AGENTIHOOKS_URL set?    (bleeding-edge fork)
-  │   └─ git clone → uv pip install -e      (once, no watcher)
-  ├─ AGENTICORE_AGENTIHOOKS_BUNDLE_URL set?
-  │   └─ git clone → pass to agentihooks init --bundle → start watcher (BUNDLE_SYNC_INTERVAL)
-  └─ AGENTICORE_AGENTIHUB_URL set?
-      └─ git clone → start watcher (AGENTICORE_AGENTIHUB_SYNC_INTERVAL)
-          └─ agent_mode/initializer.py copies agents/{name}/package/ → /app/package/
+  ├─ AGENTICORE_AGENTIHOOKS_URL set?         (override → editable install)
+  │   ├─ destination dir already populated?  → trust it, no clone
+  │   └─ otherwise                           → git clone + uv pip install -e
+  ├─ AGENTICORE_AGENTIHOOKS_BUNDLE_URL set?  (optional addon)
+  │   └─ clone → pass to agentihooks init --bundle
+  └─ AGENTICORE_AGENTIHUB_URL set?           (required for agent mode)
+      └─ clone (once)
+          └─ agent_mode/initializer.py points package_dir at agents/{name}/package/
 ```
 
-### Hot-reload behavior
+### Reload model
 
-The two content repos (bundle + agentihub) use a daemon thread that
-periodically runs `git fetch --all && git reset --hard origin/HEAD`. Each
-has an independent interval defaulting to 300 seconds. Set any
-`*_SYNC_INTERVAL` to `0` to disable its watcher. **agentihooks itself has
-no watcher** — it is a PyPI dependency, so a pod restart is the upgrade
-path.
-
-| Repo | Watcher thread | Interval variable | Default |
-|------|---------------|-------------------|---------|
-| agentihooks-bundle | `agentihooks-bundle-watcher` | `AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` | 300s |
-| agentihub | `agentihub-watcher` | `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | 300s |
+No background polling. To pick up upstream changes, trigger a sync on
+demand or restart the pod. In agent mode, `render_mcp_whitelist` re-runs
+`agentihooks init --repo <pkg>` before every completion, so per-agent
+settings always reflect the on-disk bundle at request time.
 
 ### On-demand sync
-
-In addition to the background watchers, you can trigger a sync manually:
 
 **REST API:**
 
@@ -251,10 +233,10 @@ agenticore hooks sync --target bundle
 ### PATH vs URL
 
 Setting a `*_PATH` variable tells agenticore to use that directory as-is —
-no cloning, no watcher, no git operations. This is useful for local
-development where you have the repos already checked out. When both `*_PATH`
-and `*_URL` are set, `*_PATH` takes precedence (agentihooks only; agentihub
-always clones when `*_URL` is set).
+no cloning, no git operations. This is useful for local development where
+you have the repos already checked out. When both `*_PATH` and `*_URL` are
+set, `*_PATH` takes precedence (agentihooks only; agentihub always clones
+when `*_URL` is set).
 
 ## File Paths
 
@@ -268,7 +250,7 @@ always clones when `*_URL` is set).
 | `~/agenticore-repos/` | Default cloned repos root |
 | `~/agenticore-repos/{hash}/.lock` | Per-repo flock file |
 | `~/agenticore-repos/{hash}/repo/` | Cloned repository |
-| `{AGENTICORE_AGENTIHOOKS_PATH}/profiles/*/` | Agentihooks profiles (standard mode) |
+| `{cfg.runtime.agentihooks_dir}/profiles/*/` | Agentihooks profiles (when URL override is set) |
 
 ### Kubernetes / shared FS mode (`AGENTICORE_SHARED_FS_ROOT=/shared`)
 

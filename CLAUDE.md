@@ -75,7 +75,7 @@ Profile search dirs are derived from `resolve_repo_paths()` in `hooks.py`:
 
 Paths are deterministic from `AGENTICORE_SHARED_FS_ROOT` (prod) or explicit env vars (dev mode).
 
-**Dev Mode:** Set `AGENTICORE_DEV_MODE=true` + mount paths via `AGENTICORE_AGENTIHOOKS_PATH`, `AGENTICORE_AGENTIHOOKS_BUNDLE_PATH`, `AGENTICORE_AGENTIHUB_PATH`. Skips cloning and watchers.
+**Path layout:** `AGENTICORE_SHARED_FS_ROOT` is the base (`/shared` in k8s, `$HOME` locally). Each repo lives at `<root>/<dir-from-url>`. URLs determine what AND where to clone. Bundle is optional. Hub is required for agent mode. Resolved paths land on `cfg.runtime.{agentihooks_dir,bundle_dir,hub_dir}`. Refresh on-demand via `agenticore hooks sync`, `POST /admin/sync`, or pod restart. `render_mcp_whitelist` re-runs `agentihooks init --repo` before every agent-mode completion.
 
 **Profile Ownership:** Profiles belong to agentihooks, not agenticore.
 `AGENTIHOOKS_PROFILE` → `cfg.agentihooks_profile`. Router/runner fall back to this when no profile specified.

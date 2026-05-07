@@ -80,12 +80,11 @@ Set  to match your memory allocation.
 
 **Agentihooks** ships as a pip dependency of agenticore ([PyPI](https://pypi.org/project/agentihooks/)),
 so the CLI is available inside the container without any runtime configuration.
-Set `AGENTICORE_AGENTIHOOKS_URL` only when you want to override with a one-shot
-clone + editable install (bleeding-edge fork/branch), or set
-`AGENTICORE_AGENTIHOOKS_PATH` for a dev loopback against a mounted checkout.
-PATH wins over URL. There is no periodic re-sync — restart the pod to pick up
-a newer PyPI release (bump the floor in agenticore's `pyproject.toml`, or
-rebuild the image to pull the latest resolved version).
+Set `AGENTICORE_AGENTIHOOKS_URL` to override with a one-shot clone + editable
+install (bleeding-edge fork/branch); a bind-mount at `<SHARED_FS_ROOT>/<dir-from-url>`
+is treated as a pre-existing clone (no fetch). There is no periodic re-sync —
+restart the pod to pick up a newer PyPI release (bump the floor in agenticore's
+`pyproject.toml`, or rebuild the image to pull the latest resolved version).
 ---
 
 ## Prerequisites
@@ -138,7 +137,6 @@ To enable URL-based agentihooks cloning:
 ```yaml
 agentihooks:
   url: "https://github.com/your-org/agentihooks"
-  syncInterval: 300
 ```
 
 Or via `--set`:
@@ -147,7 +145,6 @@ Or via `--set`:
 helm install agenticore \
   oci://ghcr.io/the-cloud-clockwork/charts/agenticore \
   --set agentihooks.url="https://github.com/your-org/agentihooks" \
-  --set agentihooks.syncInterval=300 \
   --set storage.className=nfs-client
 ```
 

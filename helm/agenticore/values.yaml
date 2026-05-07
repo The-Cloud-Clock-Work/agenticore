@@ -71,19 +71,14 @@ redis-standalone:
   port: 6379
 
 agentihooks:
-  # agentihooks is a PyPI dependency of agenticore. Leave url/path empty for
-  # the default PyPI install. Set path for a dev loopback to a mounted repo,
-  # or url for a one-shot clone of a bleeding-edge fork (no periodic re-sync).
+  # agentihooks is a PyPI dependency of agenticore. Leave url empty for the
+  # default PyPI install. Set url for a one-shot clone + editable install of
+  # a fork or branch. The clone lands at <SHARED_FS_ROOT>/<dir-from-url>.
   url: ""
-  path: ""
-  syncInterval: 300  # DEPRECATED — no-op; kept for backwards compat
   bundleUrl: ""
-  bundleSyncInterval: 300
 
 agentihub:
   url: ""
-  path: ""
-  syncInterval: 300
   # hooks-utils MCP server: which tool categories to load in Claude subprocesses.
   # Valid: github confluence aws email messaging storage database compute observability smith agent utilities
   # Coding-safe default: github (clone/PR/token) + utilities (validation/markdown) only.
