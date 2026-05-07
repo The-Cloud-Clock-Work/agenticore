@@ -152,11 +152,7 @@ class ProfileClaude:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ProfileClaude):
             return NotImplemented
-        return (
-            self.flags == other.flags
-            and self.worktree == other.worktree
-            and self.timeout == other.timeout
-        )
+        return self.flags == other.flags and self.worktree == other.worktree and self.timeout == other.timeout
 
     def __repr__(self) -> str:
         return f"ProfileClaude(flags={self.flags!r}, worktree={self.worktree!r}, timeout={self.timeout!r})"
@@ -310,18 +306,10 @@ def _resolve_extends(profile: Profile, all_profiles: Dict[str, Profile]) -> Prof
     # default, else parent value.
     pc_defaults = ProfileClaude()
     merged_worktree = (
-        profile.claude.worktree
-        if profile.claude.worktree != pc_defaults.worktree
-        else parent.claude.worktree
+        profile.claude.worktree if profile.claude.worktree != pc_defaults.worktree else parent.claude.worktree
     )
-    merged_timeout = (
-        profile.claude.timeout
-        if profile.claude.timeout != pc_defaults.timeout
-        else parent.claude.timeout
-    )
-    merged_claude = ProfileClaude(
-        flags=merged_flags, worktree=merged_worktree, timeout=merged_timeout
-    )
+    merged_timeout = profile.claude.timeout if profile.claude.timeout != pc_defaults.timeout else parent.claude.timeout
+    merged_claude = ProfileClaude(flags=merged_flags, worktree=merged_worktree, timeout=merged_timeout)
 
     return Profile(
         name=profile.name,

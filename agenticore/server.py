@@ -1311,6 +1311,7 @@ def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optio
             force=False,
         )
 
+
 def _auto_register_with_bridge(cfg):
     """Register with AgentiBridge for A2A discovery. Best-effort — never blocks startup."""
     if not cfg.agentibridge.url or not cfg.agentibridge.registration_enabled:

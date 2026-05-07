@@ -37,7 +37,9 @@ class ReposConfig:
     max_parallel_jobs: int = 3
     job_ttl_seconds: int = 86400
     shared_fs_root: str = ""  # AGENTICORE_SHARED_FS_ROOT — PVC root (state, $HOME)
-    clone_root: str = ""  # AGENTICORE_CLONE_ROOT — clone parent (emptyDir, e.g. /app/clones); falls back to shared_fs_root
+    clone_root: str = (
+        ""  # AGENTICORE_CLONE_ROOT — clone parent (emptyDir, e.g. /app/clones); falls back to shared_fs_root
+    )
     jobs_dir: str = ""  # AGENTICORE_JOBS_DIR — override ~/.agenticore/jobs/
     pod_name: str = ""  # AGENTICORE_POD_NAME — set from K8s Downward API
     worktree_root: str = ""  # AGENTICORE_WORKTREE_ROOT
