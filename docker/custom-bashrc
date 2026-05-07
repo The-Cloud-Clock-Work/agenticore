@@ -1,4 +1,4 @@
-anton() { unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"; }
+agenti() { unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL && claude --dangerously-skip-permissions "$@"; }
 wkt-get() {
   local query="${1:-}" wt_root="$HOME/.agenticore/worktrees"
   [ -d "$wt_root" ] || { echo "No worktrees dir: $wt_root"; return 1; }
