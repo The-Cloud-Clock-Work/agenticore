@@ -157,8 +157,9 @@ development against a live checkout or a non-PyPI fork/branch.
 
 | Variable | YAML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `AGENTICORE_SHARED_FS_ROOT` | `repos.shared_fs_root` | (empty) | Base directory for all clones — `/shared` in k8s, `$HOME` locally. |
-| `AGENTICORE_AGENTIHOOKS_URL` | `agentihooks_url` | (empty) | Clone ONCE to `<SHARED_FS_ROOT>/<dir-from-url>` + `uv pip install -e`. Default install is from PyPI. |
+| `AGENTICORE_SHARED_FS_ROOT` | `repos.shared_fs_root` | (empty) | PVC root for state — `$HOME`, `.claude/`, `job-state/`. `/shared` in k8s, `$HOME` locally. |
+| `AGENTICORE_CLONE_ROOT` | `repos.clone_root` | (empty) | Clone parent — `/app/clones` (emptyDir, per-pod ephemeral) in k8s. Falls back to `SHARED_FS_ROOT` when unset. |
+| `AGENTICORE_AGENTIHOOKS_URL` | `agentihooks_url` | (empty) | Clone ONCE to `<CLONE_ROOT>/<dir-from-url>` + `uv pip install -e`. Default install is from PyPI. |
 | `AGENTICORE_AGENTIHOOKS_BRANCH` | `agentihooks_branch` | (empty) | Git ref checked out when URL is set. |
 | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | `agentihooks_bundle_url` | (empty) | Git URL for the bundle content repo (optional). Passed as `--bundle` to `agentihooks init`. |
 | `AGENTIHOOKS_PROFILE` | (env only) | `coding` | Profile name passed to `agentihooks init --profile`. |
@@ -167,7 +168,7 @@ development against a live checkout or a non-PyPI fork/branch.
 
 | Variable | YAML Key | Default | Description |
 |----------|----------|---------|-------------|
-| `AGENTICORE_AGENTIHUB_URL` | `agentihub_url` | (empty) | Git URL for the agentihub repo (required for agent mode). Clone lands at `<SHARED_FS_ROOT>/<dir-from-url>`. |
+| `AGENTICORE_AGENTIHUB_URL` | `agentihub_url` | (empty) | Git URL for the agentihub repo (required for agent mode). Clone lands at `<CLONE_ROOT>/<dir-from-url>`. |
 | `AGENTIHUB_AGENT` | (env only) | (empty) | Agent name to load (matches `agents/{name}/` directory). |
 
 ## Repository Sync

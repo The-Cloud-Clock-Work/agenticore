@@ -69,13 +69,18 @@ spec:
               value: {{ .Values.config.claudeBinary | quote }}
             - name: AGENTICORE_CLAUDE_TIMEOUT
               value: {{ .Values.config.claudeTimeout | quote }}
-            # Shared filesystem
+            # Shared filesystem (PVC — state, $HOME)
             - name: AGENTICORE_SHARED_FS_ROOT
               value: {{ .Values.sharedFs.root | quote }}
             - name: AGENTICORE_REPOS_ROOT
               value: {{ .Values.sharedFs.reposRoot | quote }}
             - name: AGENTICORE_JOBS_DIR
               value: {{ .Values.sharedFs.jobsDir | quote }}
+            {{- if .Values.cloneRoot }}
+            # Clone root (emptyDir — per-pod ephemeral source clones)
+            - name: AGENTICORE_CLONE_ROOT
+              value: {{ .Values.cloneRoot | quote }}
+            {{- end }}
             # Secrets from Secret resource
             - name: REDIS_URL
               valueFrom:
@@ -123,6 +128,10 @@ spec:
           volumeMounts:
             - name: shared-fs
               mountPath: {{ .Values.sharedFs.root }}
+            {{- if .Values.cloneRoot }}
+            - name: clones
+              mountPath: {{ .Values.cloneRoot }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health
@@ -148,6 +157,10 @@ spec:
         - name: shared-fs
           persistentVolumeClaim:
             claimName: {{ include "agenticore.fullname" . }}-shared
+        {{- if .Values.cloneRoot }}
+        - name: clones
+          emptyDir: {}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

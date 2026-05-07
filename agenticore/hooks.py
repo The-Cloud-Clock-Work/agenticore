@@ -5,10 +5,18 @@ PyPI is the default install path. ``AGENTICORE_AGENTIHOOKS_URL`` triggers a
 clone + ``uv pip install -e`` for running a fork or branch. The runtime
 only clones once at boot (or on demand); no periodic re-sync.
 
-Path layout: each repo lives at ``<AGENTICORE_SHARED_FS_ROOT>/<dir-from-url>``
-where the dir is the last URL segment minus ``.git``. URLs determine WHAT
-to clone AND WHERE. Bundle is optional. Hub is required for agent mode.
-Resolved paths are stored on ``Config.runtime`` for downstream consumers.
+Path layout: each repo lives at ``<CLONE_ROOT>/<dir-from-url>`` where
+``CLONE_ROOT`` is ``AGENTICORE_CLONE_ROOT`` when set, otherwise
+``AGENTICORE_SHARED_FS_ROOT``. The dir is the last URL segment minus
+``.git``. URLs determine WHAT to clone AND WHERE. Bundle is optional.
+Hub is required for agent mode. Resolved paths are stored on
+``Config.runtime`` for downstream consumers.
+
+Splitting ``CLONE_ROOT`` from ``SHARED_FS_ROOT`` lets clones live on an
+ephemeral volume (``emptyDir`` at ``/app/clones``) while real state
+(``$HOME``, ``.claude/``, ``job-state/``) stays on a PVC. This avoids
+the dirty-tree → ``git checkout -B`` failure pattern when the runtime
+renders into the cloned source between syncs.
 """
 
 import fcntl
@@ -48,18 +56,37 @@ def _dir_from_url(url: str) -> str:
     return url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
 
 
+def _clone_on_shared_fs() -> bool:
+    """True when the clone destination lives on a multi-pod shared FS.
+
+    When ``AGENTICORE_CLONE_ROOT`` is explicit it points at a per-pod
+    volume (typically ``emptyDir``) — no cross-pod coordination is
+    needed and a local file flock is sufficient. When only
+    ``AGENTICORE_SHARED_FS_ROOT`` is set (legacy single-mount setups),
+    clones land on the PVC and we need the Redis lock to serialize
+    pods writing to the same path.
+    """
+    cfg = get_config()
+    if cfg.repos.clone_root:
+        return False
+    return bool(cfg.repos.shared_fs_root)
+
+
 def resolve_repo_paths(cfg=None):
     """Resolve on-disk destinations for agentihooks / bundle / hub.
 
-    Each destination is ``<SHARED_FS_ROOT>/<dir-from-url>``. If a URL is
-    unset, that slot returns None (the repo isn't part of this deployment).
+    Each destination is ``<CLONE_ROOT>/<dir-from-url>``. ``CLONE_ROOT``
+    is ``AGENTICORE_CLONE_ROOT`` when set, otherwise falls back to
+    ``AGENTICORE_SHARED_FS_ROOT``, otherwise ``~/.agenticore`` (local
+    dev). If a URL is unset, that slot returns None (the repo isn't
+    part of this deployment).
 
     Returns (hooks_path, bundle_path, hub_path) — all Optional[Path].
     """
     if cfg is None:
         cfg = get_config()
-    shared = cfg.repos.shared_fs_root
-    base = Path(shared) if shared else Path.home() / ".agenticore"
+    clone_root = cfg.repos.clone_root or cfg.repos.shared_fs_root
+    base = Path(clone_root) if clone_root else Path.home() / ".agenticore"
     hooks = base / _dir_from_url(cfg.agentihooks_url) if cfg.agentihooks_url else None
     bundle = base / _dir_from_url(cfg.agentihooks_bundle_url) if cfg.agentihooks_bundle_url else None
     hub = base / _dir_from_url(cfg.agentihub_url) if cfg.agentihub_url else None
@@ -97,7 +124,7 @@ def _clone_or_fetch(url: str, dest: Path, branch: str = "") -> None:
                 cmd += [url, str(dest)]
                 _run_git(cmd, extra_env=extra_env)
 
-    if get_config().repos.shared_fs_root:
+    if _clone_on_shared_fs():
         _with_redis_lock(_scoped_lock_key(f"agenticore:lock:clone:{dest.name}"), _do)
     else:
         with open(lock_path, "w") as lf:
@@ -140,7 +167,7 @@ def _clone_or_fetch_agentihub(url: str, dest: Path, branch: str = "") -> None:
                 cmd += [url, str(dest)]
                 _run_git(cmd, extra_env=extra_env)
 
-    if get_config().repos.shared_fs_root:
+    if _clone_on_shared_fs():
         _with_redis_lock(_scoped_lock_key(f"agenticore:lock:clone:{dest.name}"), _do)
     else:
         with open(lock_path, "w") as lf:
@@ -205,7 +232,7 @@ def _clone_or_fetch_bundle(url: str, dest: Path, branch: str = "") -> None:
                 cmd += [url, str(dest)]
                 _run_git(cmd, extra_env=extra_env)
 
-    if get_config().repos.shared_fs_root:
+    if _clone_on_shared_fs():
         _with_redis_lock(_scoped_lock_key(f"agenticore:lock:clone:{dest.name}"), _do)
     else:
         with open(lock_path, "w") as lf:
