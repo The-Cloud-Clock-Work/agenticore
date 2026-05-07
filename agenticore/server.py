@@ -638,13 +638,9 @@ def _build_rest_app():
                 try:
                     install_path = sync_agentihooks()
                     bundle_path = _bundle_dir() if cfg.agentihooks_bundle_url else None
-                    pkg_dir = (
-                        Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
-                    )
                     run_agentihooks_init(
                         hooks_path=install_path,
                         bundle_path=bundle_path,
-                        repo_dir=pkg_dir,
                         force=True,
                     )
                     results["agentihooks"] = "ok"
@@ -1285,31 +1281,15 @@ def _finish_agentihooks_init(cfg, hooks_path: Optional[Path], bundle_path: Optio
     and agentihub refresh on demand via ``agenticore hooks sync``,
     ``POST /admin/sync``, or pod restart.
     """
+    del cfg  # reserved for future use; current init has no per-cfg branching.
     from agenticore.hooks import run_agentihooks_init
 
-    pkg_dir = Path(cfg.agent_mode.package_dir) if cfg.agent_mode and cfg.agent_mode.package_dir else None
-
-    # Boot init is split in two: agentihooks `init --force --repo X` routes
-    # into the per-repo branch in cmd_init_unified and returns before
-    # install_global ever runs, leaving state.json with no
-    # targets.global.profile (so `agentihooks --query` prints "not
-    # installed"). Run --force WITHOUT --repo first to populate the global
-    # target with the default profile, then layer per-repo wiring on top.
     logger.info("agentihooks: boot init — global install with --force (clean baseline)")
     run_agentihooks_init(
         hooks_path=hooks_path,
         bundle_path=bundle_path,
-        repo_dir=None,
         force=True,
     )
-    if pkg_dir:
-        logger.info("agentihooks: boot init — per-repo wiring (%s)", pkg_dir)
-        run_agentihooks_init(
-            hooks_path=hooks_path,
-            bundle_path=bundle_path,
-            repo_dir=pkg_dir,
-            force=False,
-        )
 
 
 def _auto_register_with_bridge(cfg):
