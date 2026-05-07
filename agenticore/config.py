@@ -95,8 +95,8 @@ class AgentModeConfig:
     """
 
     enabled: bool = False
-    package_dir: str = "/app/package"
-    evaluation_dir: str = "/app/evaluation"
+    package_dir: str = ""
+    evaluation_dir: str = ""
     repo_url: str = ""
     repo_branch: str = "main"
     agent: str = ""  # AGENTIHUB_AGENT — which agent to load from agentihub
@@ -126,6 +126,20 @@ class LangfuseConfig:
 
 
 @dataclass
+class RuntimePaths:
+    """Resolved on-disk paths for cloned content repos.
+
+    Populated by sync functions at boot (or on-demand sync) and read by
+    profile loader, agent-mode initializer, and on-demand reload paths.
+    Replaces the old AGENTICORE_*_PATH env-var round-trip.
+    """
+
+    agentihooks_dir: Optional[Path] = None
+    bundle_dir: Optional[Path] = None
+    hub_dir: Optional[Path] = None
+
+
+@dataclass
 class Config:
     repos: ReposConfig = field(default_factory=ReposConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
@@ -137,18 +151,13 @@ class Config:
     agent_mode: AgentModeConfig = field(default_factory=AgentModeConfig)
     agentibridge: AgentiBridgeConfig = field(default_factory=AgentiBridgeConfig)
     agentihooks_profile: str = ""  # AGENTIHOOKS_PROFILE — active profile; empty = let agentihooks pick its default
-    agentihooks_path: str = ""
     agentihooks_url: str = ""
     agentihooks_bundle_url: str = ""
-    agentihooks_bundle_path: str = ""  # AGENTICORE_AGENTIHOOKS_BUNDLE_PATH — dev mode mount
-    agentihooks_bundle_sync_interval: int = 300
     agentihub_url: str = ""
-    agentihub_path: str = ""
-    agentihub_sync_interval: int = 300
     agentihooks_branch: str = ""  # AGENTICORE_AGENTIHOOKS_BRANCH — empty = remote HEAD
     agentihub_branch: str = ""  # AGENTICORE_AGENTIHUB_BRANCH — empty = remote HEAD
     agentihooks_bundle_branch: str = ""  # AGENTICORE_AGENTIHOOKS_BUNDLE_BRANCH — empty = remote HEAD
-    dev_mode: bool = False  # AGENTICORE_DEV_MODE — skip cloning, use mounted paths
+    runtime: RuntimePaths = field(default_factory=RuntimePaths)
 
 
 def _default_repos_root() -> str:
@@ -303,8 +312,8 @@ def load_config(config_path: Optional[str] = None) -> Config:
     # Agent Mode — env overrides
     agent_mode = AgentModeConfig(
         enabled=_env_bool("AGENT_MODE", "false"),
-        package_dir=_env("AGENT_MODE_PACKAGE_DIR", "/app/package"),
-        evaluation_dir=_env("AGENT_MODE_EVALUATION_DIR", "/app/evaluation"),
+        package_dir=_env("AGENT_MODE_PACKAGE_DIR", ""),
+        evaluation_dir=_env("AGENT_MODE_EVALUATION_DIR", ""),
         repo_url=_env("PACKAGE_REPO_URL", ""),
         repo_branch=_env("PACKAGE_REPO_BRANCH", "main"),
         agent=_env("AGENTIHUB_AGENT", ""),
@@ -333,22 +342,12 @@ def load_config(config_path: Optional[str] = None) -> Config:
     )
 
     agentihooks_profile = _env("AGENTIHOOKS_PROFILE", raw.get("agentihooks_profile", ""))
-    agentihooks_path = _env("AGENTICORE_AGENTIHOOKS_PATH", raw.get("agentihooks_path", ""))
     agentihooks_url = _env("AGENTICORE_AGENTIHOOKS_URL", raw.get("agentihooks_url", ""))
     agentihooks_bundle_url = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", raw.get("agentihooks_bundle_url", ""))
-    agentihooks_bundle_path = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_PATH", raw.get("agentihooks_bundle_path", ""))
     agentihub_url = _env("AGENTICORE_AGENTIHUB_URL", raw.get("agentihub_url", ""))
-    agentihub_path = _env("AGENTICORE_AGENTIHUB_PATH", raw.get("agentihub_path", ""))
-    agentihooks_bundle_sync_interval = _env_int(
-        "AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL", str(raw.get("agentihooks_bundle_sync_interval", 300))
-    )
-    agentihub_sync_interval = _env_int(
-        "AGENTICORE_AGENTIHUB_SYNC_INTERVAL", str(raw.get("agentihub_sync_interval", 300))
-    )
     agentihooks_branch = _env("AGENTICORE_AGENTIHOOKS_BRANCH", raw.get("agentihooks_branch", ""))
     agentihub_branch = _env("AGENTICORE_AGENTIHUB_BRANCH", raw.get("agentihub_branch", ""))
     agentihooks_bundle_branch = _env("AGENTICORE_AGENTIHOOKS_BUNDLE_BRANCH", raw.get("agentihooks_bundle_branch", ""))
-    dev_mode = _env_bool("AGENTICORE_DEV_MODE", str(raw.get("dev_mode", "false")))
 
     return Config(
         repos=repos,
@@ -361,18 +360,12 @@ def load_config(config_path: Optional[str] = None) -> Config:
         agent_mode=agent_mode,
         agentibridge=agentibridge,
         agentihooks_profile=agentihooks_profile,
-        agentihooks_path=agentihooks_path,
         agentihooks_url=agentihooks_url,
         agentihooks_bundle_url=agentihooks_bundle_url,
-        agentihooks_bundle_path=agentihooks_bundle_path,
-        agentihooks_bundle_sync_interval=agentihooks_bundle_sync_interval,
         agentihub_url=agentihub_url,
-        agentihub_path=agentihub_path,
-        agentihub_sync_interval=agentihub_sync_interval,
         agentihooks_branch=agentihooks_branch,
         agentihub_branch=agentihub_branch,
         agentihooks_bundle_branch=agentihooks_bundle_branch,
-        dev_mode=dev_mode,
     )
 
 

@@ -51,16 +51,16 @@ Profiles are loaded from two directories. Later sources override earlier ones
 when names collide.
 
 ```
-{AGENTICORE_AGENTIHOOKS_PATH}/profiles/   ← agentihooks integration
-~/.agenticore/profiles/                   ← user profiles (always checked)
+{cfg.runtime.agentihooks_dir}/profiles/   ← agentihooks integration (URL override)
+~/.agenticore/profiles/                    ← user profiles (always checked)
 ```
 
 **agentihooks** is the authoritative source for organisation-wide profiles. It
 owns the full profile authoring pipeline — hook wiring, MCP categories, system
 prompts, and the `build_profiles.py` generator. It ships as a **PyPI package**
 (`agentihooks`) and is a pip dependency of agenticore — so profiles are already
-available in the installed package. Set `AGENTICORE_AGENTIHOOKS_PATH` only when
-you want to overlay the PyPI install with a live local checkout for development.
+available in the installed package. Set `AGENTICORE_AGENTIHOOKS_URL` only when
+you want to overlay the PyPI install with a live local clone for development.
 
 **User profiles** (`~/.agenticore/profiles/`) are for personal overrides and
 local experimentation. They always take highest priority.
@@ -76,24 +76,23 @@ and `.mcp.json` inside each profile directory are **pre-built** by agentihooks'
 In Kubernetes deployments agentihooks is installed from PyPI as part of the
 container image — **no clone, no watcher.** Pod restart picks up a new release
 (bump the agentihooks floor in agenticore's `pyproject.toml` or rebuild to pull
-a newer PyPI version). Set `AGENTICORE_AGENTIHOOKS_URL` to override with a one-
-shot clone + editable install for bleeding-edge testing; set
-`AGENTICORE_AGENTIHOOKS_PATH` for a dev loopback over a mounted checkout.
+a newer PyPI version). Set `AGENTICORE_AGENTIHOOKS_URL` to override with a
+one-shot clone + editable install for bleeding-edge testing; bind-mount your
+local checkout at `<SHARED_FS_ROOT>/<dir-from-url>` to dev-loop without a clone.
 ### Agentihooks Bundle
 
 The **agentihooks-bundle** repo (`AGENTICORE_AGENTIHOOKS_BUNDLE_URL`) provides
-companion configuration passed to `agentihooks init --bundle <path>`. Unlike
-agentihooks itself (a PyPI dep), the bundle is still a content repo cloned at
-startup and has its own background watcher controlled by
-`AGENTICORE_AGENTIHOOKS_BUNDLE_SYNC_INTERVAL` (default 300s, `0` disables).
+companion configuration passed to `agentihooks init --bundle <path>`. Cloned
+once at startup. Refresh on demand via `agenticore hooks sync --repo bundle`,
+`POST /admin/sync?target=bundle`, or pod restart.
 
 ### Agentihub — direct provisioning
 
 In Agent Mode, agent packages come directly from **agentihub** — not from
 agentihooks profiles. Agenticore's `agent_mode/initializer.py` clones agentihub
-and copies `agents/{name}/package/` → `/app/package/`. A background watcher
-refreshes the clone every `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` seconds
-(default 300, `0` disables).
+once at startup and points `package_dir` at `agents/{name}/package/` directly
+(no copy). Refresh on demand via `agenticore hooks sync --repo agentihub`,
+`POST /admin/sync?target=agentihub`, or pod restart.
 
 ```
 agenticore   = execution engine (this project)
@@ -103,9 +102,7 @@ agentihub    = agent identities (CLAUDE.md, prompts, evaluation)
 
 | Variable | Description |
 |----------|-------------|
-| `AGENTICORE_AGENTIHUB_URL` | Git URL for the agentihub repo |
-| `AGENTICORE_AGENTIHUB_PATH` | Explicit path override (skips cloning) |
-| `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` | Hot-reload interval in seconds (`0` disables) |
+| `AGENTICORE_AGENTIHUB_URL` | Git URL for the agentihub repo (clone lands at `<SHARED_FS_ROOT>/<dir-from-url>`) |
 | `AGENTIHUB_AGENT` | Agent name to load (matches `agents/{name}/` directory) |
 
 ## Writing a Profile

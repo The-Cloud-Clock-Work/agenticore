@@ -20,8 +20,12 @@ Usage::
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from agenticore import __version__
+
+STATE_DIR = Path.home() / ".agenticore"
+STATE_FILE = STATE_DIR / "state.json"
 
 
 def _api_url():
@@ -843,15 +847,9 @@ def _cmd_agents(args):
 
 
 def _cmd_uninstall(args):
-    """Remove agenticore: stop daemon, remove shim, remove state dir, pip uninstall."""
+    """Remove agenticore: remove shim, remove state dir, pip uninstall."""
     import shutil
     from pathlib import Path
-
-    from agenticore.daemon import stop as daemon_stop, STATE_DIR, STATE_FILE
-
-    # Stop daemon
-    if daemon_stop():
-        print("Daemon stopped")
 
     # Read state before removing dir — need shim_path
     shim_path = None
@@ -937,13 +935,12 @@ def _query_bridge() -> dict | None:
 
 
 def _cmd_init(args):
-    """Initialize ~/.agenticore/ state directory, install shim, query bridge, start daemon."""
+    """Initialize ~/.agenticore/ state directory, install shim, query bridge."""
     import json
     from datetime import datetime, timezone
     from pathlib import Path
 
     from agenticore import __version__
-    from agenticore.daemon import start as daemon_start, _read_pid, STATE_DIR, STATE_FILE
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -989,40 +986,6 @@ def _cmd_init(args):
     STATE_FILE.write_text(json.dumps(state, indent=2))
     print(f"State directory: {STATE_DIR}")
     print(f"Version: {__version__}")
-
-    # Start daemon
-    pid = daemon_start()
-    if pid:
-        print(f"Daemon started (PID {pid})")
-    else:
-        existing = _read_pid()
-        print(f"Daemon already running (PID {existing})")
-
-
-def _cmd_daemon(args):
-    """Manage the background daemon."""
-    from agenticore.daemon import start as daemon_start, stop as daemon_stop, status as daemon_status, _read_pid
-
-    action = getattr(args, "daemon_action", "status")
-    if action == "start":
-        pid = daemon_start()
-        if pid:
-            print(f"Daemon started (PID {pid})")
-        else:
-            print(f"Daemon already running (PID {_read_pid()})")
-    elif action == "stop":
-        if daemon_stop():
-            print("Daemon stopped")
-        else:
-            print("Daemon not running")
-    elif action == "status" or not action:
-        s = daemon_status()
-        if s["running"]:
-            print(f"Running (PID {s['pid']})")
-        else:
-            print("Not running")
-    else:
-        print(f"Unknown daemon action: {action}")
 
 
 def main():
@@ -1172,22 +1135,14 @@ def main():
     p_agents.set_defaults(func=_cmd_agents)
 
     # init
-    p_init_local = sub.add_parser("init", help="Initialize ~/.agenticore/ and start daemon")
+    p_init_local = sub.add_parser("init", help="Initialize ~/.agenticore/ state directory")
     p_init_local.set_defaults(func=_cmd_init)
 
     # uninstall
-    p_uninstall = sub.add_parser("uninstall", help="Remove agenticore: stop daemon, remove state, pip uninstall")
+    p_uninstall = sub.add_parser("uninstall", help="Remove agenticore: shim, state, pip uninstall")
     p_uninstall.add_argument("--keep-state", action="store_true", help="Keep ~/.agenticore/ directory")
-    p_uninstall.add_argument("--keep-package", action="store_true", help="Keep pip package, only remove state + daemon")
+    p_uninstall.add_argument("--keep-package", action="store_true", help="Keep pip package, only remove state")
     p_uninstall.set_defaults(func=_cmd_uninstall)
-
-    # daemon
-    p_daemon = sub.add_parser("daemon", help="Manage the background daemon")
-    daemon_sub = p_daemon.add_subparsers(dest="daemon_action")
-    daemon_sub.add_parser("start", help="Start the daemon")
-    daemon_sub.add_parser("stop", help="Stop the daemon")
-    daemon_sub.add_parser("status", help="Check daemon status")
-    p_daemon.set_defaults(func=_cmd_daemon)
 
     # hooks
     p_hooks = sub.add_parser("hooks", help="Manage agentihooks integration")

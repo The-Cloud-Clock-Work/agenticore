@@ -117,10 +117,6 @@ spec:
             - name: AGENTICORE_AGENTIHOOKS_URL
               value: {{ .Values.agentihooks.url | quote }}
             {{- end }}
-            {{- if ((.Values.agentihooks).path) }}
-            - name: AGENTICORE_AGENTIHOOKS_PATH
-              value: {{ .Values.agentihooks.path | quote }}
-            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

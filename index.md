@@ -114,7 +114,7 @@ agents/
     └── evaluation/            # eval harness
 ```
 
-Set `AGENTICORE_AGENTIHUB_URL` and `AGENTICORE_AGENTIHUB_AGENT` and Agenticore boots straight into Agent Mode. A background watcher re-fetches every `AGENTICORE_AGENTIHUB_SYNC_INTERVAL` seconds (default 300; `0` disables) so package updates roll out without redeploying the runtime.
+Set `AGENTICORE_AGENTIHUB_URL` and `AGENTICORE_AGENTIHUB_AGENT` and Agenticore boots straight into Agent Mode. The hub is cloned once at startup; refresh on demand via `agenticore hooks sync --repo agentihub`, `POST /admin/sync?target=agentihub`, or pod restart.
 
 **Public reference**: [`agentihub-example`](https://github.com/The-Cloud-Clockwork/agentihub-example) — a working `publishing` agent showing the full layout (agent.yml + package/ + evaluation/). Fork it to ship your own.
 

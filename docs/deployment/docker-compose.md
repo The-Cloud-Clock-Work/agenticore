@@ -102,7 +102,8 @@ The compose file passes these to the `agenticore` service:
 | `LANGFUSE_PUBLIC_KEY` | from `.env` | Langfuse public key (SDK) |
 | `LANGFUSE_SECRET_KEY` | from `.env` | Langfuse secret key (SDK) |
 | `LANGFUSE_BASIC_AUTH` | from `.env` | Base64 auth for OTEL collector |
-| `AGENTICORE_AGENTIHOOKS_PATH` | from `.env` | Path to agentihooks repo |
+| `AGENTICORE_SHARED_FS_ROOT` | from `.env` | Base directory for clones (`/shared` in container) |
+| `AGENTICORE_AGENTIHOOKS_URL` | from `.env` | Triggers clone + editable install of agentihooks (bind-mount at `<root>/<dir-from-url>` skips clone) |
 
 The `otel-collector` service also reads from `.env` (via `env_file: .env`) to
 get `LANGFUSE_HOST` and `LANGFUSE_BASIC_AUTH` for the Langfuse OTEL exporter.
@@ -183,7 +184,7 @@ services:
     ports: ["8200:8200"]
     volumes:
       - agenticore-shared:/shared              # mirrors K8s RWX PVC
-      - ~/dev/agentihooks:/opt/agentihooks-src # dev loopback — AGENTICORE_AGENTIHOOKS_PATH=/opt/agentihooks-src triggers editable install over the PyPI version
+      - ~/dev/agentihooks:/shared/agentihooks # dev loopback — pre-mounted clone at the URL-derived dir; AGENTICORE_AGENTIHOOKS_URL triggers editable install over the PyPI version
       - ./docker/gateway-mcp.json:/shared/gateway-mcp.json:ro
     env_file: [.env]
     environment:
@@ -194,7 +195,7 @@ services:
 | Concept | Production (K8s) | Dev Compose |
 |---------|-----------------|-------------|
 | Shared storage | RWX PVC at `/shared` | Named volume `agenticore-shared` |
-| Agentihooks | PyPI dependency baked into the image | PyPI in image + optional bind-mount override at `~/dev/agentihooks` (set `AGENTICORE_AGENTIHOOKS_PATH`) |
+| Agentihooks | PyPI dependency baked into the image | PyPI in image + optional bind-mount at `<SHARED_FS_ROOT>/<dir-from-url>` (set `AGENTICORE_AGENTIHOOKS_URL`) |
 | MCP gateway | ConfigMap mount | Bind-mounted `gateway-mcp.json` |
 | `HOME` | `/shared` | `/shared` |
 

@@ -133,21 +133,11 @@ keda:
 # Agentihooks — PyPI dependency of agenticore
 # -----------------------------------------------------------------------------
 # agentihooks ships as a pip package. By default the container image already
-# has it installed from PyPI. The fields below are override escape hatches
-# for development:
-#   * path → uv pip install -e <path> over the PyPI version (dev loopback)
-#   * url  → clone once at boot + uv pip install -e (bleeding-edge fork/ref)
-# Precedence: path wins over url. No periodic re-sync — pod restart picks
-# up new versions.
+# has it installed from PyPI. Set ``url`` to clone a fork/branch at boot;
+# the clone lands at ``<SHARED_FS_ROOT>/<dir-from-url>`` and is editable-installed
+# over the PyPI version. No periodic re-sync — pod restart picks up new versions.
 agentihooks:
-  # Git URL for a one-shot clone override at boot. Leave empty to use PyPI.
   url: ""
-  # Explicit local path override (mounted checkout). Normally derived from sharedFs.root.
-  # Set this only if you manage agentihooks outside of agenticore.
-  path: ""
-  # DEPRECATED — no-op. agentihooks is a versioned pip package; a pod restart
-  # picks up new releases. Kept only so existing values files keep parsing.
-  syncInterval: 300
 
 # -----------------------------------------------------------------------------
 # Init job — initialises shared FS layout and syncs agentihooks if configured

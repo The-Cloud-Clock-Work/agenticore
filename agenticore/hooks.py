@@ -1,33 +1,26 @@
-"""Agentihooks integration — PyPI-first install with optional git overlay.
+"""Agentihooks / bundle / agentihub integration.
 
-agentihooks is a pip dependency of agenticore (declared in pyproject.toml),
-so the default install path is ``pip install agenticore`` pulling it from
-PyPI transitively. The runtime only clones or pip-installs-editable when an
-override is requested, and there is no periodic re-sync — a pod restart is
-how you pick up a new version.
+agentihooks is a pip dependency of agenticore (declared in pyproject.toml).
+PyPI is the default install path. ``AGENTICORE_AGENTIHOOKS_URL`` triggers a
+clone + ``uv pip install -e`` for running a fork or branch. The runtime
+only clones once at boot (or on demand); no periodic re-sync.
 
-Override semantics (PATH wins over URL):
-
-    AGENTICORE_AGENTIHOOKS_PATH  → uv pip install -e <PATH>        (dev loopback)
-    AGENTICORE_AGENTIHOOKS_URL   → clone once, uv pip install -e   (bleeding edge)
-    neither                      → trust the PyPI install
-
-Bundle and agentihub are content repos, not Python packages; their clone +
-watcher logic is unchanged.
+Path layout: each repo lives at ``<AGENTICORE_SHARED_FS_ROOT>/<dir-from-url>``
+where the dir is the last URL segment minus ``.git``. URLs determine WHAT
+to clone AND WHERE. Bundle is optional. Hub is required for agent mode.
+Resolved paths are stored on ``Config.runtime`` for downstream consumers.
 """
 
 import fcntl
 import logging
 import os
 import subprocess
-import threading
 import time
 from pathlib import Path
 from typing import Optional
 
 from agenticore.config import get_config
 from agenticore.git_credentials import git_askpass_env
-from agenticore.mgmt_log import get_mgmt_logger
 from agenticore.repos import _run_git, _with_redis_lock, resolve_github_token
 
 logger = logging.getLogger(__name__)
@@ -47,56 +40,43 @@ def _scoped_lock_key(base_key: str) -> str:
     return f"{base_key}:{hostname}"
 
 
-def _get_head_ref(dest: Path) -> str:
-    """Return the short HEAD commit ref for a git repo, or '?' on failure."""
-    try:
-        return subprocess.check_output(
-            ["git", "-C", str(dest), "rev-parse", "--short", "HEAD"],
-            text=True,
-            timeout=5,
-        ).strip()
-    except Exception:
-        return "?"
+def _dir_from_url(url: str) -> str:
+    """Last URL segment minus .git → directory name.
+
+    https://github.com/foo/agentihooks-bundle.git → "agentihooks-bundle"
+    """
+    return url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
 
 
 def resolve_repo_paths(cfg=None):
-    """Resolve paths for agentihooks, bundle, and agentihub.
+    """Resolve on-disk destinations for agentihooks / bundle / hub.
 
-    Dev mode: use pre-mounted paths from env vars.
-    Prod mode: derive from SHARED_FS_ROOT, explicit overrides honored.
+    Each destination is ``<SHARED_FS_ROOT>/<dir-from-url>``. If a URL is
+    unset, that slot returns None (the repo isn't part of this deployment).
 
     Returns (hooks_path, bundle_path, hub_path) — all Optional[Path].
     """
     if cfg is None:
         cfg = get_config()
-    if cfg.dev_mode:
-        hooks = Path(cfg.agentihooks_path) if cfg.agentihooks_path else None
-        bundle = Path(cfg.agentihooks_bundle_path) if cfg.agentihooks_bundle_path else None
-        hub = Path(cfg.agentihub_path) if cfg.agentihub_path else None
-        return hooks, bundle, hub
     shared = cfg.repos.shared_fs_root
     base = Path(shared) if shared else Path.home() / ".agenticore"
-    hooks = Path(cfg.agentihooks_path) if cfg.agentihooks_path else base / "agentihooks"
-    bundle = Path(cfg.agentihooks_bundle_path) if cfg.agentihooks_bundle_path else base / "agentihooks-bundle"
-    hub = Path(cfg.agentihub_path) if cfg.agentihub_path else base / "agentihub"
+    hooks = base / _dir_from_url(cfg.agentihooks_url) if cfg.agentihooks_url else None
+    bundle = base / _dir_from_url(cfg.agentihooks_bundle_url) if cfg.agentihooks_bundle_url else None
+    hub = base / _dir_from_url(cfg.agentihub_url) if cfg.agentihub_url else None
     return hooks, bundle, hub
 
 
-def _install_dir() -> Path:
-    """Determine where agentihooks should be installed.
-
-    Checks AGENTICORE_AGENTIHOOKS_PATH first (explicit override), then
-    AGENTICORE_SHARED_FS_ROOT for K8s deployments, then local default.
-    """
+def _install_dir() -> Optional[Path]:
+    """Where agentihooks gets cloned (None when no URL set)."""
     hooks, _, _ = resolve_repo_paths()
-    return hooks or Path.home() / ".agenticore" / "agentihooks"
+    return hooks
 
 
 def _clone_or_fetch(url: str, dest: Path, branch: str = "") -> None:
     """Clone or update agentihooks repo, flock/Redis-protected."""
     t0 = time.monotonic()
     dest.mkdir(parents=True, exist_ok=True)
-    lock_path = dest.parent / ".agentihooks.lock"
+    lock_path = dest.parent / f".{dest.name}.clone.lock"
 
     def _do():
         token = resolve_github_token()
@@ -118,7 +98,7 @@ def _clone_or_fetch(url: str, dest: Path, branch: str = "") -> None:
                 _run_git(cmd, extra_env=extra_env)
 
     if get_config().repos.shared_fs_root:
-        _with_redis_lock(_scoped_lock_key("agenticore:lock:agentihooks"), _do)
+        _with_redis_lock(_scoped_lock_key(f"agenticore:lock:clone:{dest.name}"), _do)
     else:
         with open(lock_path, "w") as lf:
             fcntl.flock(lf, fcntl.LOCK_EX)
@@ -129,92 +109,17 @@ def _clone_or_fetch(url: str, dest: Path, branch: str = "") -> None:
     logger.info("_clone_or_fetch agentihooks done in %.2fs", time.monotonic() - t0)
 
 
-def start_bundle_watcher(
-    url: str,
-    dest: Path,
-    interval: int,
-    branch: str = "",
-    hooks_path: Optional[Path] = None,
-    repo_dir: Optional[Path] = None,
-) -> Optional[threading.Thread]:
-    """Daemon thread that periodically re-fetches the agentihooks bundle repo
-    and re-runs ``agentihooks init`` so updated rules/skills/settings.json
-    propagate to the live pod's ``~/.claude/`` without a restart."""
-    if get_config().dev_mode:
-        logger.info("dev mode: skipping bundle watcher")
-        return None
-    if interval <= 0:
-        raise ValueError(f"interval must be > 0, got {interval}")
-
-    mgmt = get_mgmt_logger()
-
-    def _watch():
-        while True:
-            time.sleep(interval)
-            try:
-                _clone_or_fetch_bundle(url, dest, branch)
-                ref = _get_head_ref(dest)
-                logger.info("agentihooks-bundle hot-reload complete (%s)", dest)
-                mgmt.info("hot-reload agentihooks-bundle OK ref=%s", ref)
-            except Exception as exc:
-                logger.warning("agentihooks-bundle hot-reload failed: %s", exc)
-                mgmt.warning("hot-reload agentihooks-bundle FAIL: %s", exc)
-                continue
-            try:
-                run_agentihooks_init(hooks_path=hooks_path, bundle_path=dest, repo_dir=repo_dir)
-                logger.info("agentihooks-bundle init re-applied (%s)", dest)
-                mgmt.info("hot-reload agentihooks-bundle init OK")
-            except Exception as exc:
-                logger.warning("agentihooks-bundle init re-apply failed: %s", exc)
-                mgmt.warning("hot-reload agentihooks-bundle init FAIL: %s", exc)
-
-    t = threading.Thread(target=_watch, name="agentihooks-bundle-watcher", daemon=True)
-    t.start()
-    logger.info("agentihooks-bundle watcher started (interval=%ds, dest=%s)", interval, dest)
-    mgmt.info("watcher agentihooks-bundle started interval=%ds dest=%s", interval, dest)
-    return t
-
-
-def start_agentihub_watcher(url: str, dest: Path, interval: int, branch: str = "") -> Optional[threading.Thread]:
-    """Daemon thread that periodically re-fetches the agentihub repo."""
-    if get_config().dev_mode:
-        logger.info("dev mode: skipping agentihub watcher")
-        return None
-    if interval <= 0:
-        raise ValueError(f"interval must be > 0, got {interval}")
-
-    mgmt = get_mgmt_logger()
-
-    def _watch():
-        while True:
-            time.sleep(interval)
-            try:
-                _clone_or_fetch_agentihub(url, dest, branch)
-                ref = _get_head_ref(dest)
-                logger.info("agentihub hot-reload complete (%s)", dest)
-                mgmt.info("hot-reload agentihub OK ref=%s", ref)
-            except Exception as exc:
-                logger.warning("agentihub hot-reload failed: %s", exc)
-                mgmt.warning("hot-reload agentihub FAIL: %s", exc)
-
-    t = threading.Thread(target=_watch, name="agentihub-watcher", daemon=True)
-    t.start()
-    logger.info("agentihub watcher started (interval=%ds, dest=%s)", interval, dest)
-    mgmt.info("watcher agentihub started interval=%ds dest=%s", interval, dest)
-    return t
-
-
-def _agentihub_install_dir() -> Path:
-    """Determine where agentihub should be installed."""
+def _agentihub_install_dir() -> Optional[Path]:
+    """Where agentihub gets cloned (None when no URL set)."""
     _, _, hub = resolve_repo_paths()
-    return hub or Path.home() / ".agenticore" / "agentihub"
+    return hub
 
 
 def _clone_or_fetch_agentihub(url: str, dest: Path, branch: str = "") -> None:
     """Clone or update agentihub repo (no profile build — agent mode handles provisioning)."""
     t0 = time.monotonic()
     dest.mkdir(parents=True, exist_ok=True)
-    lock_path = dest.parent / ".agentihub.lock"
+    lock_path = dest.parent / f".{dest.name}.clone.lock"
 
     def _do():
         token = resolve_github_token()
@@ -236,7 +141,7 @@ def _clone_or_fetch_agentihub(url: str, dest: Path, branch: str = "") -> None:
                 _run_git(cmd, extra_env=extra_env)
 
     if get_config().repos.shared_fs_root:
-        _with_redis_lock(_scoped_lock_key("agenticore:lock:agentihub"), _do)
+        _with_redis_lock(_scoped_lock_key(f"agenticore:lock:clone:{dest.name}"), _do)
     else:
         with open(lock_path, "w") as lf:
             fcntl.flock(lf, fcntl.LOCK_EX)
@@ -248,43 +153,39 @@ def _clone_or_fetch_agentihub(url: str, dest: Path, branch: str = "") -> None:
 
 
 def sync_agentihub(url: str = "") -> Optional[Path]:
-    """Clone/fetch agentihub + run agent_hub + rebuild profiles.
-
-    Sets AGENTICORE_AGENTIHUB_PATH in-process. Returns the install directory,
-    or None if no URL is configured.
-    """
+    """Clone/fetch agentihub. Returns the install directory, or None when
+    no URL is configured. Populates ``cfg.runtime.hub_dir`` for downstream
+    consumers (agent_mode/initializer.py)."""
     cfg = get_config()
-    if cfg.dev_mode:
-        _, _, hub = resolve_repo_paths(cfg)
-        if hub and hub.exists():
-            logger.info("dev mode: agentihub at %s (no clone)", hub)
-            os.environ["AGENTICORE_AGENTIHUB_PATH"] = str(hub)
-            return hub
-        return None
     url = url or cfg.agentihub_url
     if not url:
-        explicit = os.getenv("AGENTICORE_AGENTIHUB_PATH")
-        if explicit:
-            return Path(explicit)
         return None
     dest = _agentihub_install_dir()
-    _clone_or_fetch_agentihub(url, dest, cfg.agentihub_branch)
-    os.environ["AGENTICORE_AGENTIHUB_PATH"] = str(dest)
-    logger.info("AGENTICORE_AGENTIHUB_PATH → %s (branch=%s)", dest, cfg.agentihub_branch or "HEAD")
+    if not dest:
+        return None
+    if dest.exists() and (dest / ".git").exists():
+        _clone_or_fetch_agentihub(url, dest, cfg.agentihub_branch)
+    elif dest.exists():
+        # Pre-mounted checkout (dev bind-mount): trust it, no fetch.
+        logger.info("agentihub: pre-mounted checkout at %s, skipping clone", dest)
+    else:
+        _clone_or_fetch_agentihub(url, dest, cfg.agentihub_branch)
+    cfg.runtime.hub_dir = dest
+    logger.info("agentihub → %s (branch=%s)", dest, cfg.agentihub_branch or "HEAD")
     return dest
 
 
-def _bundle_dir() -> Path:
-    """Determine where the agentihooks bundle should be installed."""
+def _bundle_dir() -> Optional[Path]:
+    """Where the agentihooks bundle gets cloned (None when no URL set)."""
     _, bundle, _ = resolve_repo_paths()
-    return bundle or Path.home() / ".agenticore" / "agentihooks-bundle"
+    return bundle
 
 
 def _clone_or_fetch_bundle(url: str, dest: Path, branch: str = "") -> None:
     """Clone or update agentihooks bundle repo, with GitHub App auth."""
     t0 = time.monotonic()
     dest.mkdir(parents=True, exist_ok=True)
-    lock_path = dest.parent / ".agentihooks-bundle.lock"
+    lock_path = dest.parent / f".{dest.name}.clone.lock"
 
     def _do():
         token = resolve_github_token()
@@ -305,7 +206,7 @@ def _clone_or_fetch_bundle(url: str, dest: Path, branch: str = "") -> None:
                 _run_git(cmd, extra_env=extra_env)
 
     if get_config().repos.shared_fs_root:
-        _with_redis_lock(_scoped_lock_key("agenticore:lock:agentihooks-bundle"), _do)
+        _with_redis_lock(_scoped_lock_key(f"agenticore:lock:clone:{dest.name}"), _do)
     else:
         with open(lock_path, "w") as lf:
             fcntl.flock(lf, fcntl.LOCK_EX)
@@ -368,71 +269,58 @@ def sync_agentihooks(url: str = "") -> Optional[Path]:
 
     Resolution order:
 
-    1. ``AGENTICORE_AGENTIHOOKS_PATH`` set (or dev_mode with pre-mounted path):
-       ``uv pip install -e <PATH>`` — local editable loopback for dev work
-       on agentihooks itself. Returns the path.
+    1. ``AGENTICORE_AGENTIHOOKS_URL`` set: clone (or fetch) into
+       ``<SHARED_FS_ROOT>/<dir-from-url>`` and ``uv pip install -e <clone>``.
+       Use this to run a fork or branch that isn't on PyPI yet. Pre-mounted
+       checkouts at the same destination are trusted as-is (no fetch).
+       Returns the clone path; sets ``cfg.runtime.agentihooks_dir``.
 
-    2. ``AGENTICORE_AGENTIHOOKS_URL`` AND ``AGENTICORE_AGENTIHOOKS_BRANCH``
-       both set: clone the repo and ``uv pip install -e <clone>``. The
-       cloned source becomes the active agentihooks. Use this to run a
-       branch / fork (e.g. dev) that isn't on PyPI yet. Returns the
-       clone path.
-
-    3. Default (URL+BRANCH unset): ``uv pip install agentihooks`` from
-       PyPI. Returns ``None``.
+    2. URL unset: ``uv pip install agentihooks`` from PyPI. Returns
+       ``None``.
     """
     cfg = get_config()
-
-    # 1. PATH override (dev loopback). In dev_mode also accept a path
-    # surfaced by resolve_repo_paths() from pre-mounted volumes.
-    path_str = cfg.agentihooks_path or os.getenv("AGENTICORE_AGENTIHOOKS_PATH", "")
-    if not path_str and cfg.dev_mode:
-        hooks, _, _ = resolve_repo_paths(cfg)
-        if hooks and hooks.exists():
-            path_str = str(hooks)
-    if path_str:
-        path = Path(path_str)
-        if path.exists():
-            _pip_install_editable(path)
-            os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(path)
-            logger.info("agentihooks editable from PATH → %s", path)
-            return path
-        logger.warning("AGENTICORE_AGENTIHOOKS_PATH %s does not exist; falling back", path)
-
-    # 2. URL+BRANCH both set → clone + editable install from the clone.
     resolved_url = url or cfg.agentihooks_url
-    branch = cfg.agentihooks_branch
-    if resolved_url and branch:
+    if resolved_url:
         dest = _install_dir()
-        _clone_or_fetch(resolved_url, dest, branch)
+        if dest is None:
+            logger.warning("agentihooks: URL set but resolve_repo_paths returned None — cannot proceed")
+            return None
+        if dest.exists() and (dest / ".git").exists():
+            _clone_or_fetch(resolved_url, dest, cfg.agentihooks_branch)
+        elif dest.exists():
+            # Pre-mounted checkout (dev bind-mount): trust it, no fetch.
+            logger.info("agentihooks: pre-mounted checkout at %s, skipping clone", dest)
+        else:
+            _clone_or_fetch(resolved_url, dest, cfg.agentihooks_branch)
         _pip_install_editable(dest)
-        os.environ["AGENTICORE_AGENTIHOOKS_PATH"] = str(dest)
-        logger.info("agentihooks editable from URL → %s (branch=%s)", dest, branch)
+        cfg.runtime.agentihooks_dir = dest
+        logger.info("agentihooks editable from URL → %s (branch=%s)", dest, cfg.agentihooks_branch or "HEAD")
         return dest
 
-    # 3. Default: install from PyPI.
+    # Default: install from PyPI.
     _pip_install_pypi("agentihooks")
     logger.info("agentihooks: installed from PyPI via uv")
     return None
 
 
 def sync_bundle() -> Optional[Path]:
-    """Clone/fetch the agentihooks bundle repo.
-
-    Returns the bundle directory, or None if no bundle URL is configured.
-    """
+    """Clone/fetch the agentihooks bundle repo. Optional addon — returns
+    None when no URL is configured. Populates ``cfg.runtime.bundle_dir``."""
     cfg = get_config()
-    if cfg.dev_mode:
-        _, bundle, _ = resolve_repo_paths(cfg)
-        if bundle and bundle.exists():
-            logger.info("dev mode: agentihooks-bundle at %s (no clone)", bundle)
-            return bundle
-        return None
     url = cfg.agentihooks_bundle_url
     if not url:
         return None
     dest = _bundle_dir()
-    _clone_or_fetch_bundle(url, dest, cfg.agentihooks_bundle_branch)
+    if dest is None:
+        return None
+    if dest.exists() and (dest / ".git").exists():
+        _clone_or_fetch_bundle(url, dest, cfg.agentihooks_bundle_branch)
+    elif dest.exists():
+        # Pre-mounted checkout (dev bind-mount): trust it, no fetch.
+        logger.info("agentihooks-bundle: pre-mounted checkout at %s, skipping clone", dest)
+    else:
+        _clone_or_fetch_bundle(url, dest, cfg.agentihooks_bundle_branch)
+    cfg.runtime.bundle_dir = dest
     logger.info("agentihooks bundle synced → %s (branch=%s)", dest, cfg.agentihooks_bundle_branch or "HEAD")
     return dest
 
@@ -458,7 +346,7 @@ def run_agentihooks_init(
     - First-time provisioning of a new ``AGENTIHOOKS_HOME`` (no state.json)
       → force=True
     - Boot when state.json already exists → force=False (idempotent rerun)
-    - Bundle watcher periodic refresh → force=False
+    - Per-request render (``render_mcp_whitelist``) → force=False
     - Operator-triggered ``/admin/sync`` → force=True
 
     When *repo_dir* is given, ``--repo <dir>`` is passed so agentihooks
