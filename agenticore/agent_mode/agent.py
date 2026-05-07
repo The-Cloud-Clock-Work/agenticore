@@ -239,6 +239,12 @@ def build_claude_cmd(
         cmd.extend(["--session-id", claude_session_id])
 
     cmd.append(message)
+
+    # Log the spawn argv (sans the trailing user message — the message can
+    # be huge and noisy; flags are what we care about for resolution audit).
+    flags_only = cmd[:-1]
+    _log.info("claude argv: %s", " ".join(flags_only))
+
     return cmd
 
 
