@@ -45,26 +45,71 @@ _cached_profile_claude: Optional[ProfileClaude] = None
 _profile_claude_loaded = False
 
 
-def _active_profile_claude() -> ProfileClaude:
-    """Return the ProfileClaude config from the active agentihooks profile.
+def _load_command_yaml(package_dir: str) -> Optional[ProfileClaude]:
+    """Read ``<package_dir>/command.yml`` and return a ProfileClaude.
 
-    Resolution: AGENTIHOOKS_PROFILE → ``get_profile()``. If unset or the
-    profile cannot be loaded, returns a default ``ProfileClaude()`` instance
-    so callers always get a valid object.
+    The agent's ``package/command.yml`` is the per-agent source of claude
+    CLI flags. Its top-level ``claude:`` block is treated as the flag bag
+    consumed by ``render_claude_flags`` (model, max_turns, permission_mode,
+    effort, output_format, etc.).
+
+    Returns None if the file is missing, malformed, or has no ``claude:``
+    block — callers fall back to the bundle profile.
+    """
+    if not package_dir:
+        return None
+    path = Path(package_dir) / "command.yml"
+    if not path.exists():
+        return None
+    try:
+        import yaml
+
+        raw = yaml.safe_load(path.read_text()) or {}
+    except Exception as exc:  # pragma: no cover — malformed yaml
+        _log.warning("Failed to parse %s: %s", path, exc)
+        return None
+    claude_block = raw.get("claude")
+    if not isinstance(claude_block, dict):
+        return None
+    pc = ProfileClaude(flags=dict(claude_block))
+    _log.info("Loaded claude flags from %s (%d keys)", path, len(claude_block))
+    return pc
+
+
+def _active_profile_claude() -> ProfileClaude:
+    """Return the ProfileClaude config for this agent's claude invocations.
+
+    Resolution order:
+      1. ``<package_dir>/command.yml`` ``claude:`` block — per-agent source.
+      2. ``AGENTIHOOKS_PROFILE`` → ``get_profile()`` — bundle profile fallback.
+      3. Default ``ProfileClaude()`` — final fallback so callers always get
+         a valid object.
 
     Cached for the lifetime of the process.
     """
     global _cached_profile_claude, _profile_claude_loaded
     if _profile_claude_loaded:
         return _cached_profile_claude  # type: ignore[return-value]
-    name = os.getenv("AGENTIHOOKS_PROFILE", "").strip()
+
     pc: Optional[ProfileClaude] = None
-    if name:
-        prof = get_profile(name)
-        if prof is not None:
-            pc = prof.claude
+
+    # 1. Per-agent command.yml in the agent package
+    package_dir = get_config().agent_mode.package_dir
+    if package_dir:
+        pc = _load_command_yaml(package_dir)
+
+    # 2. Bundle profile by AGENTIHOOKS_PROFILE
+    if pc is None:
+        name = os.getenv("AGENTIHOOKS_PROFILE", "").strip()
+        if name:
+            prof = get_profile(name)
+            if prof is not None:
+                pc = prof.claude
+
+    # 3. Default
     if pc is None:
         pc = ProfileClaude()
+
     _cached_profile_claude = pc
     _profile_claude_loaded = True
     return pc
