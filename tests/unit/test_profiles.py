@@ -6,14 +6,92 @@ import warnings
 import pytest
 
 from agenticore.profiles import (
+    CLAUDE_FLAG_DEFAULTS,
     Profile,
     ProfileClaude,
     _copy_profile_chain_to,
     build_cli_args,
     materialize_profile,
     profile_to_dict,
+    render_claude_flags,
     render_template,
 )
+
+
+@pytest.mark.unit
+class TestRenderClaudeFlags:
+    def test_empty_block_uses_defaults(self):
+        args = render_claude_flags()
+        # All defaults rendered as flag pairs.
+        for k, v in CLAUDE_FLAG_DEFAULTS.items():
+            flag = f"--{k.replace('_', '-')}"
+            assert flag in args
+            assert args[args.index(flag) + 1] == str(v)
+
+    def test_block_overrides_default(self):
+        args = render_claude_flags({"model": "opus"})
+        assert args[args.index("--model") + 1] == "opus"
+
+    def test_overrides_kwarg_wins_over_block(self):
+        args = render_claude_flags({"model": "opus"}, overrides={"model": "haiku"})
+        assert args[args.index("--model") + 1] == "haiku"
+
+    def test_unknown_key_renders_as_kebab(self):
+        args = render_claude_flags({"max_budget_usd": 7.5, "fallback_model": "haiku"})
+        assert args[args.index("--max-budget-usd") + 1] == "7.5"
+        assert args[args.index("--fallback-model") + 1] == "haiku"
+
+    def test_brand_new_key_passes_through(self):
+        args = render_claude_flags({"some_new_flag": "x"})
+        assert args[args.index("--some-new-flag") + 1] == "x"
+
+    def test_bool_true_emits_bare_flag(self):
+        args = render_claude_flags({"verbose": True})
+        assert "--verbose" in args
+        # No paired value follows.
+        assert "True" not in args and "true" not in args
+
+    def test_bool_false_skipped(self):
+        args = render_claude_flags({"verbose": False})
+        assert "--verbose" not in args
+
+    def test_no_session_persistence_only_when_explicit(self):
+        # Default leaves it OFF — sessions persist.
+        args = render_claude_flags()
+        assert "--no-session-persistence" not in args
+        # Explicit opt-in emits the bare flag.
+        args2 = render_claude_flags({"no_session_persistence": True})
+        assert "--no-session-persistence" in args2
+
+    def test_dangerously_skip_permissions_bare_flag(self):
+        args = render_claude_flags({"permission_mode": "dangerously-skip-permissions"})
+        assert "--dangerously-skip-permissions" in args
+        # Pair form not emitted.
+        assert "--permission-mode" not in args
+
+    def test_model_default_sentinel_skipped(self):
+        args = render_claude_flags({"model": "default"})
+        assert "--model" not in args
+
+    def test_skip_keys_excludes_specified(self):
+        args = render_claude_flags(
+            {"no_session_persistence": True, "model": "opus"},
+            skip_keys={"no_session_persistence"},
+        )
+        assert "--no-session-persistence" not in args
+        assert args[args.index("--model") + 1] == "opus"
+
+    def test_worktree_and_timeout_are_not_cli_flags(self):
+        args = render_claude_flags({"worktree": True, "timeout": 1234})
+        assert "--worktree" not in args
+        assert "--timeout" not in args
+        assert "1234" not in args
+
+    def test_empty_string_skipped(self):
+        args = render_claude_flags({"effort": ""})
+        # Empty string falsy → skipped, default does NOT win because key is
+        # explicitly present with falsy value. (Operator wants to suppress.)
+        assert "--effort" not in args
 
 
 @pytest.mark.unit
@@ -47,7 +125,7 @@ class TestBuildCliArgs:
     def test_basic_code_profile(self):
         profile = Profile(
             name="code",
-            claude=ProfileClaude(model="sonnet", max_turns=80, worktree=True),
+            claude=ProfileClaude(model="sonnet", max_turns=50, worktree=True),
         )
         args = build_cli_args(profile, "fix the bug")
         # --worktree is never passed to CLI — agenticore manages worktrees
@@ -55,7 +133,7 @@ class TestBuildCliArgs:
         assert "--model" in args
         assert args[args.index("--model") + 1] == "sonnet"
         assert "--max-turns" in args
-        assert args[args.index("--max-turns") + 1] == "80"
+        assert args[args.index("--max-turns") + 1] == "50"
         assert "-p" in args
         assert args[args.index("-p") + 1] == "fix the bug"
 
@@ -101,10 +179,13 @@ class TestBuildCliArgs:
         assert "--effort" in args
         assert args[args.index("--effort") + 1] == "high"
 
-    def test_no_effort_by_default(self):
+    def test_default_effort_is_high(self):
+        # CLAUDE_FLAG_DEFAULTS now ships effort=high; profiles inherit it
+        # unless they override.
         profile = Profile(name="code", claude=ProfileClaude())
         args = build_cli_args(profile, "task")
-        assert "--effort" not in args
+        assert "--effort" in args
+        assert args[args.index("--effort") + 1] == "high"
 
     def test_max_budget_usd(self):
         profile = Profile(
@@ -452,10 +533,11 @@ class TestProfileToDict:
         d = profile_to_dict(profile)
         assert d["effort"] == "high"
 
-    def test_serialization_no_effort(self):
+    def test_serialization_default_effort(self):
+        # CLAUDE_FLAG_DEFAULTS now ships effort=high.
         profile = Profile(name="code", claude=ProfileClaude())
         d = profile_to_dict(profile)
-        assert "effort" not in d
+        assert d["effort"] == "high"
 
 
 # ── Shared FS / Kubernetes materialization ────────────────────────────────

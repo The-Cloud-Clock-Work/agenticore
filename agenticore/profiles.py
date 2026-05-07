@@ -34,23 +34,168 @@ logger = logging.getLogger(__name__)
 
 _MCP_JSON = ".mcp.json"
 
+# ── Claude CLI flag rendering ─────────────────────────────────────────────
+
+# Defaults applied when a key is missing from the profile's `claude:` block.
+# Sessions persist by default — `no_session_persistence` is intentionally
+# omitted so `--no-session-persistence` is NOT emitted unless a profile
+# explicitly opts out.
+CLAUDE_FLAG_DEFAULTS: Dict[str, Any] = {
+    "model": "sonnet",
+    "max_turns": 50,
+    "permission_mode": "bypassPermissions",
+    "effort": "high",
+    "output_format": "json",
+}
+
+# Keys that live in the `claude:` block but are NOT claude CLI flags.
+# Skipped by the renderer; consumed elsewhere by the orchestrator.
+_NON_CLI_KEYS = frozenset({"worktree", "timeout"})
+
+
+def render_claude_flags(
+    claude_block: Optional[Dict[str, Any]] = None,
+    *,
+    overrides: Optional[Dict[str, Any]] = None,
+    skip_keys: Optional[set] = None,
+) -> List[str]:
+    """Render the per-call claude CLI flags from a profile `claude:` block.
+
+    Merges defaults < block < overrides. Each remaining key is converted
+    to ``--<kebab-case>`` and emitted with its value. Bools become bare
+    flags (true → emit, false → skip). Adding a new claude CLI flag is
+    a no-code change: drop it into the profile's ``claude:`` block.
+    """
+    merged: Dict[str, Any] = {**CLAUDE_FLAG_DEFAULTS}
+    if claude_block:
+        merged.update(claude_block)
+    if overrides:
+        merged.update(overrides)
+    if skip_keys:
+        for k in skip_keys:
+            merged.pop(k, None)
+
+    args: List[str] = []
+    for key, value in merged.items():
+        if key in _NON_CLI_KEYS:
+            continue
+        if value is None or value == "":
+            continue
+        if isinstance(value, bool):
+            if value:
+                args.append(f"--{key.replace('_', '-')}")
+            continue
+        # CLI special-case: bare flag instead of paired value.
+        if key == "permission_mode" and value == "dangerously-skip-permissions":
+            args.append("--dangerously-skip-permissions")
+            continue
+        # Skip --model when value is the magic "default" sentinel.
+        if key == "model" and isinstance(value, str) and value.lower() == "default":
+            continue
+        args.extend([f"--{key.replace('_', '-')}", str(value)])
+    return args
+
+
 # ── Dataclasses ───────────────────────────────────────────────────────────
 
 
-@dataclass
 class ProfileClaude:
-    """CLI flags that can't be expressed in .claude/ natively."""
+    """Wrapper around a profile's `claude:` block.
 
-    model: str = "sonnet"
-    max_turns: int = 80
-    permission_mode: str = "bypassPermissions"
-    no_session_persistence: bool = True
-    output_format: str = "json"
-    worktree: bool = True
-    effort: Optional[str] = None
-    timeout: int = 3600
-    max_budget_usd: Optional[float] = None
-    fallback_model: Optional[str] = None
+    ``flags`` holds the raw dict — any key present here renders as a
+    matching ``--<kebab-case>`` claude CLI flag (see ``render_claude_flags``).
+    Keys missing from the dict fall back to ``CLAUDE_FLAG_DEFAULTS``.
+
+    ``worktree`` and ``timeout`` are NOT claude CLI flags — they are
+    orchestrator concerns (worktree=True means agenticore prepares a git
+    worktree before invoking claude in fleet mode; timeout is the
+    subprocess wall-clock limit). They live alongside the flag dict.
+
+    Constructor accepts either the new dict form ``ProfileClaude(flags={...})``
+    or legacy typed kwargs ``ProfileClaude(model="...", max_turns=...)`` for
+    backward compatibility. Legacy kwargs are folded into ``flags``.
+    """
+
+    _LEGACY_FLAG_KEYS = frozenset(
+        {
+            "model",
+            "max_turns",
+            "permission_mode",
+            "output_format",
+            "effort",
+            "no_session_persistence",
+            "max_budget_usd",
+            "fallback_model",
+        }
+    )
+
+    def __init__(
+        self,
+        flags: Optional[Dict[str, Any]] = None,
+        *,
+        worktree: bool = True,
+        timeout: int = 3600,
+        **kwargs: Any,
+    ) -> None:
+        merged_flags: Dict[str, Any] = dict(flags) if flags else {}
+        for k, v in kwargs.items():
+            if k in self._LEGACY_FLAG_KEYS:
+                if v is None:
+                    continue
+                merged_flags[k] = v
+            else:
+                raise TypeError(f"ProfileClaude got unexpected keyword argument '{k}'")
+        self.flags: Dict[str, Any] = merged_flags
+        self.worktree: bool = worktree
+        self.timeout: int = timeout
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ProfileClaude):
+            return NotImplemented
+        return (
+            self.flags == other.flags
+            and self.worktree == other.worktree
+            and self.timeout == other.timeout
+        )
+
+    def __repr__(self) -> str:
+        return f"ProfileClaude(flags={self.flags!r}, worktree={self.worktree!r}, timeout={self.timeout!r})"
+
+    # Backward-compat property accessors so existing callers reading
+    # ``pc.model`` / ``pc.max_turns`` / ... keep working. New flags should
+    # be added by extending the profile YAML, not the dataclass.
+    @property
+    def model(self) -> str:
+        return self.flags.get("model", CLAUDE_FLAG_DEFAULTS["model"])
+
+    @property
+    def max_turns(self) -> int:
+        return self.flags.get("max_turns", CLAUDE_FLAG_DEFAULTS["max_turns"])
+
+    @property
+    def permission_mode(self) -> str:
+        return self.flags.get("permission_mode", CLAUDE_FLAG_DEFAULTS["permission_mode"])
+
+    @property
+    def output_format(self) -> str:
+        return self.flags.get("output_format", CLAUDE_FLAG_DEFAULTS["output_format"])
+
+    @property
+    def effort(self) -> Optional[str]:
+        return self.flags.get("effort", CLAUDE_FLAG_DEFAULTS["effort"])
+
+    @property
+    def no_session_persistence(self) -> bool:
+        # Default: false (sessions persist). Profile must opt out explicitly.
+        return bool(self.flags.get("no_session_persistence", False))
+
+    @property
+    def max_budget_usd(self) -> Optional[float]:
+        return self.flags.get("max_budget_usd")
+
+    @property
+    def fallback_model(self) -> Optional[str]:
+        return self.flags.get("fallback_model")
 
 
 @dataclass
@@ -97,19 +242,10 @@ def _load_profile_dir(path: Path) -> Profile:
     with open(yml_path) as f:
         raw = yaml.safe_load(f) or {}
 
-    claude_raw = raw.get("claude", {})
-    claude = ProfileClaude(
-        model=claude_raw.get("model", "sonnet"),
-        max_turns=claude_raw.get("max_turns", 80),
-        permission_mode=claude_raw.get("permission_mode", "bypassPermissions"),
-        no_session_persistence=claude_raw.get("no_session_persistence", True),
-        output_format=claude_raw.get("output_format", "json"),
-        worktree=claude_raw.get("worktree", True),
-        effort=claude_raw.get("effort"),
-        timeout=claude_raw.get("timeout", 3600),
-        max_budget_usd=claude_raw.get("max_budget_usd"),
-        fallback_model=claude_raw.get("fallback_model"),
-    )
+    claude_raw = dict(raw.get("claude") or {})
+    worktree = bool(claude_raw.pop("worktree", True))
+    timeout = int(claude_raw.pop("timeout", 3600))
+    claude = ProfileClaude(flags=claude_raw, worktree=worktree, timeout=timeout)
 
     return Profile(
         name=raw.get("name", path.name),
@@ -134,23 +270,14 @@ def _load_legacy_yaml(path: Path) -> Profile:
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
 
-    claude_raw = raw.get("claude", {})
-
-    # Map old permission_mode values
-    perm_mode = claude_raw.get("permission_mode", "bypassPermissions")
-    if perm_mode == "dangerously-skip-permissions":
-        perm_mode = "bypassPermissions"
-
-    claude = ProfileClaude(
-        model=claude_raw.get("model", "sonnet"),
-        max_turns=claude_raw.get("max_turns", 80),
-        permission_mode=perm_mode,
-        no_session_persistence=claude_raw.get("no_session_persistence", True),
-        output_format=claude_raw.get("output_format", "json"),
-        worktree=claude_raw.get("worktree", True),
-        effort=claude_raw.get("effort"),
-        timeout=claude_raw.get("timeout", 3600),
-    )
+    claude_raw = dict(raw.get("claude") or {})
+    # Legacy profiles used to express dangerously-skip-permissions as the
+    # permission_mode value; rewrite it to the standard bypassPermissions.
+    if claude_raw.get("permission_mode") == "dangerously-skip-permissions":
+        claude_raw["permission_mode"] = "bypassPermissions"
+    worktree = bool(claude_raw.pop("worktree", True))
+    timeout = int(claude_raw.pop("timeout", 3600))
+    claude = ProfileClaude(flags=claude_raw, worktree=worktree, timeout=timeout)
 
     return Profile(
         name=raw.get("name", path.stem),
@@ -177,19 +304,24 @@ def _resolve_extends(profile: Profile, all_profiles: Dict[str, Profile]) -> Prof
     # Recursively resolve parent first
     parent = _resolve_extends(parent, all_profiles)
 
-    # Merge: child overrides parent for ProfileClaude fields
-    merged_claude_fields: Dict[str, Any] = {}
-    for f in ProfileClaude.__dataclass_fields__:
-        parent_val = getattr(parent.claude, f)
-        child_val = getattr(profile.claude, f)
-        # Use child value if it differs from default
-        default_val = ProfileClaude.__dataclass_fields__[f].default
-        if child_val != default_val:
-            merged_claude_fields[f] = child_val
-        else:
-            merged_claude_fields[f] = parent_val
-
-    merged_claude = ProfileClaude(**merged_claude_fields)
+    # Merge: parent flags first, child flags last (child wins per-key).
+    merged_flags: Dict[str, Any] = {**parent.claude.flags, **profile.claude.flags}
+    # worktree / timeout: child value if it differs from the dataclass
+    # default, else parent value.
+    pc_defaults = ProfileClaude()
+    merged_worktree = (
+        profile.claude.worktree
+        if profile.claude.worktree != pc_defaults.worktree
+        else parent.claude.worktree
+    )
+    merged_timeout = (
+        profile.claude.timeout
+        if profile.claude.timeout != pc_defaults.timeout
+        else parent.claude.timeout
+    )
+    merged_claude = ProfileClaude(
+        flags=merged_flags, worktree=merged_worktree, timeout=merged_timeout
+    )
 
     return Profile(
         name=profile.name,
@@ -386,29 +518,9 @@ def _build_extends_chain(profile: Profile, all_profiles: Dict[str, Profile]) -> 
 
 
 def _build_core_cli_args(c: ProfileClaude) -> List[str]:
-    """Build core CLI flags from ProfileClaude settings."""
-    args: List[str] = []
-
-    if c.model and c.model.lower() != "default":
-        args.extend(["--model", c.model])
-    args.extend(["--max-turns", str(c.max_turns)])
-    args.extend(["--output-format", c.output_format])
-
-    if c.permission_mode == "dangerously-skip-permissions":
-        args.append("--dangerously-skip-permissions")
-    elif c.permission_mode:
-        args.extend(["--permission-mode", c.permission_mode])
-
-    if c.no_session_persistence:
-        args.append("--no-session-persistence")
-    if c.effort:
-        args.extend(["--effort", c.effort])
-    if c.max_budget_usd is not None:
-        args.extend(["--max-budget-usd", str(c.max_budget_usd)])
-    if c.fallback_model:
-        args.extend(["--fallback-model", c.fallback_model])
-
-    return args
+    """Build core CLI flags from a ProfileClaude. Thin wrapper around
+    :func:`render_claude_flags` so callers don't need the ``flags`` dict."""
+    return render_claude_flags(c.flags)
 
 
 def _build_dynamic_prompt(vars_: Dict[str, str]) -> Optional[str]:
