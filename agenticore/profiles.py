@@ -41,11 +41,9 @@ _MCP_JSON = ".mcp.json"
 # omitted so `--no-session-persistence` is NOT emitted unless a profile
 # explicitly opts out.
 CLAUDE_FLAG_DEFAULTS: Dict[str, Any] = {
-    "model": "sonnet",
+    "model": "opus",
     "max_turns": 50,
     "permission_mode": "bypassPermissions",
-    "effort": "high",
-    "output_format": "json",
 }
 
 # Keys that live in the `claude:` block but are NOT claude CLI flags.
@@ -174,11 +172,11 @@ class ProfileClaude:
 
     @property
     def output_format(self) -> str:
-        return self.flags.get("output_format", CLAUDE_FLAG_DEFAULTS["output_format"])
+        return self.flags.get("output_format", "")
 
     @property
     def effort(self) -> Optional[str]:
-        return self.flags.get("effort", CLAUDE_FLAG_DEFAULTS["effort"])
+        return self.flags.get("effort")
 
     @property
     def no_session_persistence(self) -> bool:

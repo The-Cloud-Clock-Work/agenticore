@@ -179,13 +179,11 @@ class TestBuildCliArgs:
         assert "--effort" in args
         assert args[args.index("--effort") + 1] == "high"
 
-    def test_default_effort_is_high(self):
-        # CLAUDE_FLAG_DEFAULTS now ships effort=high; profiles inherit it
-        # unless they override.
+    def test_default_omits_effort(self):
+        # CLAUDE_FLAG_DEFAULTS no longer ships effort — profiles must opt in.
         profile = Profile(name="code", claude=ProfileClaude())
         args = build_cli_args(profile, "task")
-        assert "--effort" in args
-        assert args[args.index("--effort") + 1] == "high"
+        assert "--effort" not in args
 
     def test_max_budget_usd(self):
         profile = Profile(
@@ -533,11 +531,12 @@ class TestProfileToDict:
         d = profile_to_dict(profile)
         assert d["effort"] == "high"
 
-    def test_serialization_default_effort(self):
-        # CLAUDE_FLAG_DEFAULTS now ships effort=high.
+    def test_serialization_omits_unset_effort(self):
+        # CLAUDE_FLAG_DEFAULTS no longer ships effort; profile_to_dict only
+        # emits the key when explicitly set.
         profile = Profile(name="code", claude=ProfileClaude())
         d = profile_to_dict(profile)
-        assert d["effort"] == "high"
+        assert "effort" not in d
 
 
 # ── Shared FS / Kubernetes materialization ────────────────────────────────
