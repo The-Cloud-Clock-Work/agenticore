@@ -374,14 +374,6 @@ class AgentExecutor:
         if not cwd.exists():
             cwd = Path.cwd()
 
-        # Pre-call: render MCP whitelist from .agentihooks.json
-        try:
-            from agenticore.hooks import render_mcp_whitelist
-
-            render_mcp_whitelist(cwd, disable_servers=disable_mcp_servers)
-        except Exception as e:
-            _log.warning("Pre-call MCP render failed (non-fatal): %s", e)
-
         resolved_timeout = timeout or am.timeout
         start_time = time.monotonic()
 
@@ -695,13 +687,6 @@ class AgentExecutor:
         cwd = Path(am.package_dir)
         if not cwd.exists():
             cwd = Path.cwd()
-
-        try:
-            from agenticore.hooks import render_mcp_whitelist
-
-            render_mcp_whitelist(cwd, disable_servers=disable_mcp_servers)
-        except Exception as e:
-            _log.warning("Pre-call MCP render failed (non-fatal): %s", e)
 
         resolved_timeout = timeout or am.timeout
         rid = request_uuid or external_uuid
