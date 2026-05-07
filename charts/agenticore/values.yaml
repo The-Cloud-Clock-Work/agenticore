@@ -52,11 +52,20 @@ config:
   # Max job runtime (seconds)
   claudeTimeout: 3600
 
-# Shared filesystem mount path (must match the PVC mount)
+# Shared filesystem mount path (must match the PVC mount).
+# This holds REAL state: $HOME, .claude/ session JSONLs, job-state/, secrets.
+# Cloned source code does NOT live here — see cloneRoot below.
 sharedFs:
   root: /shared
   reposRoot: /shared/repos
   jobsDir: /shared/job-state
+
+# Clone root mount path. Cloned source repos (agentihooks, bundle, agentihub)
+# land under <cloneRoot>/<dir-from-url> on a per-pod emptyDir volume so
+# each pod start gets a fresh clone — no stale dirty trees, no
+# cross-pod git contention. Empty string falls back to sharedFs.root
+# (legacy single-mount behavior).
+cloneRoot: /app/clones
 
 # -----------------------------------------------------------------------------
 # Secret reference

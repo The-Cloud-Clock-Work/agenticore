@@ -278,7 +278,69 @@ class TestResolveRepoPaths:
         from agenticore.hooks import resolve_repo_paths
 
         monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
+        monkeypatch.delenv("AGENTICORE_CLONE_ROOT", raising=False)
         monkeypatch.setenv("AGENTICORE_AGENTIHUB_URL", "https://github.com/x/agentihub")
 
         _, _, hub = resolve_repo_paths()
         assert hub == Path.home() / ".agenticore" / "agentihub"
+
+    def test_clone_root_takes_precedence_over_shared_fs(self, monkeypatch, tmp_path):
+        """When both CLONE_ROOT and SHARED_FS_ROOT are set, CLONE_ROOT wins."""
+        from agenticore.hooks import resolve_repo_paths
+
+        clone_dir = tmp_path / "clones"
+        shared_dir = tmp_path / "shared"
+        clone_dir.mkdir()
+        shared_dir.mkdir()
+
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(shared_dir))
+        monkeypatch.setenv("AGENTICORE_CLONE_ROOT", str(clone_dir))
+        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_URL", "https://github.com/x/agentihooks")
+        monkeypatch.setenv("AGENTICORE_AGENTIHOOKS_BUNDLE_URL", "https://github.com/x/agentihooks-bundle")
+        monkeypatch.setenv("AGENTICORE_AGENTIHUB_URL", "https://github.com/x/agentihub")
+
+        hooks, bundle, hub = resolve_repo_paths()
+        assert hooks == clone_dir / "agentihooks"
+        assert bundle == clone_dir / "agentihooks-bundle"
+        assert hub == clone_dir / "agentihub"
+
+    def test_clone_root_alone_works_without_shared_fs(self, monkeypatch, tmp_path):
+        """CLONE_ROOT set, SHARED_FS_ROOT unset → CLONE_ROOT used."""
+        from agenticore.hooks import resolve_repo_paths
+
+        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
+        monkeypatch.setenv("AGENTICORE_CLONE_ROOT", str(tmp_path))
+        monkeypatch.setenv("AGENTICORE_AGENTIHUB_URL", "https://github.com/x/agentihub")
+
+        _, _, hub = resolve_repo_paths()
+        assert hub == tmp_path / "agentihub"
+
+
+@pytest.mark.unit
+class TestCloneOnSharedFs:
+    """The lock-decision predicate: Redis when clones land on the shared PVC,
+    file flock when they land on a per-pod volume (clone_root explicit) or
+    locally (no roots set)."""
+
+    def test_clone_root_explicit_disables_redis_lock(self, monkeypatch, tmp_path):
+        from agenticore.hooks import _clone_on_shared_fs
+
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(tmp_path / "shared"))
+        monkeypatch.setenv("AGENTICORE_CLONE_ROOT", str(tmp_path / "clones"))
+        assert _clone_on_shared_fs() is False
+
+    def test_only_shared_fs_uses_redis_lock(self, monkeypatch, tmp_path):
+        """Legacy single-mount setups: clones live on the shared PVC, need cross-pod lock."""
+        from agenticore.hooks import _clone_on_shared_fs
+
+        monkeypatch.delenv("AGENTICORE_CLONE_ROOT", raising=False)
+        monkeypatch.setenv("AGENTICORE_SHARED_FS_ROOT", str(tmp_path))
+        assert _clone_on_shared_fs() is True
+
+    def test_neither_set_uses_file_flock(self, monkeypatch):
+        """Local dev: no roots → file flock only."""
+        from agenticore.hooks import _clone_on_shared_fs
+
+        monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
+        monkeypatch.delenv("AGENTICORE_CLONE_ROOT", raising=False)
+        assert _clone_on_shared_fs() is False
