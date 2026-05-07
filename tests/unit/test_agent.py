@@ -61,7 +61,7 @@ class TestBuildClaudeCmd:
         assert "--model" in cmd
         assert "sonnet" in cmd
         assert "--max-turns" in cmd
-        assert "80" in cmd
+        assert "50" in cmd
         assert "--permission-mode" in cmd
         assert "bypassPermissions" in cmd
         assert "--session-id" in cmd
@@ -178,9 +178,11 @@ class TestBuildClaudeCmd:
         assert "haiku" in cmd
 
     @patch.dict(os.environ, _BASE_ENV)
-    def test_no_effort_when_empty(self):
+    def test_default_effort_high_when_empty(self):
+        # CLAUDE_FLAG_DEFAULTS now ships effort=high.
         cmd = build_claude_cmd("task")
-        assert "--effort" not in cmd
+        assert "--effort" in cmd
+        assert cmd[cmd.index("--effort") + 1] == "high"
 
     @patch.dict(os.environ, _BASE_ENV)
     def test_no_budget_when_zero(self):
@@ -1098,7 +1100,7 @@ class TestActiveProfileClaude:
         assert pc.model == "sonnet"  # ProfileClaude default
         assert pc.permission_mode == "bypassPermissions"
         assert pc.output_format == "json"
-        assert pc.max_turns == 80
+        assert pc.max_turns == 50
 
     @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "definitely-not-a-real-profile"})
     def test_unresolvable_profile_falls_back_to_default(self):
@@ -1234,8 +1236,8 @@ class TestBuildClaudeCmdProfileDriven:
         assert cmd[cmd.index("--model") + 1] == "sonnet"
         assert cmd[cmd.index("--permission-mode") + 1] == "bypassPermissions"
         assert cmd[cmd.index("--output-format") + 1] == "json"
-        # ProfileClaude.effort defaults to None → no --effort flag
-        assert "--effort" not in cmd
+        # CLAUDE_FLAG_DEFAULTS now ships effort=high.
+        assert cmd[cmd.index("--effort") + 1] == "high"
 
     @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
     def test_legacy_agent_mode_env_vars_no_longer_drive_cmd(self):
@@ -1256,8 +1258,8 @@ class TestBuildClaudeCmdProfileDriven:
         # Profile values, not env values
         assert "opus" in cmd and "haiku" not in cmd
         assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
-        # max_turns = ProfileClaude default 80, not 999
-        assert cmd[cmd.index("--max-turns") + 1] == "80"
+        # max_turns = ProfileClaude default 50, not 999
+        assert cmd[cmd.index("--max-turns") + 1] == "50"
 
     @patch.dict(os.environ, {**_BASE_ENV, "AGENTIHOOKS_PROFILE": "custom"})
     def test_binary_is_literal_claude_not_configurable(self):

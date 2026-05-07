@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from agenticore.config import get_config
-from agenticore.profiles import ProfileClaude, get_profile
+from agenticore.profiles import ProfileClaude, get_profile, render_claude_flags
 
 _log = logging.getLogger(__name__)
 
@@ -111,15 +111,32 @@ def build_claude_cmd(
     am = cfg.agent_mode
     pc = _active_profile_claude()
 
-    cmd = ["claude", "-p"]
-    resolved_fmt = output_format or pc.output_format
-    cmd.extend(["--output-format", resolved_fmt])
+    overrides = {
+        k: v
+        for k, v in {
+            "model": model,
+            "max_turns": max_turns or None,
+            "permission_mode": permission_mode,
+            "output_format": output_format,
+            "effort": effort,
+            "max_budget_usd": max_budget_usd or None,
+            "fallback_model": fallback_model,
+        }.items()
+        if v
+    }
+
+    cmd = ["claude", "-p"] + render_claude_flags(
+        pc.flags,
+        overrides=overrides,
+        # Agent mode owns session lifecycle per request — never let the
+        # profile's no_session_persistence leak into the argv here.
+        skip_keys={"no_session_persistence"},
+    )
+
+    resolved_fmt = overrides.get("output_format") or pc.output_format
     if resolved_fmt == "stream-json":
         cmd.append("--verbose")
         cmd.append("--include-partial-messages")
-    cmd.extend(["--model", model or pc.model])
-    cmd.extend(["--max-turns", str(max_turns or pc.max_turns)])
-    cmd.extend(["--permission-mode", permission_mode or pc.permission_mode])
 
     # System prompt resolution
     use_append = append_system_prompt if append_system_prompt is not None else am.append_system_prompt
@@ -156,14 +173,8 @@ def build_claude_cmd(
             if caps_prompt:
                 cmd.extend(["--append-system-prompt", caps_prompt])
 
-    # Optional flags
-    resolved_effort = effort or (pc.effort or "")
-    if resolved_effort:
-        cmd.extend(["--effort", resolved_effort])
-    if max_budget_usd > 0:
-        cmd.extend(["--max-budget-usd", str(max_budget_usd)])
-    if fallback_model:
-        cmd.extend(["--fallback-model", fallback_model])
+    # Per-call tool whitelist/blacklist (camelCase flags — not part of the
+    # snake_case profile dict, kept agent-mode-local).
     if allowed_tools:
         parsed = [t.strip() for t in allowed_tools.split(",") if t.strip()]
         if parsed:
