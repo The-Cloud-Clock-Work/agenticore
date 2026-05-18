@@ -12,7 +12,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: init
-        image: agenticore:latest
+        image: ghcr.io/the-cloud-clockwork/agenticore:dev
         command: ["agenticore", "init-shared-fs"]
         env:
         - name: AGENTICORE_SHARED_FS_ROOT

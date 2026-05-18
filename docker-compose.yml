@@ -11,7 +11,7 @@ services:
   agenticore:
     container_name: agenticore
     build: .
-    image: agenticore:latest
+    image: ghcr.io/the-cloud-clockwork/agenticore:dev
     ports:
       - "8200:8200"
     volumes:

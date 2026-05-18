@@ -602,7 +602,7 @@ def _find_env_file():
 # ─────────────────────────────────────────────────────────────────────────────
 
 _AGENT_CONTAINER = "agenticore"
-_AGENT_IMAGE = "agenticore:latest"
+_AGENT_IMAGE = "ghcr.io/the-cloud-clockwork/agenticore:dev"
 _DEV_COMPOSE_FILE = "docker-compose.dev.yml"
 
 
