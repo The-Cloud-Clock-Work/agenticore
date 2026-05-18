@@ -12,7 +12,7 @@ set -euo pipefail
 #   ./test_mcp_whitelist.sh anton-agent --live # include live API calls
 #   NAMESPACE=anton-prod ./test_mcp_whitelist.sh
 
-NAMESPACE="${NAMESPACE:-anton-dev}"
+NAMESPACE="${NAMESPACE:-anton-prod}"
 KUBECONFIG="${KUBECONFIG:-/home/iamroot/.kube/config-k3s}"
 KUBECTL="${KUBECTL:-/home/iamroot/bin/kubectl}"
 TARGET="${1:-anton-agent}"

@@ -19,7 +19,7 @@
 set -euo pipefail
 
 KCTL="kubectl --kubeconfig ${KUBECONFIG:-/home/iamroot/.kube/config-k3s}"
-NS="${NS:-anton-dev}"
+NS="${NS:-anton-prod}"
 AGENT="${1:-brain-keeper}"
 PORT="${PORT:-8200}"
 
