@@ -18,7 +18,7 @@ spec:
       terminationGracePeriodSeconds: 300
       containers:
       - name: agenticore
-        image: agenticore:latest
+        image: ghcr.io/the-cloud-clockwork/agenticore:dev
         ports:
         - containerPort: 8200
           name: http

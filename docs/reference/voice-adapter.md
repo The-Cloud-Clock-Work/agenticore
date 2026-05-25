@@ -16,7 +16,7 @@ custom service.
 Set one environment variable:
 
 ```bash
-VOICE_SERVICE_URL=http://anton-voice.anton-dev.svc:8400
+VOICE_SERVICE_URL=http://anton-voice.anton-prod.svc:8400
 ```
 
 Optional:

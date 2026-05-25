@@ -11,7 +11,7 @@ Five-minute walkthrough. Port-forward an agent pod, send a request, watch thinki
 ## Prerequisites
 
 - A deployed agent pod running `ghcr.io/the-cloud-clockwork/agenticore:dev` or later
-- `kubectl` access to the namespace (default examples use `anton-dev`)
+- `kubectl` access to the namespace (default examples use `anton-prod`)
 - `curl`, `jq`, `python3` locally
 
 If your pod runs an older image, see the [rollout section](#propagating-to-all-agents) below.
@@ -21,7 +21,7 @@ If your pod runs an older image, see the [rollout section](#propagating-to-all-a
 Pick any agent pod. The examples use `streaming-test` (a disposable pod for experiments), but you can use `docgen-agent`, `anton-agent`, or any other agent running the `:dev` image.
 
 ```bash
-kubectl port-forward -n anton-dev svc/streaming-test 8200:8200 &
+kubectl port-forward -n anton-prod svc/streaming-test 8200:8200 &
 ```
 
 ## 2. First call — enable visibility
@@ -154,8 +154,8 @@ Artifacts land in `/tmp/sse-audit/<run-id>/` for later review. See [SSE Streamin
 `:dev` updates don't auto-rollout (ArgoCD image-updater is currently disabled). To pull the latest image onto an agent:
 
 ```bash
-kubectl rollout restart -n anton-dev statefulset/<agent-name>
-kubectl rollout status  -n anton-dev statefulset/<agent-name>
+kubectl rollout restart -n anton-prod statefulset/<agent-name>
+kubectl rollout status  -n anton-prod statefulset/<agent-name>
 ```
 
 Verify the new image SHA matches what's on GHCR:
@@ -166,7 +166,7 @@ gh api "/orgs/The-Cloud-Clockwork/packages/container/agenticore/versions?per_pag
   --jq '.[] | select(.metadata.container.tags[]? == "dev") | .name' | head -1
 
 # What the pod is running
-kubectl get pod <agent>-0 -n anton-dev \
+kubectl get pod <agent>-0 -n anton-prod \
   -o jsonpath='{.status.containerStatuses[?(@.name=="agenticore")].imageID}'
 ```
 

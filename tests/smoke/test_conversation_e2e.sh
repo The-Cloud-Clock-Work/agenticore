@@ -13,7 +13,7 @@ set -euo pipefail
 #   --direct: bypass LiteLLM, hit agent pod directly via port-forward
 # ===========================================================================
 
-KCTL="kubectl --kubeconfig /home/iamroot/.kube/config-k3s -n anton-dev"
+KCTL="kubectl --kubeconfig /home/iamroot/.kube/config-k3s -n anton-prod"
 MODEL="${1:-anton-agent}"
 MODE="litellm"
 [[ "${2:-}" == "--direct" ]] && MODE="direct"

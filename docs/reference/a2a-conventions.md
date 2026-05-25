@@ -30,7 +30,7 @@ X-Request-Id: <transport-uuid>   # per-request correlation (separate from conver
 CONV=$(uuidgen)
 
 # Turn 1: ask anton-agent a question
-curl -X POST http://anton-agent.anton-dev.svc:8200/v1/chat/completions \
+curl -X POST http://anton-agent.anton-prod.svc:8200/v1/chat/completions \
   -H "Authorization: Bearer $KEY" \
   -H "X-Conversation-Id: $CONV" \
   -H "X-Caller-Agent: brain-keeper" \
@@ -38,7 +38,7 @@ curl -X POST http://anton-agent.anton-dev.svc:8200/v1/chat/completions \
   -d '{"model":"sonnet","stream":true,"messages":[{"role":"user","content":"set up a monitoring dashboard"}]}'
 
 # Turn 2: follow up in the same conversation
-curl -X POST http://anton-agent.anton-dev.svc:8200/v1/chat/completions \
+curl -X POST http://anton-agent.anton-prod.svc:8200/v1/chat/completions \
   -H "Authorization: Bearer $KEY" \
   -H "X-Conversation-Id: $CONV" \
   -H "X-Caller-Agent: brain-keeper" \

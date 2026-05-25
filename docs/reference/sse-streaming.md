@@ -13,7 +13,7 @@ This turns every agenticore-backed agent into a **fully auditable and traceable 
 ## TL;DR
 
 ```bash
-kubectl port-forward -n anton-dev svc/<agent> 8200:8200 &
+kubectl port-forward -n anton-prod svc/<agent> 8200:8200 &
 
 # Enable everything (sticky per agent, persists across calls)
 curl -sN http://localhost:8200/v1/chat/completions \
@@ -317,7 +317,7 @@ ghcr.io/the-cloud-clockwork/agenticore:dev   (floating)
 
 ### 2026-04-14 — 95% green in LibreChat (`b88b3e8`)
 
-Validated end-to-end on `llm.dev.homeofanton.com` via LibreChat against `anton-agent`, `finops-agent`, `notebooklm-agent`:
+Validated end-to-end on `llm.homeofanton.com` via LibreChat against `anton-agent`, `finops-agent`, `notebooklm-agent`:
 
 - All seven slash tokens intercepted server-side, sticky per agent, multi-turn aware, no Claude spawn.
 - Thinking rendered in LibreChat's reasoning panel via `delta.reasoning_content`.

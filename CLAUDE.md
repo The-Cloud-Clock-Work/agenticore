@@ -128,7 +128,7 @@ Before every `claude -p` call in agent_mode, `render_mcp_whitelist()` runs `agen
 **Per-call subtraction:** The completions API accepts `disable_mcp_servers` (list) to narrow the whitelist for a single call:
 ```json
 POST /v1/chat/completions
-{ "disable_mcp_servers": ["tools-notifications", "tools-notifications-dev"], ... }
+{ "disable_mcp_servers": ["tools-notifications", "tools-notifications"], ... }
 ```
 This temporarily removes those servers from `.agentihooks.json`, renders, then restores the file.
 
@@ -173,7 +173,7 @@ When a request is **toggle-only** (slash tokens with empty cleaned message), age
 
 **Reference**: `docs/reference/sse-streaming.md` (chunk schema, fail modes), `docs/getting-started/test-streaming.md` (self-test walkthrough).
 
-**LiteLLM / LibreChat integration**: agents are onboarded as openai-compatible models pointing at `http://<agent>.anton-dev.svc:8200/v1`. The `librechat-dev` LiteLLM unit's models allowlist controls which agents appear in LibreChat's model picker.
+**LiteLLM / LibreChat integration**: agents are onboarded as openai-compatible models pointing at `http://<agent>.anton-prod.svc:8200/v1`. The `librechat` LiteLLM unit's models allowlist controls which agents appear in LibreChat's model picker.
 
 ## Conversation Persistence (Agent Mode)
 

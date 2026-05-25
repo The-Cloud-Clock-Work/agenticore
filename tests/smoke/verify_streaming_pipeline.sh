@@ -14,7 +14,7 @@ set -euo pipefail
 
 # ─── Constants ──────────────────────────────────────────────────────────────
 KCTL="kubectl --kubeconfig ${KUBECONFIG:-/home/iamroot/.kube/config-k3s}"
-NS="${NS:-anton-dev}"
+NS="${NS:-anton-prod}"
 AGENT="${1:-streaming-test}"
 PORT="${PORT:-8200}"
 AUDIT_ROOT="${AUDIT_ROOT:-/tmp/sse-audit}"
