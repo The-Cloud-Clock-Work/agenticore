@@ -192,12 +192,10 @@ def sync_agentihub(url: str = "") -> Optional[Path]:
         return None
     if dest.exists() and (dest / ".git").exists():
         _clone_or_fetch_agentihub(url, dest, cfg.agentihub_branch)
-    elif dest.exists() and any(dest.iterdir()):
+    elif dest.exists():
         # Pre-mounted checkout (dev bind-mount): trust it, no fetch.
         logger.info("agentihub: pre-mounted checkout at %s, skipping clone", dest)
     else:
-        if dest.exists():
-            logger.info("agentihub: empty dir at %s (stale mkdir), cloning fresh", dest)
         _clone_or_fetch_agentihub(url, dest, cfg.agentihub_branch)
     cfg.runtime.hub_dir = dest
     logger.info("agentihub → %s (branch=%s)", dest, cfg.agentihub_branch or "HEAD")
@@ -316,12 +314,10 @@ def sync_agentihooks(url: str = "") -> Optional[Path]:
             return None
         if dest.exists() and (dest / ".git").exists():
             _clone_or_fetch(resolved_url, dest, cfg.agentihooks_branch)
-        elif dest.exists() and any(dest.iterdir()):
+        elif dest.exists():
             # Pre-mounted checkout (dev bind-mount): trust it, no fetch.
             logger.info("agentihooks: pre-mounted checkout at %s, skipping clone", dest)
         else:
-            if dest.exists():
-                logger.info("agentihooks: empty dir at %s (stale mkdir), cloning fresh", dest)
             _clone_or_fetch(resolved_url, dest, cfg.agentihooks_branch)
         _pip_install_editable(dest)
         cfg.runtime.agentihooks_dir = dest
@@ -346,12 +342,10 @@ def sync_bundle() -> Optional[Path]:
         return None
     if dest.exists() and (dest / ".git").exists():
         _clone_or_fetch_bundle(url, dest, cfg.agentihooks_bundle_branch)
-    elif dest.exists() and any(dest.iterdir()):
+    elif dest.exists():
         # Pre-mounted checkout (dev bind-mount): trust it, no fetch.
         logger.info("agentihooks-bundle: pre-mounted checkout at %s, skipping clone", dest)
     else:
-        if dest.exists():
-            logger.info("agentihooks-bundle: empty dir at %s (stale mkdir), cloning fresh", dest)
         _clone_or_fetch_bundle(url, dest, cfg.agentihooks_bundle_branch)
     cfg.runtime.bundle_dir = dest
     logger.info("agentihooks bundle synced → %s (branch=%s)", dest, cfg.agentihooks_bundle_branch or "HEAD")
