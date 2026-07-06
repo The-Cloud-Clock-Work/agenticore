@@ -44,7 +44,7 @@ jobs:
             echo "agenticore=ghcr.io/${REPO_LC,,}:${TAG}" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'push' && github.ref || inputs.ref }}
 
