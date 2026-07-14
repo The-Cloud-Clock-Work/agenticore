@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.0] - 2026-07-14
 
 ### Changed
 
@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Live Chat targeted the wrong namespace** — the `kubectl exec` behind the TUI's Live Chat
   action omitted `-n <namespace>`, so it ran against whatever namespace the current kubectl
   context happened to point at.
+- **CI: the push-side test gate had been decorative since May.** Every `push`-triggered `Tests`
+  run failed with `ruff: command not found` / `pytest: command not found` (exit 127) while every
+  `pull_request` run passed — the workflow routes pushes to a self-hosted runner where pip's
+  console scripts land outside `PATH`, so the install step succeeded and the next step could not
+  find the binary it had just installed. Invoking via `python -m` is runner-agnostic. Nothing
+  merged via push in that window was actually tested by CI.
 
 ## [1.4.0] - 2026-04-17
 
@@ -146,6 +152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI/CD workflows: test, build, release, docker-publish, publish-pypi, docs-audit, smoke-test
 - Documentation site with 16 files
 
+[1.8.0]: https://github.com/The-Cloud-Clockwork/agenticore/compare/v1.7.0...v1.8.0
 [1.4.0]: https://github.com/The-Cloud-Clockwork/agenticore/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/The-Cloud-Clockwork/agenticore/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/The-Cloud-Clockwork/agenticore/compare/v0.11.0...v1.3.0
