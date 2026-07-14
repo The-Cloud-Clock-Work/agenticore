@@ -1113,8 +1113,9 @@ async def _handle_lifespan(_scope, receive, send, lifespan_factory):
             lifespan_cm = lifespan_factory()
             await lifespan_cm.__aenter__()
             await send({"type": "lifespan.startup.complete"})
-        except Exception:
-            await send({"type": "lifespan.startup.failed"})
+        except Exception as exc:
+            logger.exception("ASGI lifespan startup failed")
+            await send({"type": "lifespan.startup.failed", "message": str(exc)})
             return
     message = await receive()
     if message["type"] == "lifespan.shutdown":

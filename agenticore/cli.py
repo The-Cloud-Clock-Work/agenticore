@@ -843,6 +843,8 @@ def _cmd_agents(args):
         wait=getattr(args, "wait", True),
         agent=getattr(args, "agent", ""),
         agentihub_dir=getattr(args, "agentihub_dir", ""),
+        k8s=getattr(args, "k8s", None),
+        namespace=getattr(args, "namespace", ""),
     )
 
 
@@ -1119,7 +1121,7 @@ def main():
     p_push.set_defaults(func=_cmd_push)
 
     # agents
-    p_agents = sub.add_parser("agents", help="Discover and manage running agenticore pods (K8s)")
+    p_agents = sub.add_parser("agents", help="Discover and manage agents (local by default; K8s opt-in)")
     p_agents.add_argument(
         "--headless", action="store_true", help="Non-interactive mode. JSON output, all inputs via flags."
     )
@@ -1132,6 +1134,22 @@ def main():
     p_agents.add_argument("--no-wait", dest="wait", action="store_false", help="Don't wait for chat response")
     p_agents.add_argument("--agent", default="", help="Local agent name (required for local action)")
     p_agents.add_argument("--agentihub-dir", default="", help="Path to agentihub directory (default: auto-detect)")
+    p_agents.add_argument(
+        "--k8s",
+        dest="k8s",
+        action="store_true",
+        default=None,
+        help="Enable the Kubernetes backend (default: off — local agents only). "
+        "Also settable via AGENTICORE_K8S_ENABLED or ~/.agenticore/state.json",
+    )
+    p_agents.add_argument(
+        "--no-k8s", dest="k8s", action="store_false", help="Force the Kubernetes backend off for this invocation"
+    )
+    p_agents.add_argument(
+        "--namespace",
+        default="",
+        help="Comma-separated namespace scope for K8s discovery (implies --k8s; empty = all-namespaces)",
+    )
     p_agents.set_defaults(func=_cmd_agents)
 
     # init

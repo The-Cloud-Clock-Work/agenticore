@@ -1,4 +1,13 @@
-"""Interactive TUI + headless CLI for discovering and managing agenticore pods in Kubernetes.
+"""Interactive TUI + headless CLI for discovering and managing agenticore agents.
+
+Local agents (AgentiHub packages) are always discovered. Kubernetes is an
+**opt-in backend**: no ``kubectl`` process is ever spawned unless K8s is
+explicitly enabled, so the CLI stays portable on machines with no cluster.
+
+Enable K8s (highest precedence first):
+    agenticore agents --k8s [--namespace anton-prod]
+    AGENTICORE_K8S_ENABLED=true [AGENTICORE_K8S_NAMESPACES=anton-prod,other]
+    ~/.agenticore/state.json  ->  {"k8s": {"enabled": true, "namespaces": [...]}}
 
 Interactive (default):  agenticore agents
 Headless (AI/scripts):  agenticore agents --headless list
@@ -16,9 +25,11 @@ import termios
 import threading
 import tty
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
+
+import yaml
 
 
 # ── ANSI ──────────────────────────────────────────────────────────────────────
@@ -36,6 +47,11 @@ BL = "\033[34m"
 LG = "\033[38;5;245m"
 LGB = "\033[1;38;5;250m"
 
+_TRUE = ("1", "true", "yes", "on")
+_FALSE = ("0", "false", "no", "off")
+
+K8S_DISABLED_HINT = "Kubernetes is disabled. Enable it with --k8s, AGENTICORE_K8S_ENABLED=true, or 'k' in the TUI."
+
 
 @dataclass
 class AgenticorePod:
@@ -52,6 +68,21 @@ class AgenticorePod:
 class LocalAgent:
     name: str
     package_path: str
+    description: str = ""
+    capabilities: list[str] = field(default_factory=list)
+
+
+@dataclass
+class K8sConfig:
+    """Resolved Kubernetes backend settings.
+
+    Disabled by default. Agenticore is local-first: K8s is one optional
+    backend among several (Fargate/ECS adapters may follow), so nothing here
+    may shell out to ``kubectl`` unless the operator asked for it.
+    """
+
+    enabled: bool = False
+    namespaces: list[str] = field(default_factory=list)  # empty => all namespaces
 
 
 # ── TTY helpers (interactive only) ────────────────────────────────────────────
@@ -124,25 +155,175 @@ def _prompt_multiline(t, msg="") -> str:
     return "\n".join(lines)
 
 
-# ── K8s discovery ─────────────────────────────────────────────────────────────
+# ── State (~/.agenticore/state.json) ──────────────────────────────────────────
 
 
-def discover_pods() -> list[AgenticorePod]:
-    """Discover agenticore pods across ALL namespaces.
+def _state_path() -> Path:
+    return Path.home() / ".agenticore" / "state.json"
 
-    A pod is considered an agenticore pod when one of its containers exposes
-    the AGENTICORE_TRANSPORT env var. Namespace is taken from the pod's own
-    metadata so callers can dispatch kubectl operations against the correct
-    namespace without any hardcoded assumption.
+
+def _read_state() -> dict:
+    state_path = _state_path()
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text())
+        except Exception:
+            return {}
+        return state if isinstance(state, dict) else {}
+    return {}
+
+
+def _write_state(mutate) -> None:
+    state = _read_state()
+    mutate(state)
+    sp = _state_path()
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    sp.write_text(json.dumps(state, indent=2))
+
+
+def _state_section(state: dict, key: str) -> dict:
+    """Return state[key] as a dict, replacing any non-dict value in place.
+
+    ``setdefault`` is not enough: it returns the *existing* value untouched when
+    the key is present, so a hand-corrupted ``"k8s": "yes"`` would blow up on the
+    next item assignment.
+    """
+    section = state.get(key)
+    if not isinstance(section, dict):
+        section = {}
+        state[key] = section
+    return section
+
+
+def _write_agentihub_to_state(path: Path) -> None:
+    """Persist a user-chosen agentihub directory into ~/.agenticore/state.json."""
+
+    def _mutate(state):
+        _state_section(state, "agentihub")["path"] = str(path)
+
+    _write_state(_mutate)
+
+
+def _write_k8s_to_state(enabled: bool, namespaces: Optional[list[str]] = None) -> None:
+    """Persist the K8s backend toggle into ~/.agenticore/state.json.
+
+    ``namespaces=None`` leaves the persisted scope untouched — turning the
+    backend off must not erase the namespaces the operator configured.
+    """
+
+    def _mutate(state):
+        k8s = _state_section(state, "k8s")
+        k8s["enabled"] = bool(enabled)
+        if namespaces is not None:
+            k8s["namespaces"] = list(namespaces)
+
+    _write_state(_mutate)
+
+
+# ── K8s opt-in resolution ─────────────────────────────────────────────────────
+
+
+def _parse_namespaces(raw) -> list[str]:
+    """Normalize a namespace spec to a unique, ordered list.
+
+    Accepts a comma/space-separated string or a sequence. Anything else — a
+    scalar left in ``state.json`` by a hand edit or a version skew — yields an
+    empty list. A corrupt config file must never crash the agent list.
+    """
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        items = raw.replace(",", " ").split()
+    elif isinstance(raw, (list, tuple, set)):
+        items = [str(x) for x in raw]
+    else:
+        return []
+    out: list[str] = []
+    for item in items:
+        item = item.strip()
+        if item and item not in out:
+            out.append(item)
+    return out
+
+
+def _parse_bool(raw) -> Optional[bool]:
+    """Coerce a config value to a bool. Returns None when it says nothing.
+
+    Handles JSON booleans *and* the string forms ("false", "0", "off") that land
+    in state.json via hand edits or shell-templated JSON — a naive ``bool()``
+    would read the string "false" as True and silently switch K8s on.
+    """
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    if not isinstance(raw, str):
+        return None
+    val = raw.strip().lower()
+    if val in _TRUE:
+        return True
+    if val in _FALSE:
+        return False
+    return None
+
+
+def resolve_k8s_config(enabled: Optional[bool] = None, namespaces: str = "") -> K8sConfig:
+    """Resolve whether the K8s backend is active, and against which namespaces.
+
+    Precedence: **CLI > env (``AGENTICORE_K8S_ENABLED``) > ``state.json`` > off.**
+
+    Naming a namespace *on the command line* is a CLI-level request for the K8s
+    backend and therefore implies ``--k8s`` — it outranks an ambient
+    ``AGENTICORE_K8S_ENABLED=false`` sitting in a shell rc, exactly as ``--k8s``
+    itself would. Namespaces coming from the env or from state.json do **not**
+    imply it: ambient config must never resurrect Kubernetes for an operator who
+    never asked for it. An explicit ``--no-k8s`` always wins.
+    """
+    state_k8s = _read_state().get("k8s")
+    if not isinstance(state_k8s, dict):
+        state_k8s = {}
+
+    cli_ns = _parse_namespaces(namespaces)
+
+    if enabled is not None:
+        resolved = bool(enabled)  # explicit --k8s / --no-k8s
+    elif cli_ns:
+        resolved = True  # --namespace is a CLI signal; it outranks the env
+    else:
+        env_enabled = _parse_bool(os.environ.get("AGENTICORE_K8S_ENABLED", ""))
+        state_enabled = _parse_bool(state_k8s.get("enabled"))
+        if env_enabled is not None:
+            resolved = env_enabled
+        elif state_enabled is not None:
+            resolved = state_enabled
+        else:
+            resolved = False
+
+    ns = (
+        cli_ns
+        or _parse_namespaces(os.environ.get("AGENTICORE_K8S_NAMESPACES", ""))
+        or _parse_namespaces(state_k8s.get("namespaces"))
+    )
+    return K8sConfig(enabled=resolved, namespaces=ns)
+
+
+# ── K8s discovery (only reachable when K8sConfig.enabled) ─────────────────────
+
+
+def _kubectl_get_pods(scope: list[str]) -> list[dict]:
+    """Run one `kubectl get pods` against a namespace scope. Never raises.
+
+    OSError covers a missing kubectl (FileNotFoundError) and a present-but-not-
+    executable one (PermissionError) alike — neither may take down the TUI.
     """
     try:
         result = subprocess.run(
-            ["kubectl", "get", "pods", "--all-namespaces", "-o", "json"],
+            ["kubectl", "get", "pods", *scope, "-o", "json"],
             capture_output=True,
             text=True,
             timeout=15,
         )
-    except FileNotFoundError:
+    except OSError:
         return []
     except subprocess.TimeoutExpired:
         return []
@@ -155,69 +336,74 @@ def discover_pods() -> list[AgenticorePod]:
     except json.JSONDecodeError:
         return []
 
+    return data.get("items", [])
+
+
+def discover_pods(k8s: Optional[K8sConfig] = None) -> list[AgenticorePod]:
+    """Discover agenticore pods — **only** when the K8s backend is enabled.
+
+    A pod is an agenticore pod when one of its containers exposes the
+    AGENTICORE_TRANSPORT env var. Namespace is taken from the pod's own
+    metadata so callers dispatch kubectl against the right namespace.
+
+    With no namespaces configured, scope is all-namespaces. Otherwise each
+    namespace is queried separately (kubectl honours only the last ``-n``).
+    """
+    if k8s is None:
+        k8s = resolve_k8s_config()
+    if not k8s.enabled:
+        return []
+
+    scopes = [["-n", ns] for ns in k8s.namespaces] or [["--all-namespaces"]]
+
     pods = []
-    for item in data.get("items", []):
-        meta = item.get("metadata", {})
-        name = meta.get("name", "")
-        namespace = meta.get("namespace", "")
-        phase = item.get("status", {}).get("phase", "Unknown")
-        containers = item.get("spec", {}).get("containers", [])
-
-        for container in containers:
-            envs = {}
-            for e in container.get("env", []):
-                envs[e["name"]] = e.get("value", "")
-
-            if "AGENTICORE_TRANSPORT" not in envs:
+    seen: set[tuple[str, str]] = set()
+    for scope in scopes:
+        for item in _kubectl_get_pods(scope):
+            meta = item.get("metadata", {})
+            name = meta.get("name", "")
+            namespace = meta.get("namespace", "")
+            if (namespace, name) in seen:
                 continue
+            phase = item.get("status", {}).get("phase", "Unknown")
+            containers = item.get("spec", {}).get("containers", [])
 
-            pods.append(
-                AgenticorePod(
-                    name=name,
-                    namespace=namespace,
-                    phase=phase,
-                    agent_mode=envs.get("AGENT_MODE", "").lower() == "true",
-                    agent_name=envs.get("AGENTIHUB_AGENT", ""),
-                    port=envs.get("AGENTICORE_PORT", "8200"),
-                    container=container.get("name", "agenticore"),
+            for container in containers:
+                envs = {}
+                for e in container.get("env", []):
+                    envs[e["name"]] = e.get("value", "")
+
+                if "AGENTICORE_TRANSPORT" not in envs:
+                    continue
+
+                seen.add((namespace, name))
+                pods.append(
+                    AgenticorePod(
+                        name=name,
+                        namespace=namespace,
+                        phase=phase,
+                        agent_mode=envs.get("AGENT_MODE", "").lower() == "true",
+                        agent_name=envs.get("AGENTIHUB_AGENT", ""),
+                        port=envs.get("AGENTICORE_PORT", "8200"),
+                        container=container.get("name", "agenticore"),
+                    )
                 )
-            )
-            break
+                break
 
     return pods
 
 
-def _namespaces_summary(pods: list[AgenticorePod]) -> str:
-    """Human-readable summary of namespaces represented in the pod list."""
+def _namespaces_summary(pods: list[AgenticorePod], k8s: K8sConfig) -> str:
+    """Human-readable summary of the namespace scope actually in use."""
     seen = sorted({p.namespace for p in pods if p.namespace})
-    if not seen:
-        return "all-namespaces (no pods)"
-    if len(seen) == 1:
-        return seen[0]
-    return ", ".join(seen)
+    if seen:
+        return ", ".join(seen)
+    if k8s.namespaces:
+        return f"{', '.join(k8s.namespaces)} (no pods)"
+    return "all-namespaces (no pods)"
 
 
-def _state_path() -> Path:
-    return Path.home() / ".agenticore" / "state.json"
-
-
-def _read_state() -> dict:
-    state_path = _state_path()
-    if state_path.exists():
-        try:
-            return json.loads(state_path.read_text())
-        except Exception:
-            pass
-    return {}
-
-
-def _write_agentihub_to_state(path: Path) -> None:
-    """Persist a user-chosen agentihub directory into ~/.agenticore/state.json."""
-    state = _read_state()
-    state.setdefault("agentihub", {})["path"] = str(path)
-    sp = _state_path()
-    sp.parent.mkdir(parents=True, exist_ok=True)
-    sp.write_text(json.dumps(state, indent=2))
+# ── Local agent discovery ─────────────────────────────────────────────────────
 
 
 def _resolve_agentihub_dir(agentihub_dir: str = "") -> Optional[Path]:
@@ -250,6 +436,30 @@ def _resolve_agentihub_dir(agentihub_dir: str = "") -> Optional[Path]:
     return None
 
 
+def read_package_manifest(package_path) -> dict:
+    """Read ``package/command.yml`` -> {description, capabilities}.
+
+    Best-effort by design: a missing or malformed manifest yields ``{}``.
+    Authoring a package must never be able to break agent discovery.
+    """
+    manifest = Path(package_path) / "command.yml"
+    try:
+        raw = yaml.safe_load(manifest.read_text())
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+
+    out: dict = {}
+    desc = raw.get("description")
+    if isinstance(desc, str) and desc.strip():
+        out["description"] = desc.strip()
+    caps = raw.get("capabilities")
+    if isinstance(caps, list):
+        out["capabilities"] = [str(c).strip() for c in caps if str(c).strip()]
+    return out
+
+
 def discover_local_agents(agentihub_dir: str = "") -> list[LocalAgent]:
     hub = _resolve_agentihub_dir(agentihub_dir)
     if not hub:
@@ -267,7 +477,15 @@ def discover_local_agents(agentihub_dir: str = "") -> list[LocalAgent]:
         # An agent is any dir containing package/CLAUDE.md.
         if not (package_path / "CLAUDE.md").is_file():
             continue
-        agents.append(LocalAgent(name=entry.name, package_path=str(package_path)))
+        manifest = read_package_manifest(package_path)
+        agents.append(
+            LocalAgent(
+                name=entry.name,
+                package_path=str(package_path),
+                description=manifest.get("description", ""),
+                capabilities=manifest.get("capabilities", []),
+            )
+        )
 
     return agents
 
@@ -279,8 +497,8 @@ def _resolve_local_agent(name: str, agentihub_dir: str = "") -> Optional[LocalAg
     return None
 
 
-def _resolve_pod(pod_name: str) -> Optional[AgenticorePod]:
-    pods = discover_pods()
+def _resolve_pod(pod_name: str, k8s: Optional[K8sConfig] = None) -> Optional[AgenticorePod]:
+    pods = discover_pods(k8s)
     for p in pods:
         if p.name == pod_name:
             return p
@@ -368,23 +586,29 @@ def _headless_error(msg: str, exit_code: int = 1):
     sys.exit(exit_code)
 
 
-def _headless_require_pod(pod_name: Optional[str]) -> AgenticorePod:
+def _headless_require_pod(pod_name: Optional[str], k8s: K8sConfig) -> AgenticorePod:
+    if not k8s.enabled:
+        _headless_error(f"'{pod_name or 'pod'}' is a Kubernetes pod. {K8S_DISABLED_HINT}", exit_code=2)
     if not pod_name:
         _headless_error("--pod is required", exit_code=2)
-    pod = _resolve_pod(pod_name)
+    pod = _resolve_pod(pod_name, k8s)
     if not pod:
         _headless_error(f"Pod '{pod_name}' not found or not an agenticore pod")
     return pod
 
 
-def headless_list(agentihub_dir: str = ""):
-    pods = discover_pods()
+def headless_list(agentihub_dir: str = "", k8s: Optional[K8sConfig] = None):
+    if k8s is None:
+        k8s = resolve_k8s_config()
+    pods = discover_pods(k8s)
     local_agents = discover_local_agents(agentihub_dir)
-    namespaces = sorted({p.namespace for p in pods if p.namespace})
     hub = _resolve_agentihub_dir(agentihub_dir)
     _headless_output(
         {
-            "namespaces": namespaces,
+            "k8s": {
+                "enabled": k8s.enabled,
+                "namespaces": sorted({p.namespace for p in pods if p.namespace}),
+            },
             "agentihub": str(hub) if hub else None,
             "pods": [asdict(p) for p in pods],
             "local_agents": [asdict(a) for a in local_agents],
@@ -392,8 +616,8 @@ def headless_list(agentihub_dir: str = ""):
     )
 
 
-def headless_chat(pod_name: str, message: str, wait: bool = True):
-    pod = _headless_require_pod(pod_name)
+def headless_chat(pod_name: str, message: str, wait: bool = True, k8s: Optional[K8sConfig] = None):
+    pod = _headless_require_pod(pod_name, k8s or resolve_k8s_config())
     if not pod.agent_mode:
         _headless_error(f"Pod '{pod_name}' is not in agent mode — use 'job' instead")
 
@@ -410,8 +634,8 @@ def headless_chat(pod_name: str, message: str, wait: bool = True):
     _headless_output(resp, exit_code=1 if "error" in resp else 0)
 
 
-def headless_job(pod_name: str, task: str, repo: str = ""):
-    pod = _headless_require_pod(pod_name)
+def headless_job(pod_name: str, task: str, repo: str = "", k8s: Optional[K8sConfig] = None):
+    pod = _headless_require_pod(pod_name, k8s or resolve_k8s_config())
 
     body: dict = {"task": task, "wait": False}
     if repo:
@@ -421,14 +645,14 @@ def headless_job(pod_name: str, task: str, repo: str = ""):
     _headless_output(resp, exit_code=1 if "error" in resp else 0)
 
 
-def headless_sync(pod_name: str):
-    pod = _headless_require_pod(pod_name)
+def headless_sync(pod_name: str, k8s: Optional[K8sConfig] = None):
+    pod = _headless_require_pod(pod_name, k8s or resolve_k8s_config())
     resp = _kubectl_exec_sync(pod)
     _headless_output(resp, exit_code=0 if resp.get("success") else 1)
 
 
-def headless_health(pod_name: str):
-    pod = _headless_require_pod(pod_name)
+def headless_health(pod_name: str, k8s: Optional[K8sConfig] = None):
+    pod = _headless_require_pod(pod_name, k8s or resolve_k8s_config())
     resp = _kubectl_exec_curl(pod, "GET", "/health")
     _headless_output(resp, exit_code=1 if "error" in resp else 0)
 
@@ -581,30 +805,32 @@ def _action_logs(pod: AgenticorePod):
 # ── TUI screens ──────────────────────────────────────────────────────────────
 
 
-def _render_header(t, namespace: str, agentihub: Optional[Path] = None):
+def _render_header(t, k8s: K8sConfig, namespace: str = "", agentihub: Optional[Path] = None):
     W = 50
+    badge = f"{YL}K8S{R}" if k8s.enabled else f"{GR}LOCAL{R}"
     _write(t, f"  {GRB}{'━' * W}{R}")
-    _write(t, f"  {GRB}  ◆ Agenticore Agents{R}  {YL}K8S{R}")
-    _write(t, f"  {LG}  namespaces: {namespace}{R}")
+    _write(t, f"  {GRB}  ◆ Agenticore Agents{R}  {badge}")
+    if k8s.enabled:
+        _write(t, f"  {LG}  namespaces: {namespace}{R}")
     hub_label = str(agentihub) if agentihub else f"{RDB}<unset — press 'c'>{LG}"
     _write(t, f"  {LG}  agentihub:  {hub_label}{R}")
     _write(t, f"  {GRB}{'━' * W}{R}")
     _write(t, "")
 
 
+def _local_matches(a: LocalAgent, needle: str) -> bool:
+    haystack = " ".join([a.name, a.description, *a.capabilities]).lower()
+    return needle in haystack
+
+
 def _render_list(
     t, pods: list[AgenticorePod], local_agents: list[LocalAgent], filter_str: str = ""
 ) -> tuple[list, list]:
+    needle = filter_str.lower()
     filtered_pods = (
-        [p for p in pods if filter_str.lower() in p.name.lower() or filter_str.lower() in p.agent_name.lower()]
-        if filter_str
-        else pods
+        [p for p in pods if needle in p.name.lower() or needle in p.agent_name.lower()] if filter_str else pods
     )
-    filtered_local = (
-        [a for a in local_agents if filter_str.lower() in a.name.lower() or filter_str.lower() in a.description.lower()]
-        if filter_str
-        else local_agents
-    )
+    filtered_local = [a for a in local_agents if _local_matches(a, needle)] if filter_str else local_agents
 
     if not filtered_pods and not filtered_local:
         _write(t, f"  {RDB}No agents found{R}" if not filter_str else f"  {RDB}No matches for '{filter_str}'{R}")
@@ -627,21 +853,26 @@ def _render_list(
             _write(t, "")
 
         for a in filtered_local:
-            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{a.name:<30}{R} {LG}{'local':<30}{R} {LG}{'local':<12}{R} {GR}LOCAL{R}")
+            desc = a.description or "—"
+            if len(desc) > 44:
+                desc = desc[:43] + "…"
+            _write(t, f"  {GRB}[{idx}]{R}  {LGB}{a.name:<24}{R} {LG}{desc:<45}{R} {GR}LOCAL{R}")
             idx += 1
 
     _write(t, "")
     return filtered_pods, filtered_local
 
 
-def _render_footer(t, filter_str: str = ""):
+def _render_footer(t, k8s: K8sConfig, filter_str: str = ""):
     W = 50
+    k8s_label = f"{GR}on{R}" if k8s.enabled else f"{LG}off{R}"
     _write(t, f"  {LG}{'─' * W}{R}")
     if filter_str:
         _write(t, f"  {YL}filter: {GRB}'{filter_str}'{R}  {LG}│  clear: /{R}")
     _write(
         t,
-        f"  {LG}filter: {LGB}/word{R}  {LG}│  select: {LGB}1-N{R}  {LG}│  agentihub: {LGB}c{R}  {LG}│  refresh: {LGB}r{R}  {LG}│  quit: {RDB}q{R}",
+        f"  {LG}filter: {LGB}/word{R}  {LG}│  select: {LGB}1-N{R}  {LG}│  agentihub: {LGB}c{R}"
+        f"  {LG}│  k8s ({k8s_label}{LG}): {LGB}k{R}  {LG}│  refresh: {LGB}r{R}  {LG}│  quit: {RDB}q{R}",
     )
     _write(t, "")
 
@@ -707,6 +938,8 @@ def _action_menu(t, pod: AgenticorePod, local_agents: list[LocalAgent] = None) -
                     "kubectl",
                     "exec",
                     "-it",
+                    "-n",
+                    pod.namespace,
                     pod.name,
                     "-c",
                     pod.container,
@@ -750,6 +983,10 @@ def _local_action_menu(t, agent: LocalAgent) -> bool:
         W = 50
         _write(t, f"  {GRB}{'━' * W}{R}")
         _write(t, f"  {LG}Selected  {GRB}▶{R}  {LGB}{agent.name}{R}  {GR}LOCAL{R}")
+        if agent.description:
+            _write(t, f"  {LG}{agent.description}{R}")
+        if agent.capabilities:
+            _write(t, f"  {LG}capabilities: {CY}{', '.join(agent.capabilities)}{R}")
         _write(t, f"  {GRB}{'━' * W}{R}")
         _write(t, "")
         _write(t, f"  {GRB}[Enter]{R} {LGB}Enter Agent Dir{R}  {LG}← cd {agent.package_path}{R}")
@@ -828,8 +1065,42 @@ def _action_set_agentihub(t) -> Optional[Path]:
     return candidate
 
 
-def main_interactive(agentihub_dir: str = ""):
-    pods = discover_pods()
+def _action_toggle_k8s(t, k8s: K8sConfig) -> K8sConfig:
+    """Toggle the K8s backend on/off and persist the choice to state.json.
+
+    Turning it on prompts for an optional namespace scope (empty =
+    all-namespaces). Turning it off drops every kubectl code path — the TUI
+    goes back to local agents only.
+    """
+    if k8s.enabled:
+        # namespaces=None: keep the persisted scope. k8s.namespaces may have come
+        # from a --namespace flag or the env, and turning the backend off must not
+        # overwrite what the operator saved.
+        _write_k8s_to_state(False, None)
+        _write(t, f"\n  {LG}Kubernetes backend {RDB}disabled{LG} — local agents only.{R}  (press Enter)")
+        t.flush()
+        _prompt(t)
+        return K8sConfig(enabled=False, namespaces=k8s.namespaces)
+
+    _write(t, "")
+    _write(t, f"  {LG}Enable Kubernetes backend{R}")
+    current = ", ".join(k8s.namespaces) if k8s.namespaces else "all-namespaces"
+    _write(t, f"  {LG}Namespaces (comma-separated; empty = all-namespaces). Current: {current}{R}")
+    raw = _prompt(t).strip()
+    namespaces = _parse_namespaces(raw) if raw else k8s.namespaces
+
+    _write_k8s_to_state(True, namespaces)
+    scope = ", ".join(namespaces) if namespaces else "all-namespaces"
+    _write(t, f"  {GR}Kubernetes enabled{R} {LG}({scope}) — saved to ~/.agenticore/state.json{R}  (press Enter)")
+    t.flush()
+    _prompt(t)
+    return K8sConfig(enabled=True, namespaces=namespaces)
+
+
+def main_interactive(agentihub_dir: str = "", k8s: Optional[K8sConfig] = None):
+    if k8s is None:
+        k8s = resolve_k8s_config()
+    pods = discover_pods(k8s)
     local_agents = discover_local_agents(agentihub_dir)
     hub_path = _resolve_agentihub_dir(agentihub_dir)
     filter_str = ""
@@ -838,9 +1109,9 @@ def main_interactive(agentihub_dir: str = ""):
 
     while True:
         _clear(t)
-        _render_header(t, _namespaces_summary(pods), hub_path)
+        _render_header(t, k8s, _namespaces_summary(pods, k8s), hub_path)
         filtered_pods, filtered_local = _render_list(t, pods, local_agents, filter_str)
-        _render_footer(t, filter_str)
+        _render_footer(t, k8s, filter_str)
 
         raw = _prompt(t).strip()
 
@@ -850,9 +1121,14 @@ def main_interactive(agentihub_dir: str = ""):
         if raw.lower() == "r":
             _write(t, f"\n  {YL}Refreshing...{R}")
             t.flush()
-            pods = discover_pods()
+            pods = discover_pods(k8s)
             local_agents = discover_local_agents(agentihub_dir)
             hub_path = _resolve_agentihub_dir(agentihub_dir)
+            continue
+
+        if raw.lower() == "k":
+            k8s = _action_toggle_k8s(t, k8s)
+            pods = discover_pods(k8s)
             continue
 
         if raw.lower() == "c":
@@ -883,7 +1159,7 @@ def main_interactive(agentihub_dir: str = ""):
                 should_quit = _local_action_menu(t, filtered_local[num - 1 - total_pods])
             if should_quit:
                 break
-            pods = discover_pods()
+            pods = discover_pods(k8s)
             local_agents = discover_local_agents(agentihub_dir)
             hub_path = _resolve_agentihub_dir(agentihub_dir)
 
@@ -899,13 +1175,17 @@ def headless_local(agent_name: str, agentihub_dir: str = ""):
 
 def main(headless: bool = False, action: str = "", **kwargs):
     agentihub_dir = kwargs.get("agentihub_dir", "")
+    k8s = resolve_k8s_config(
+        enabled=kwargs.get("k8s"),
+        namespaces=kwargs.get("namespace", ""),
+    )
 
     if not headless:
-        main_interactive(agentihub_dir)
+        main_interactive(agentihub_dir, k8s)
         return
 
     if not action or action == "list":
-        headless_list(agentihub_dir)
+        headless_list(agentihub_dir, k8s)
     elif action == "chat":
         if not kwargs.get("message"):
             _headless_error("--message is required for chat", exit_code=2)
@@ -913,6 +1193,7 @@ def main(headless: bool = False, action: str = "", **kwargs):
             pod_name=kwargs.get("pod", ""),
             message=kwargs["message"],
             wait=kwargs.get("wait", True),
+            k8s=k8s,
         )
     elif action == "job":
         if not kwargs.get("task"):
@@ -921,11 +1202,12 @@ def main(headless: bool = False, action: str = "", **kwargs):
             pod_name=kwargs.get("pod", ""),
             task=kwargs["task"],
             repo=kwargs.get("repo", ""),
+            k8s=k8s,
         )
     elif action == "sync":
-        headless_sync(pod_name=kwargs.get("pod", ""))
+        headless_sync(pod_name=kwargs.get("pod", ""), k8s=k8s)
     elif action == "health":
-        headless_health(pod_name=kwargs.get("pod", ""))
+        headless_health(pod_name=kwargs.get("pod", ""), k8s=k8s)
     elif action == "local":
         if not kwargs.get("agent"):
             _headless_error("--agent is required for local", exit_code=2)
