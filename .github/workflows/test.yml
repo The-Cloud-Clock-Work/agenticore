@@ -19,14 +19,18 @@ jobs:
         with:
           python-version: "3.12"
 
+      # `python -m` throughout: on the self-hosted runner, pip's console scripts
+      # land outside PATH, so bare `ruff`/`pytest` exit 127 even though the
+      # install step succeeded. Going through the interpreter setup-python chose
+      # is runner-agnostic.
       - name: Install ruff
-        run: pip install ruff
+        run: python -m pip install ruff
 
       - name: Lint check
-        run: ruff check agenticore/ tests/
+        run: python -m ruff check agenticore/ tests/
 
       - name: Format check
-        run: ruff format --check agenticore/ tests/
+        run: python -m ruff format --check agenticore/ tests/
 
   unit:
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'anton' }}
@@ -42,10 +46,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]"
 
       - name: Run unit tests
-        run: pytest tests/unit -v -m unit --cov=agenticore --timeout=60 --timeout-method=thread
+        run: python -m pytest tests/unit -v -m unit --cov=agenticore --timeout=60 --timeout-method=thread
 
   integration:
     needs: [unit, lint]
@@ -59,7 +63,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]"
 
       - name: Create .env from example
         run: cp .env.example .env
@@ -87,7 +91,7 @@ jobs:
           echo "All services ready"
 
       - name: Run integration tests
-        run: pytest tests/ -v -m integration --timeout=60 || echo "No integration tests yet"
+        run: python -m pytest tests/ -v -m integration --timeout=60 || echo "No integration tests yet"
 
       - name: Stop Docker stack
         if: always()

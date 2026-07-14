@@ -15,8 +15,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # `python -m pytest` below: pip's console scripts land outside PATH on the
+      # self-hosted runner, so a bare `pytest` exits 127.
       - name: Install test deps
-        run: pip install httpx pytest pytest-timeout langfuse
+        run: python -m pip install httpx pytest pytest-timeout langfuse
 
       # ── Probe Anthropic endpoints (BASE → FALLBACK → skip) ─────────────
       - name: Probe Anthropic endpoints
@@ -127,7 +129,7 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           SMOKE_REPORT_PATH: smoke-report.md
-        run: pytest tests/smoke/test_pipeline.py -v --timeout=300
+        run: python -m pytest tests/smoke/test_pipeline.py -v --timeout=300
 
       - name: Publish test report
         if: always()
