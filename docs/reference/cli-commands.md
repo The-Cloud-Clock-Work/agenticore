@@ -320,18 +320,53 @@ agenticore push --main --push-only
 
 ## agents
 
-Interactive TUI for discovering and managing agenticore pods (K8S) and local agent packages (LOCAL).
-Requires `kubectl` for remote pods. Local agents are discovered from agentihub.
+Interactive TUI for discovering and managing agents. **Local agent packages are always
+discovered; Kubernetes is an opt-in backend.**
 
 ```bash
-agenticore agents                          # interactive TUI
+agenticore agents                          # local agents only — no kubectl, ever
+agenticore agents --k8s                    # + K8s pods (all namespaces)
+agenticore agents --namespace anton-prod   # + K8s pods, scoped (implies --k8s)
 agenticore agents --agentihub-dir /path    # custom agentihub location
 ```
 
-**Two agent types:**
+### Kubernetes is opt-in
 
-- **K8S** (yellow tag) — remote pods discovered via `kubectl get pods`. Any pod with `AGENTICORE_TRANSPORT` env var. Pods with `AGENT_MODE=true` are agents; others are orchestrators.
-- **LOCAL** (green tag) — Claude Code agent packages from `agentihub/agents/*/package/`. Discovered via `AGENTIHUB_DIR` env var or ecosystem default path.
+By default the `agents` command never shells out to `kubectl` and renders no K8s chrome,
+so it works on a laptop with no cluster (and leaves room for other backends — Fargate,
+ECS — to be added later). Enable K8s in any of three ways:
+
+| Where | How |
+|-------|-----|
+| CLI | `--k8s` (or `--namespace ns`, which implies it). `--no-k8s` forces it off. |
+| Env | `AGENTICORE_K8S_ENABLED=true`, optional `AGENTICORE_K8S_NAMESPACES=ns-a,ns-b` |
+| Config | `~/.agenticore/state.json` → `{"k8s": {"enabled": true, "namespaces": ["anton-prod"]}}` — written by the `k` key in the TUI |
+
+**Precedence:** CLI flag > env > `state.json` > off.
+
+Namespaces named *on the command line* imply `--k8s` — it is an unambiguous request for the
+backend. Namespaces coming from the env or `state.json` do **not**: ambient config must never
+resurrect Kubernetes for an operator who did not ask for it. An explicit `--no-k8s` always wins.
+
+With no namespaces configured, discovery is all-namespaces. Otherwise each namespace is queried
+separately (`kubectl` honours only the last `-n`).
+
+### Two agent types
+
+- **LOCAL** (green tag) — Claude Code agent packages from `agentihub/agents/*/package/`, found via
+  `--agentihub-dir`, `AGENTIHUB_DIR`, `state.json`, or an ecosystem sibling-path walk. Description
+  and capabilities are read from each package's `command.yml`.
+- **K8S** (yellow tag, opt-in) — pods discovered via `kubectl get pods`. Any pod with an
+  `AGENTICORE_TRANSPORT` env var. Pods with `AGENT_MODE=true` are agents; others are orchestrators.
+
+**Actions — LOCAL agents:**
+
+| Action | What it does |
+|--------|--------------|
+| Enter Agent Dir | `cd` to the package dir and drop into a shell |
+| Open Chat | `cd` to the package dir + launch `claude` (flags come from the agentihooks profile) |
+| Open in VS Code | `code <package_path>` |
+| View CLAUDE.md | Display `package/CLAUDE.md` |
 
 **Actions — K8S pods:**
 
@@ -347,22 +382,16 @@ agenticore agents --agentihub-dir /path    # custom agentihub location
 
 Live Chat appears when a K8S pod's `AGENTIHUB_AGENT` name matches a local agent package.
 
-**Actions — LOCAL agents:**
-
-| Action | What it does |
-|--------|--------------|
-| Open Chat | `cd` to package dir + launch `claude` with flags from `agent.yml` |
-| Open in VS Code | `code <package_path>` |
-| View Config | Display `agent.yml` contents |
-
 **Keyboard (interactive):**
 
 | Key | Action |
 |-----|--------|
-| `1-N` | Select a pod |
-| `/word` | Filter by name |
+| `1-N` | Select an agent |
+| `/word` | Filter by name, description, or capability |
 | `/` | Clear filter |
-| `r` | Refresh pod list |
+| `c` | Set the agentihub directory (persisted to `state.json`) |
+| `k` | Toggle the K8s backend + namespace scope (persisted to `state.json`) |
+| `r` | Refresh |
 | `q` | Quit |
 
 ### Headless mode (`--headless`)
@@ -370,28 +399,50 @@ Live Chat appears when a K8S pod's `AGENTIHUB_AGENT` name matches a local agent 
 For AI agents and scripts. All output is JSON to stdout, errors to stderr.
 
 ```bash
-# List all agents (K8S pods + local packages)
+# List all agents — local only by default
 agenticore agents --headless list
 
+# Include K8s pods
+agenticore agents --headless list --k8s
+agenticore agents --headless list --namespace anton-prod
+
 # Chat with an agent-mode pod
-agenticore agents --headless chat --pod publishing-agent-0 --message "analyze the auth module"
+agenticore agents --headless chat --k8s --pod publishing-agent-0 --message "analyze the auth module"
 
 # Submit a job to an orchestrator pod
-agenticore agents --headless job --pod agenticore-0 --task "fix the bug" --repo https://github.com/org/repo
+agenticore agents --headless job --k8s --pod agenticore-0 --task "fix the bug" --repo https://github.com/org/repo
 
 # Sync repos on a pod
-agenticore agents --headless sync --pod agenticore-0
+agenticore agents --headless sync --k8s --pod agenticore-0
 
 # Health check a pod
-agenticore agents --headless health --pod publishing-agent-0
+agenticore agents --headless health --k8s --pod publishing-agent-0
 
-# Get local agent info
+# Get local agent info (never needs K8s)
 agenticore agents --headless local --agent finops
 ```
+
+`list` reports the backend state so a caller can tell "no pods" from "K8s is off":
+
+```json
+{
+  "k8s": { "enabled": false, "namespaces": [] },
+  "agentihub": "/home/you/dev/tcc-ecosystem/agentihub",
+  "pods": [],
+  "local_agents": [
+    { "name": "finops", "package_path": "…/agents/finops/package",
+      "description": "AWS cost analyst…", "capabilities": ["cost-analysis", "…"] }
+  ]
+}
+```
+
+Pod actions (`chat`, `job`, `sync`, `health`) exit `2` with an actionable error when K8s is off.
 
 | Flag | Type | Required | Description |
 |------|------|----------|-------------|
 | `--headless` | flag | yes | Enable headless mode |
+| `--k8s` / `--no-k8s` | flag | no | Enable / force-disable the K8s backend (default: off) |
+| `--namespace` | string | no | Comma-separated K8s namespace scope (implies `--k8s`; empty = all-namespaces) |
 | `--pod` | string | for K8S actions | Target pod name |
 | `--agent` | string | for local | Local agent name |
 | `--agentihub-dir` | string | no | Override agentihub directory path |

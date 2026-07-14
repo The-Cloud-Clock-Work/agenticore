@@ -452,7 +452,7 @@ Full reference: [Configuration docs](docs/reference/configuration.md).
 | `agenticore jobs` / `agenticore job <id>` | List / inspect jobs |
 | `agenticore cancel <id>` | Cancel a running job |
 | `agenticore profiles` | List execution profiles |
-| `agenticore agents` | Interactive TUI — K8s pods + local agent packages |
+| `agenticore agents` | Interactive TUI — local agent packages (add `--k8s` to include K8s pods) |
 | `agenticore agents --headless <action>` | Headless: `list`, `chat`, `job`, `sync`, `health`, `local` |
 | `agenticore hooks sync [--target T]` | Clone/fetch profile sources |
 | `agenticore agent --compose-up` | Bring up the local dev stack |

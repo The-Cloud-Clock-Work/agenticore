@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`agenticore agents` is local-first; Kubernetes is now opt-in.** The command previously ran
+  `kubectl get pods --all-namespaces` on every launch, which made it unusable on a machine with
+  no cluster and hard-wired K8s as *the* backend. With K8s disabled (the new default) no
+  `kubectl` process is spawned at all and no K8s chrome is rendered — `discover_pods()`
+  short-circuits before touching `subprocess`. Local AgentiHub agents are always discovered.
+  This keeps room for other backends (Fargate/ECS) to be added as peers rather than exceptions.
+
+### Added
+
+- **K8s backend toggle** — `--k8s` / `--no-k8s` and `--namespace ns-a,ns-b` on
+  `agenticore agents`; `AGENTICORE_K8S_ENABLED` / `AGENTICORE_K8S_NAMESPACES` env vars; and a
+  persisted `{"k8s": {"enabled": …, "namespaces": […]}}` block in `~/.agenticore/state.json`,
+  written by the new `k` key in the TUI. Precedence: CLI flag > env > state.json > off.
+  A namespace named *on the CLI* implies `--k8s`; one from the env or state.json does not —
+  ambient config must not resurrect K8s for an operator who never asked for it.
+- **Namespace-scoped discovery** — each configured namespace is queried separately, since
+  `kubectl` honours only the last `-n`. No namespaces configured = all-namespaces.
+- **Local agents show real descriptions and capabilities**, read best-effort from the package's
+  `command.yml` (the same manifest agentibridge reads for A2A capability routing). The TUI filter
+  now matches on name, description, *and* capability. A missing or malformed manifest degrades to
+  empty fields — authoring a package can never break discovery.
+- **A corrupt `state.json` degrades instead of crashing or misfiring.** Invalid JSON, a non-dict
+  `k8s` section, a scalar where `namespaces` should be a list, and a string-typed `"enabled":
+  "false"` are all tolerated — the last of these matters because a naive truthy-cast would read
+  the string `"false"` as `True` and silently switch Kubernetes *on*.
+- `agents_tui.py` test coverage (66 tests) — it previously had none.
+
+### Fixed
+
+- **TUI crash on `/filter`** — `_render_list` filtered local agents on `LocalAgent.description`,
+  a field the dataclass did not have, raising `AttributeError` the moment an operator typed a
+  filter while any local agent was listed. The field now exists and is populated.
+- **`--headless list` can no longer be misread.** It reports `{"k8s": {"enabled": …}}`, so an AI
+  or script can distinguish "no pods found" from "the K8s backend is off". Pod actions
+  (`chat`/`job`/`sync`/`health`) exit `2` with an actionable message instead of a confusing
+  "pod not found" when K8s is disabled.
+- **Live Chat targeted the wrong namespace** — the `kubectl exec` behind the TUI's Live Chat
+  action omitted `-n <namespace>`, so it ran against whatever namespace the current kubectl
+  context happened to point at.
+
 ## [1.4.0] - 2026-04-17
 
 ### Added

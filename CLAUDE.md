@@ -9,28 +9,14 @@ Claude Code does the heavy lifting (coding, worktrees, telemetry).
 ## Build & Development
 
 ```bash
-# Install
-pip install -e .
-
-# Start server (SSE transport)
-AGENTICORE_TRANSPORT=sse agenticore serve
-
-# Start server (stdio — for Claude Code CLI)
-python -m agenticore
-
-# Docker (full stack)
-docker compose up --build -d
-
-# Tests
-pytest tests/unit -v -m unit --cov=agenticore
-
-# Lint
-ruff check agenticore/ tests/
+pip install -e .                                   # install
+AGENTICORE_TRANSPORT=sse agenticore serve          # serve (SSE)
+python -m agenticore                               # serve (stdio — Claude Code CLI)
+docker compose up --build -d                       # full stack
+pytest tests/unit -v -m unit --cov=agenticore      # tests
+ruff check agenticore/ tests/                      # lint
 ruff format --check agenticore/ tests/
-
-# CLI
-agenticore version
-agenticore status
+agenticore version && agenticore status            # CLI
 ```
 
 ## Architecture
@@ -56,6 +42,7 @@ Request → Router → Clone repo → claude --worktree -p "task" → OTEL → P
 | `cli.py` | CLI tool |
 | `agent_mode/conversation_key.py` | 4-tier conversation resolver |
 | `agent_mode/stream_config.py` | Slash token parsing + sticky visibility |
+| `agents_tui.py` | `agenticore agents` — local agent discovery + opt-in K8s backend |
 
 ## MCP Tools
 
@@ -81,6 +68,26 @@ Paths are deterministic from `AGENTICORE_SHARED_FS_ROOT` (prod) or explicit env 
 `AGENTIHOOKS_PROFILE` → `cfg.agentihooks_profile`. Router/runner fall back to this when no profile specified.
 
 **Agent packages:** `_provision_from_agentihub()` points `package_dir` directly at `{agentihub}/agents/{name}/package/` — no copy to `/app/package/`.
+
+## `agenticore agents` — Local-First, K8s Opt-In
+
+**Local agents are always discovered. Kubernetes is one optional backend among several.** With K8s
+off (the default) **no `kubectl` is ever spawned** and no K8s chrome renders — `discover_pods()`
+short-circuits to `[]` before touching subprocess. Works with no cluster; room for Fargate/ECS later.
+
+Enable it — precedence **CLI > env > `state.json` > off**:
+- CLI: `--k8s` / `--no-k8s`, `--namespace ns-a,ns-b`
+- Env: `AGENTICORE_K8S_ENABLED`, `AGENTICORE_K8S_NAMESPACES`
+- Config: `~/.agenticore/state.json` → `{"k8s": {"enabled": bool, "namespaces": [...]}}` (`k` in the TUI)
+
+A namespace named **on the CLI** implies `--k8s`; one from the **env or state.json does not** —
+ambient config must never resurrect K8s for an operator who never asked. `--no-k8s` always wins. No
+namespaces = all-namespaces; else one `kubectl` call per namespace (only the last `-n` counts).
+
+`LocalAgent` carries `description` + `capabilities`, read best-effort from the package's `command.yml`
+(the manifest agentibridge also reads for A2A routing) — a malformed manifest degrades to empty
+fields, never breaking discovery. `--headless list` reports the backend state so callers can tell
+"no pods" from "K8s is off"; pod actions exit `2` when K8s is disabled.
 
 ## Concurrency Gate
 
@@ -134,13 +141,7 @@ This temporarily removes those servers from `.agentihooks.json`, renders, then r
 
 **Scope:** Agent mode only (completions API). Runner/job dispatch uses worktrees without `.agentihooks.json`.
 
-**Smoke test:** `tests/smoke/test_mcp_whitelist.sh [agent] [--live]`
-```
-Phase 1 (instant):  data validation — config matches, enabled/disabled correct
-Phase 2 (--live):   agent self-reports visible servers
-Phase 3 (--live):   per-call subtraction — BEFORE/AFTER ~/.claude.json data proof
-Result: 24/24 ALL PASS on anton-agent (2026-04-08)
-```
+**Smoke test:** `tests/smoke/test_mcp_whitelist.sh [agent] [--live]` — validates config data, then (with `--live`) agent-visible servers and per-call subtraction with BEFORE/AFTER `~/.claude.json` proof.
 
 ## Real-Time SSE Streaming (Agent Mode)
 
