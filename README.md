@@ -439,7 +439,35 @@ The bundled `docker-compose.yml` includes an OTEL Collector pre-wired to push tr
 | `AGENTICORE_AGENTIHOOKS_URL` | _(empty)_ | Clone ONCE to `<SHARED_FS_ROOT>/<dir-from-url>` + `uv pip install -e`. Default install is from PyPI. |
 | `AGENTICORE_AGENTIHOOKS_BUNDLE_URL` | _(empty)_ | Git URL to clone the bundle content repo (optional) |
 | `AGENTICORE_AGENTIHUB_URL` | _(empty)_ | Git URL for agentihub repo (required for agent mode) |
+| `AGENTIHUB_DIR` | _(auto)_ | Path to a **local** agentihub checkout — used by `agenticore agents` to find local agent packages. See below. |
 | `AGENTICORE_SHARED_FS_ROOT` | _(empty)_ | Base directory for all clones — `/shared` in k8s, `$HOME` locally |
+
+### Pointing at AgentiHub
+
+There are **two separate** ways agenticore reaches AgentiHub, and they use different variables. Mixing them up is the most common setup mistake:
+
+| You want | Variable | What it is |
+|---|---|---|
+| The **server/pod** to provision an agent (agent mode) | `AGENTICORE_AGENTIHUB_URL` + `AGENTIHUB_AGENT` | A **git URL** to clone, plus which agent to load |
+| The **`agenticore agents` CLI** to list local agent packages | `AGENTIHUB_DIR` | A **local directory path** already on disk |
+
+Note the asymmetry: the URL is prefixed (`AGENTICORE_AGENTIHUB_URL`) but the agent name is not (`AGENTIHUB_AGENT`). A bare `AGENTIHUB_URL` is **not** read by anything.
+
+`AGENTIHUB_DIR` points at the directory that *contains* `agents/` — not at `agents/` itself:
+
+```bash
+export AGENTIHUB_DIR=/path/to/agentihub     # contains agents/<name>/package/CLAUDE.md
+agenticore agents
+```
+
+The CLI resolves it in this order, first hit wins:
+
+1. `--agentihub-dir /path` on the command line
+2. `AGENTIHUB_DIR` environment variable
+3. `~/.agenticore/state.json` → `{"agentihub": {"path": "..."}}` — written by pressing `c` in the TUI
+4. Sibling-directory discovery — walks up looking for a neighbouring `agentihub/agents/`, so a standard ecosystem checkout works with nothing set
+
+An agent is any directory containing `agents/<name>/package/CLAUDE.md`. Its description and capabilities are read from `agents/<name>/package/command.yml`.
 
 Full reference: [Configuration docs](docs/reference/configuration.md).
 
