@@ -9,6 +9,7 @@ from agenticore.config import RuntimePaths, reset_config
 from agenticore.hooks import (
     _dir_from_url,
     _install_dir,
+    run_agentihooks_init,
     sync_agentihooks,
     sync_agentihub,
     sync_bundle,
@@ -344,3 +345,53 @@ class TestCloneOnSharedFs:
         monkeypatch.delenv("AGENTICORE_SHARED_FS_ROOT", raising=False)
         monkeypatch.delenv("AGENTICORE_CLONE_ROOT", raising=False)
         assert _clone_on_shared_fs() is False
+
+
+@pytest.mark.unit
+class TestRunAgentihooksInitSharedRoot:
+    """shared_fs_root defaults to "" (AGENTICORE_SHARED_FS_ROOT unset) for
+    every local ``agenticore serve`` run. The stale-lock cleanup in
+    run_agentihooks_init must never fall back to the operator's real
+    Path.home() in that case — it must be a no-op unless shared_fs_root is
+    explicitly configured."""
+
+    def test_unset_shared_fs_root_does_not_touch_home(self, monkeypatch, tmp_path):
+        """shared_fs_root="" must resolve to /shared, not Path.home(), so
+        stale-lock cleanup never deletes real files under the operator's
+        home directory."""
+        fake_home = tmp_path / "home"
+        state_dir = fake_home / ".agentihooks"
+        state_dir.mkdir(parents=True)
+        sync_lock = state_dir / "sync.lock"
+        sync_pid = state_dir / "sync-daemon.pid"
+        sync_lock.write_text("locked")
+        sync_pid.write_text("12345")
+        claude_json = fake_home / ".claude.json"
+        claude_json.write_text('{"mcpServers": {}}')
+
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.repos.shared_fs_root = ""
+            mock_cfg.return_value.agentihooks_profile = ""
+            with patch("agenticore.hooks.subprocess.run") as mock_run:
+                mock_run.return_value.returncode = 0
+                mock_run.return_value.stdout = ""
+                mock_run.return_value.stderr = ""
+                run_agentihooks_init()
+
+        # Real home dir files must be untouched — the fallback is /shared,
+        # not Path.home().
+        assert sync_lock.exists()
+        assert sync_pid.exists()
+        assert claude_json.read_text() == '{"mcpServers": {}}'
+
+    def test_shared_root_derivation(self):
+        """cfg.repos.shared_fs_root or "/shared" — configured value wins,
+        empty string falls back to /shared (never Path.home())."""
+        with patch("agenticore.hooks.get_config") as mock_cfg:
+            mock_cfg.return_value.repos.shared_fs_root = ""
+            assert Path(mock_cfg.return_value.repos.shared_fs_root or "/shared") == Path("/shared")
+
+            mock_cfg.return_value.repos.shared_fs_root = "/mnt/custom"
+            assert Path(mock_cfg.return_value.repos.shared_fs_root or "/shared") == Path("/mnt/custom")

@@ -13,8 +13,8 @@ set -euo pipefail
 #   NAMESPACE=anton-prod ./test_mcp_whitelist.sh
 
 NAMESPACE="${NAMESPACE:-anton-prod}"
-KUBECONFIG="${KUBECONFIG:-/home/iamroot/.kube/config-k3s}"
-KUBECTL="${KUBECTL:-/home/iamroot/bin/kubectl}"
+KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+KUBECTL="${KUBECTL:-kubectl}"
 TARGET="${1:-anton-agent}"
 LIVE="${2:-}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"

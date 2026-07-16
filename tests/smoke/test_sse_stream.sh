@@ -18,7 +18,7 @@
 #     overrides — the resolved path differs by install mode)
 set -euo pipefail
 
-KCTL="kubectl --kubeconfig ${KUBECONFIG:-/home/iamroot/.kube/config-k3s}"
+KCTL="${KUBECTL:-kubectl} --kubeconfig ${KUBECONFIG:-$HOME/.kube/config}"
 NS="${NS:-anton-prod}"
 AGENT="${1:-brain-keeper}"
 PORT="${PORT:-8200}"

@@ -13,7 +13,7 @@
 set -euo pipefail
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-KCTL="kubectl --kubeconfig ${KUBECONFIG:-/home/iamroot/.kube/config-k3s}"
+KCTL="${KUBECTL:-kubectl} --kubeconfig ${KUBECONFIG:-$HOME/.kube/config}"
 NS="${NS:-anton-prod}"
 AGENT="${1:-streaming-test}"
 PORT="${PORT:-8200}"

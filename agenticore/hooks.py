@@ -376,15 +376,17 @@ def run_agentihooks_init(
     """
     del hooks_path  # Accepted for backwards compat; install is handled in sync_agentihooks.
     t0 = time.monotonic()
+    cfg = get_config()
+    shared_root = Path(cfg.repos.shared_fs_root or "/shared")
 
-    # Clear stale sync locks from previous pod incarnations. /shared is a
+    # Clear stale sync locks from previous pod incarnations. shared_root is a
     # PVC so sync.lock + sync-daemon.pid survive pod restarts. If a prior
     # pod crashed or was force-killed mid-init, the locks stay on disk and
     # new agentihooks invocations deadlock waiting for a process that will
     # never release them. PID in sync-daemon.pid is from the dead pod and
     # references nothing in the new pod's namespace.
     try:
-        state_dir = Path("/shared/.agentihooks")
+        state_dir = shared_root / ".agentihooks"
         if state_dir.exists():
             for stale in ("sync.lock", "sync-daemon.pid"):
                 p = state_dir / stale
@@ -442,10 +444,9 @@ def run_agentihooks_init(
     # will start with no MCP tools. Fail loudly instead of limping on.
     if bundle_path and bundle_path.exists():
         try:
-            from pathlib import Path as _P
             import json as _json
 
-            claude_json = _P("/shared/.claude.json")
+            claude_json = shared_root / ".claude.json"
             if claude_json.exists():
                 data = _json.loads(claude_json.read_text())
                 mcp_count = len(data.get("mcpServers", {}))

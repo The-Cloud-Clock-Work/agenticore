@@ -73,6 +73,7 @@ def encode_cwd_path(cwd: str) -> str:
     """Convert an absolute path to Claude project dir encoding.
 
     Example: /home/user/dev/proj  ->  -home-user-dev-proj
+    Example (macOS): /Users/user/dev/proj  ->  -Users-user-dev-proj
     """
     return cwd.replace("/", "-")
 
