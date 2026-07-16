@@ -9,7 +9,9 @@ services:
       # destination derived from AGENTICORE_AGENTIHOOKS_URL. The runtime sees
       # an existing dir without `.git`, skips cloning, and runs editable
       # install in place. Edits land live on the next Python import.
-      - /home/iamroot/dev/agentihooks:/shared/agentihooks
+      # AGENTIHOOKS_LOCAL_PATH defaults to a sibling checkout so this works
+      # for any operator's clone layout, not just one hardcoded machine.
+      - ${AGENTIHOOKS_LOCAL_PATH:-../agentihooks}:/shared/agentihooks
     env_file:
       - .env
     environment:

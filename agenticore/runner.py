@@ -318,7 +318,7 @@ def _ensure_writable_config_dir(job_id: str, existing_config_dir: Optional[Path]
     if cfg.repos.shared_fs_root:
         job_dir = Path(cfg.repos.shared_fs_root) / "jobs" / job_id
     else:
-        job_dir = Path("/tmp") / "agenticore-jobs" / job_id
+        job_dir = Path(tempfile.gettempdir()) / "agenticore-jobs" / job_id
 
     if job_dir.exists():
         return job_dir  # materialize_profile already created it (merge path)

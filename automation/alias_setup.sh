@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # =============================================================================
 # agenticore AI Services - Aliases Installer
 # =============================================================================
@@ -6,9 +6,23 @@
 #
 # Installs shell aliases for the agenticore CLI.
 # =============================================================================
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BASH_PROFILE="$HOME/.bashrc"
+
+# Target the profile the shell actually sources on login, which differs by
+# platform/shell: macOS Terminal.app spawns login shells (zsh default since
+# Catalina, ~/.zshrc; bash falls back to ~/.bash_profile), Linux spawns
+# interactive non-login shells (~/.bashrc).
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    if [[ "${SHELL:-}" == */zsh ]]; then
+        BASH_PROFILE="$HOME/.zshrc"
+    else
+        BASH_PROFILE="$HOME/.bash_profile"
+    fi
+else
+    BASH_PROFILE="$HOME/.bashrc"
+fi
 
 # Use single quotes for the block so variables are NOT expanded at install time
 # shellcheck disable=SC2016
@@ -69,14 +83,15 @@ agenticore_help() {
 if grep -q "# agenticore AI Services Aliases" "$BASH_PROFILE" 2>/dev/null; then
     echo "agenticore aliases found in $BASH_PROFILE"
     echo ""
-    read -p "Reinstall/update aliases? [y/N] " -n 1 -r
+    read -p "Reinstall/update aliases? [y/N] " -n 1 -r || true
     echo ""
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "Cancelled."
         exit 0
     fi
-    # Remove existing block
-    sed -i '/# agenticore AI Services Aliases/,/# End agenticore Aliases/d' "$BASH_PROFILE"
+    # Remove existing block. GNU sed accepts a bare -i; BSD sed (macOS)
+    # requires a backup-suffix argument, so pass one and delete it after.
+    sed -i.bak '/# agenticore AI Services Aliases/,/# End agenticore Aliases/d' "$BASH_PROFILE" && rm -f "$BASH_PROFILE.bak"
     echo "Removed existing aliases."
 fi
 
