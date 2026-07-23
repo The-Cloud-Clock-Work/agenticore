@@ -186,7 +186,7 @@ class TestHandleActivity:
             {
                 "type": "message",
                 "text": "hi",
-                "serviceUrl": "https://s/",
+                "serviceUrl": "https://smba.trafficmanager.net/amer/",
                 "conversation": {"id": "c"},
                 "from": {"aadObjectId": "intruder"},
             }
@@ -202,7 +202,7 @@ class TestHandleActivity:
             {
                 "type": "message",
                 "text": "/clear",
-                "serviceUrl": "https://s/",
+                "serviceUrl": "https://smba.trafficmanager.net/amer/",
                 "conversation": {"id": "c"},
                 "from": {"aadObjectId": "u"},
             }
@@ -233,7 +233,7 @@ class TestHandleActivity:
             {
                 "type": "message",
                 "text": "do a thing",
-                "serviceUrl": "https://s/",
+                "serviceUrl": "https://smba.trafficmanager.net/amer/",
                 "conversation": {"id": "c"},
                 "from": {"aadObjectId": "u"},
             }
@@ -256,10 +256,123 @@ class TestHandleActivity:
             {
                 "type": "message",
                 "text": "/hide-tools",
-                "serviceUrl": "https://s/",
+                "serviceUrl": "https://smba.trafficmanager.net/amer/",
                 "conversation": {"id": "c"},
                 "from": {"aadObjectId": "u"},
             }
         )
         assert len(fake.sent) == 1
         assert fake.sent[0].startswith("Visibility updated:")
+
+    @pytest.mark.asyncio
+    async def test_untrusted_service_url_refused(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_OWNER_AAD_ID", raising=False)
+        monkeypatch.delenv("TEAMS_SKIP_JWT_VALIDATION", raising=False)
+        fake = FakeClient()
+        monkeypatch.setattr(tc, "_get_client", lambda: fake)
+        await tc.handle_activity(
+            {
+                "type": "message",
+                "text": "hi",
+                "serviceUrl": "https://attacker.example/",
+                "conversation": {"id": "c"},
+                "from": {"aadObjectId": "u"},
+            }
+        )
+        # No token-bearing send may go to an untrusted host.
+        assert fake.sent == []
+        assert fake.typing == 0
+
+    @pytest.mark.asyncio
+    async def test_non_personal_conversation_refused(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_OWNER_AAD_ID", raising=False)
+        fake = FakeClient()
+        monkeypatch.setattr(tc, "_get_client", lambda: fake)
+        await tc.handle_activity(
+            {
+                "type": "message",
+                "text": "hi",
+                "serviceUrl": "https://smba.trafficmanager.net/amer/",
+                "conversation": {"id": "c", "conversationType": "channel"},
+                "from": {"aadObjectId": "u"},
+            }
+        )
+        assert fake.sent == []
+
+    @pytest.mark.asyncio
+    async def test_mention_markup_stripped(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_OWNER_AAD_ID", raising=False)
+        fake = FakeClient()
+        monkeypatch.setattr(tc, "_get_client", lambda: fake)
+        monkeypatch.setattr("agenticore.capabilities.render_capabilities_prompt", lambda: "")
+        monkeypatch.setattr(
+            "agenticore.agent_mode.stream_config.get_for_request",
+            lambda agent_id, text: (text, {}, []),
+        )
+        captured = {}
+
+        async def fake_call(messages, conv_id, *, sink, stream_cfg):
+            captured["messages"] = messages
+            return "ok"
+
+        monkeypatch.setattr(tc, "_call_completions", fake_call)
+        await tc.handle_activity(
+            {
+                "type": "message",
+                "text": "<at>Bot</at> summarize logs",
+                "serviceUrl": "https://smba.trafficmanager.net/amer/",
+                "conversation": {"id": "c", "conversationType": "personal"},
+                "from": {"aadObjectId": "u"},
+            }
+        )
+        assert captured["messages"][-1] == {"role": "user", "content": "summarize logs"}
+
+
+class TestTrustedServiceUrl:
+    def test_teams_hosts_trusted(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_SKIP_JWT_VALIDATION", raising=False)
+        assert tc._is_trusted_service_url("https://smba.trafficmanager.net/amer/") is True
+        assert tc._is_trusted_service_url("https://x.botframework.com/") is True
+
+    def test_attacker_host_untrusted(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_SKIP_JWT_VALIDATION", raising=False)
+        assert tc._is_trusted_service_url("https://attacker.example/") is False
+        assert tc._is_trusted_service_url("") is False
+        # localhost only trusted in dev (JWT validation disabled)
+        assert tc._is_trusted_service_url("http://localhost:3978/") is False
+        monkeypatch.setenv("TEAMS_SKIP_JWT_VALIDATION", "1")
+        assert tc._is_trusted_service_url("http://localhost:3978/") is True
+
+
+class TestAuthNeverRaises:
+    @pytest.mark.asyncio
+    async def test_jwks_failure_returns_false(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_SKIP_JWT_VALIDATION", raising=False)
+        monkeypatch.setenv("TEAMS_APP_ID", "app")
+
+        async def boom():
+            raise RuntimeError("metadata endpoint down")
+
+        monkeypatch.setattr(tc, "_get_jwks_client", boom)
+        ok = await tc.authenticate_request("Bearer abc.def.ghi", {"serviceUrl": "x"})
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_missing_header_returns_false(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_SKIP_JWT_VALIDATION", raising=False)
+        assert await tc.authenticate_request("", {}) is False
+        assert await tc.authenticate_request("Basic xyz", {}) is False
+
+
+class TestSinkErrorGuard:
+    @pytest.mark.asyncio
+    async def test_on_error_fires_once(self, sink):
+        await sink.on_error("boom")
+        await sink.on_error("boom again")
+        assert sink._client.sent == ["**Error:** boom"]
+
+    @pytest.mark.asyncio
+    async def test_on_error_suppressed_after_final(self, sink):
+        await sink.on_final("the answer")
+        await sink.on_error("late error")
+        assert sink._client.sent == ["the answer"]
