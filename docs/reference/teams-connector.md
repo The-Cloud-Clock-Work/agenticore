@@ -31,6 +31,8 @@ TEAMS_OWNER_AAD_ID=<Entra object id>   # restrict to one user (owner filter);
                                        # unset = any authenticated user
 TEAMS_TENANT_ID=<tenant id>            # single-tenant bots; omit for multi-tenant
 TEAMS_SYSTEM_PROMPT=<custom system prompt>
+TEAMS_FORMATTING_HINT=<override>       # Teams-surface formatting guidance added
+                                       # to the system prompt; set empty to disable
 TEAMS_MAX_MESSAGES=20                  # conversation history depth
 TEAMS_CONVERSATION_TTL=86400           # history TTL in seconds
 TEAMS_SKIP_JWT_VALIDATION=1            # LOCAL DEV ONLY — skip inbound JWT check
@@ -41,12 +43,18 @@ When `TEAMS_APP_ID` + `TEAMS_APP_PASSWORD` are set, the ASGI app registers
 endpoint at `https://<host>/api/messages`.
 
 Progress visibility (Reasoning / Tool call / Tool result messages) is controlled
-by the per-agent sticky `stream_config`, scoped to a **Teams-specific agent id**
-(`{AGENTIHUB_AGENT}:teams`) so Teams toggles are independent of the SSE and
-Telegram transports. Send `/show-thinking`, `/hide-tools`, `/show-all`, etc. to
-the bot to toggle for Teams only. See
+by the sticky `stream_config`, scoped **per conversation**
+(`{AGENTIHUB_AGENT}:teams:{conversation_id}`) so a `/hide-tools` in one chat is
+independent of the SSE/Telegram transports **and** of every other Teams chat of
+the same bot. Send `/show-thinking`, `/hide-tools`, `/show-all`, etc. to the bot
+to toggle for that conversation only. See
 [SSE streaming](sse-streaming.md#slash-tokens-visibility-toggles) for the full
 token list.
+
+A Teams-surface formatting hint is appended to the system prompt by default,
+steering the model away from markdown that Teams mobile can't render (headings,
+tables, list markers). Override it with `TEAMS_FORMATTING_HINT`, or set that env
+var empty to disable it.
 
 ## Why titled messages, not a reasoning panel
 
@@ -106,6 +114,30 @@ listener). The handler validates the JWT, then dispatches to `handle_activity`.
 - Final answer and intermediate events are sent as normal messages.
 - **Not yet:** native Teams token streaming (the `streaminfo` protocol),
   channels/group chats, Adaptive Card tool UI. These are planned v2.
+
+## Concurrency
+
+Turns are **serialized per conversation** by an in-process lock — a second
+message that arrives while a turn is running gets a short "still working" reply
+rather than starting a colliding turn (concurrent turns in one conversation
+would share a Claude `--resume` session and Redis event stream).
+
+Agent-mode conversation turns intentionally **do not** acquire the
+`MAX_PARALLEL_JOBS` semaphore. That gate governs worktree/dispatch *jobs*;
+interactive conversation turns are bounded per conversation as above, matching
+the Telegram connector and the agent-mode REST path.
+
+## Limitations
+
+- **Commercial Azure cloud only.** Sovereign clouds (GCC High / DoD) use a
+  different login authority (`login.microsoftonline.us`), Bot Connector resource
+  (`api.botframework.us`), and service hosts (`botframework.azure.us`); the token
+  endpoint, JWT issuer, and `serviceUrl` allowlist here accept none of them.
+  Gov-cloud support is out of scope.
+- **Teams mobile markdown.** Teams mobile does not render markdown headings,
+  tables, or list markers. The connector appends a formatting hint to the system
+  prompt (see `TEAMS_FORMATTING_HINT`) to steer the model toward paragraphs,
+  bold, and fenced code — it does not post-process the model's output.
 
 ## Out of scope (operator-owned)
 
