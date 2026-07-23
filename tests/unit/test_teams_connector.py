@@ -264,6 +264,69 @@ class TestHandleActivity:
         assert captured["messages"][-1] == {"role": "user", "content": "do a thing"}
 
     @pytest.mark.asyncio
+    async def test_stream_config_scoped_per_conversation(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_OWNER_AAD_ID", raising=False)
+        monkeypatch.setenv("AGENTIHUB_AGENT", "publisher")
+        fake = FakeClient()
+        monkeypatch.setattr(tc, "_get_client", lambda: fake)
+        monkeypatch.setattr("agenticore.capabilities.render_capabilities_prompt", lambda: "")
+        seen = {}
+
+        def fake_gfr(agent_id, text):
+            seen["agent_id"] = agent_id
+            return (text, {}, [])
+
+        monkeypatch.setattr("agenticore.agent_mode.stream_config.get_for_request", fake_gfr)
+
+        async def fake_call(messages, conv_id, *, sink, stream_cfg):
+            return "ok"
+
+        monkeypatch.setattr(tc, "_call_completions", fake_call)
+        await tc.handle_activity(
+            {
+                "type": "message",
+                "text": "hi",
+                "serviceUrl": "https://smba.trafficmanager.net/amer/",
+                "conversation": {"id": "conv-XYZ", "conversationType": "personal"},
+                "from": {"aadObjectId": "u"},
+            }
+        )
+        # Visibility key carries the conversation id → no cross-chat bleed.
+        assert seen["agent_id"] == "publisher:teams:conv-XYZ"
+
+    @pytest.mark.asyncio
+    async def test_formatting_hint_injected_into_system_prompt(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_OWNER_AAD_ID", raising=False)
+        monkeypatch.delenv("TEAMS_SYSTEM_PROMPT", raising=False)
+        monkeypatch.delenv("TEAMS_FORMATTING_HINT", raising=False)
+        fake = FakeClient()
+        monkeypatch.setattr(tc, "_get_client", lambda: fake)
+        monkeypatch.setattr("agenticore.capabilities.render_capabilities_prompt", lambda: "")
+        monkeypatch.setattr(
+            "agenticore.agent_mode.stream_config.get_for_request",
+            lambda a, t: (t, {}, []),
+        )
+        captured = {}
+
+        async def fake_call(messages, conv_id, *, sink, stream_cfg):
+            captured["messages"] = messages
+            return "ok"
+
+        monkeypatch.setattr(tc, "_call_completions", fake_call)
+        await tc.handle_activity(
+            {
+                "type": "message",
+                "text": "hi",
+                "serviceUrl": "https://smba.trafficmanager.net/amer/",
+                "conversation": {"id": "c", "conversationType": "personal"},
+                "from": {"aadObjectId": "u"},
+            }
+        )
+        system_msg = captured["messages"][0]
+        assert system_msg["role"] == "system"
+        assert "Teams mobile does not render" in system_msg["content"]
+
+    @pytest.mark.asyncio
     async def test_toggle_only_message_acks(self, monkeypatch):
         monkeypatch.delenv("TEAMS_OWNER_AAD_ID", raising=False)
         fake = FakeClient()

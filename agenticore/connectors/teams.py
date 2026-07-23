@@ -17,10 +17,18 @@ Optional:
                          token. Multi-tenant bots omit it (defaults to
                          botframework.com).
   TEAMS_SYSTEM_PROMPT  — system prompt prepended to every conversation.
+  TEAMS_FORMATTING_HINT — override the default Teams-surface formatting guidance
+                         appended to the system prompt; set empty to disable.
   TEAMS_MAX_MESSAGES   — conversation history depth (default 20).
   TEAMS_CONVERSATION_TTL — history TTL in seconds (default 86400).
   TEAMS_SKIP_JWT_VALIDATION — "1"/"true" to skip inbound JWT validation
                          (LOCAL DEV ONLY — the endpoint is public in prod).
+
+Scope: **commercial Azure cloud only.** Sovereign clouds (GCC High / DoD) use a
+different login authority (login.microsoftonline.us), Bot Connector resource
+(api.botframework.us) and service hosts (botframework.azure.us) — none of which
+this module's token endpoint, issuer, or serviceUrl allowlist accept. Gov-cloud
+support is out of scope.
 
 Progress visibility (Reasoning / Tool call / Tool result messages) is controlled
 by the agent-scoped ``stream_config`` hash, under a Teams-specific agent id so
@@ -81,8 +89,29 @@ def is_enabled() -> bool:
 
 
 def _agent_id() -> str:
-    """Teams-scoped stream_config agent id — independent of other transports."""
+    """Base Teams agent id (for display) — independent of other transports."""
     return f"{os.environ.get('AGENTIHUB_AGENT', 'default')}:teams"
+
+
+def _stream_agent_id(conv_id: str) -> str:
+    """stream_config key scoped PER CONVERSATION, so a `/hide-tools` in one
+    Teams chat does not change visibility for another chat of the same bot."""
+    return f"{_agent_id()}:{conv_id}"
+
+
+# Teams mobile does not render markdown headings, tables, or list markers; steer
+# the model toward formatting that survives the surface. Override with the
+# TEAMS_FORMATTING_HINT env var, or set it empty to disable.
+_DEFAULT_TEAMS_FORMATTING_HINT = (
+    "Formatting: you are replying in a Microsoft Teams chat. Teams mobile does not "
+    "render markdown headings, tables, or bullet/numbered list markers. Write short "
+    "paragraphs, use **bold** for emphasis and fenced code blocks for code or "
+    "tabular data, and avoid #/## headings, pipe tables, and -/1. list markers."
+)
+
+
+def _formatting_hint() -> str:
+    return os.environ.get("TEAMS_FORMATTING_HINT", _DEFAULT_TEAMS_FORMATTING_HINT)
 
 
 def _is_trusted_service_url(url: str) -> bool:
@@ -511,7 +540,14 @@ async def _call_completions(
     sink: ProgressSink,
     stream_cfg: dict,
 ) -> str:
-    """Run the agent in-process, dispatching progress events to ``sink``."""
+    """Run the agent in-process, dispatching progress events to ``sink``.
+
+    By design this does NOT acquire the ``MAX_PARALLEL_JOBS`` semaphore. That
+    gate governs worktree/dispatch *jobs*; agent-mode conversation turns are
+    interactive and are instead bounded per conversation by ``_conv_locks`` in
+    ``handle_activity``. This mirrors the Telegram connector and the agent-mode
+    REST path — not an oversight.
+    """
     from agenticore.agent_mode.agent import AgentExecutor
     from agenticore.agent_mode.openai_compat import flatten_messages
 
@@ -641,10 +677,11 @@ async def handle_activity(activity: dict) -> None:
         )
         return
 
-    # Resolve stream visibility (handles /show-thinking etc. + stickiness).
+    # Resolve stream visibility (handles /show-thinking etc. + stickiness),
+    # scoped per conversation so toggles don't bleed across chats.
     from agenticore.agent_mode.stream_config import get_for_request
 
-    clean_text, stream_cfg, tokens = get_for_request(_agent_id(), text)
+    clean_text, stream_cfg, tokens = get_for_request(_stream_agent_id(conv_id), text)
 
     # Toggle-only message (slash tokens, nothing left to ask) → ack + return.
     if tokens and not clean_text.strip():
@@ -666,7 +703,7 @@ async def handle_activity(activity: dict) -> None:
 
         system_prompt = os.environ.get("TEAMS_SYSTEM_PROMPT", "")
         caps = render_capabilities_prompt()
-        full_system = "\n\n".join(filter(None, [system_prompt, caps]))
+        full_system = "\n\n".join(filter(None, [system_prompt, _formatting_hint(), caps]))
         api_messages = [{"role": "system", "content": full_system}] + messages if full_system else messages
 
         # Keep the typing indicator alive for the whole (possibly long) turn.

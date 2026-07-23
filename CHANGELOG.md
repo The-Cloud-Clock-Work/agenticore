@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a turn (it otherwise fades in ~3s). A turn that produces no final answer — or whose final send
   fails — now posts a guaranteed fallback so the user is never left with silence (delivery is tracked
   by confirmed send, not by attempt).
+- **Teams visibility flags are now per-conversation** (`{AGENTIHUB_AGENT}:teams:{conversation_id}`),
+  so a `/hide-tools` in one chat no longer bleeds into another chat of the same bot. A Teams-surface
+  formatting hint is appended to the system prompt (steering away from headings/tables/lists that
+  Teams mobile can't render), overridable via `TEAMS_FORMATTING_HINT`. Documented that agent-mode
+  conversation turns intentionally bypass the `MAX_PARALLEL_JOBS` job gate (bounded per conversation
+  instead), and that the connector is commercial-Azure-cloud only (no GCC High / DoD).
 
 ### Security
 
