@@ -21,6 +21,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and no `botbuilder` SDK. v1 is 1:1 DMs, owner-filtered on `from.aadObjectId`; native token
   streaming (the `streaminfo` protocol) is planned v2. See `docs/reference/teams-connector.md`.
 
+### Fixed
+
+- **Stray error message on a successful retry** (all connectors). `AgentExecutor._run_subprocess`
+  dispatched the terminal `on_error` on every attempt, so a retryable failure on an early attempt
+  posted a durable "error" to the connector chat immediately before the retry's `on_final` landed.
+  The terminal `on_error` is now withheld when `execute()` will retry the attempt
+  (`_terminal_error_suppressed`), so a retried-then-successful turn shows only the answer.
+
+### Security
+
+- **Teams connector hardening.** The outbound Bot Framework bearer token is now sent only to
+  allowlisted service hosts (`*.botframework.com` / `*.trafficmanager.net` / `*.skype.com`),
+  closing a token-exfiltration/SSRF vector via a forged `serviceUrl`; `authenticate_request`
+  no longer raises on a JWKS-bootstrap failure (clean 401, not a 500 that downs the connector);
+  channel/group conversations are refused (1:1-only, so reasoning/tool output can't leak); the
+  public `/api/messages` body is bounded (256 KB) before parsing; and `<at>…</at>` mention markup
+  is stripped from inbound text.
+- **PyJWT bumped to `>=2.13.0`** (from `>=2.8` / pinned `2.11.0`) to fix
+  [CVE-2026-48524](https://github.com/advisories/GHSA-fhv5-28vv-h8m8) — `PyJWKClient` made
+  unbounded JWKS refetches on attacker-controlled unknown `kid` values, a DoS reachable on the
+  public Teams webhook.
+
 ## [1.8.0] - 2026-07-14
 
 ### Changed
