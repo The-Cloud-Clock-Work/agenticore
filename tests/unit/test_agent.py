@@ -11,12 +11,51 @@ from agenticore.agent_mode.agent import (
     AgentExecutor,
     _active_profile_claude,
     _load_system_prompt,
+    _terminal_error_suppressed,
     build_claude_cmd,
     digest_claude_output,
     reset_profile_claude_cache,
     reset_system_prompt_cache,
 )
 from agenticore.config import reset_config
+
+
+@pytest.mark.unit
+class TestTerminalErrorSuppressed:
+    """The terminal on_error must be withheld only when execute() will retry."""
+
+    def _res(self, msg="boom"):
+        return {"result": msg, "_stderr": ""}
+
+    def test_last_attempt_never_suppressed(self):
+        # attempt == max-1 → terminal, must surface regardless of retryability
+        with patch(
+            "agenticore.agent_mode.session_manager.detect_retryable_error",
+            return_value=object(),
+        ):
+            assert _terminal_error_suppressed(self._res(), attempt=2, max_attempts=3) is False
+
+    def test_non_retryable_not_suppressed(self):
+        with patch(
+            "agenticore.agent_mode.session_manager.detect_retryable_error",
+            return_value=None,
+        ):
+            assert _terminal_error_suppressed(self._res(), attempt=0, max_attempts=3) is False
+
+    def test_retryable_before_last_is_suppressed(self):
+        with patch(
+            "agenticore.agent_mode.session_manager.detect_retryable_error",
+            return_value=object(),
+        ):
+            assert _terminal_error_suppressed(self._res(), attempt=0, max_attempts=3) is True
+            assert _terminal_error_suppressed(self._res(), attempt=1, max_attempts=3) is True
+
+    def test_single_attempt_config_never_suppresses(self):
+        with patch(
+            "agenticore.agent_mode.session_manager.detect_retryable_error",
+            return_value=object(),
+        ):
+            assert _terminal_error_suppressed(self._res(), attempt=0, max_attempts=1) is False
 
 
 @pytest.fixture(autouse=True)

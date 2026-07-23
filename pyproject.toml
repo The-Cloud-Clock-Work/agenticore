@@ -30,7 +30,7 @@ dependencies = [
     "httpx>=0.25",
     "pyyaml>=6.0",
     "langfuse>=2.0,<3",
-    "PyJWT[crypto]>=2.8",
+    "PyJWT[crypto]>=2.13.0",  # >=2.13.0 fixes CVE-2026-48524 (PyJWKClient JWKS-refetch DoS)
 ]
 
 [project.urls]

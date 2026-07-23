@@ -321,6 +321,24 @@ def digest_claude_output(raw_output: str) -> dict:
     return result
 
 
+def _terminal_error_suppressed(result: dict, attempt: int, max_attempts: int) -> bool:
+    """True when the terminal ``on_error`` should be withheld because
+    ``execute()`` is about to retry this attempt.
+
+    Mirrors the retry condition in ``execute()``: a retryable error on any
+    attempt before the last is followed by another subprocess run, so firing
+    ``on_error`` now would post a durable "error" to a connector (Telegram,
+    Teams) immediately before the retry's ``on_final`` lands — a stray error
+    message on a turn that actually succeeded. On the final attempt, or for a
+    non-retryable error, the error is terminal and must be surfaced.
+    """
+    if attempt >= max_attempts - 1:
+        return False
+    from agenticore.agent_mode.session_manager import detect_retryable_error
+
+    return bool(detect_retryable_error(result.get("result", ""), result.get("_stderr", "")))
+
+
 class AgentExecutor:
     """Executes agent requests by spawning Claude subprocess."""
 
@@ -441,6 +459,8 @@ class AgentExecutor:
                     sink=sink,
                     correlation_id=external_uuid,
                     stream_cfg=stream_cfg,
+                    attempt=attempt,
+                    max_attempts=am.max_retry_attempts,
                 )
 
                 # After first call for persistent session: capture real Claude session ID
@@ -514,6 +534,8 @@ class AgentExecutor:
         sink: Optional[object] = None,
         correlation_id: str = "",
         stream_cfg: Optional[dict] = None,
+        attempt: int = 0,
+        max_attempts: int = 1,
     ) -> dict:
         """Run the Claude subprocess and parse output.
 
@@ -622,7 +644,11 @@ class AgentExecutor:
         if guarded_sink is not None:
             try:
                 if result["is_error"]:
-                    await guarded_sink.on_error(result.get("result") or "agent error", None)
+                    # Withhold on_error when execute() will retry this attempt,
+                    # so a retried-then-successful turn doesn't leave a stray
+                    # error message in the connector's chat.
+                    if not _terminal_error_suppressed(result, attempt, max_attempts):
+                        await guarded_sink.on_error(result.get("result") or "agent error", None)
                 elif result.get("result"):
                     await guarded_sink.on_final(result["result"])
                 if result.get("usage"):
