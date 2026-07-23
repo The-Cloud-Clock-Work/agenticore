@@ -1107,11 +1107,19 @@ def _build_rest_app():
         async def post_teams_messages(request: Request):
             auth_header = request.headers.get("authorization", "")
             # Bound the body BEFORE parsing — this endpoint is public and
-            # unauthenticated until the JWT check below, so cap memory first.
+            # unauthenticated until the JWT check below, so cap memory AND wall
+            # time first (a slow-drip body under the size cap must not pin a
+            # connection indefinitely).
             _TEAMS_MAX_BODY = 262144  # 256 KB — Teams activities are small
+            _TEAMS_READ_DEADLINE_S = 10.0
+            import time as _time
+
+            _read_start = _time.monotonic()
             chunks: list[bytes] = []
             total = 0
             async for chunk in request.stream():
+                if _time.monotonic() - _read_start > _TEAMS_READ_DEADLINE_S:
+                    return JSONResponse({"error": "request timeout"}, status_code=408)
                 total += len(chunk)
                 if total > _TEAMS_MAX_BODY:
                     return JSONResponse({"error": "payload too large"}, status_code=413)

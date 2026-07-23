@@ -55,17 +55,22 @@ _BF_TOKEN_SCOPE = "https://api.botframework.com/.default"
 _BF_ISSUER = "https://api.botframework.com"
 _BF_OPENID_METADATA = "https://login.botframework.com/v1/.well-known/openidconfiguration"
 
-# The outbound bearer token is only ever sent to these Bot Framework host
-# suffixes. A forged activity with an attacker-controlled serviceUrl therefore
-# cannot exfiltrate the bot's token to an arbitrary host (SSRF/token-theft).
-_TRUSTED_SERVICE_HOST_SUFFIXES = (".botframework.com", ".trafficmanager.net", ".skype.com")
+# The outbound bearer token is only ever sent to these Bot Framework hosts, so
+# a forged activity with an attacker-controlled serviceUrl cannot exfiltrate it
+# (SSRF/token-theft). NOTE: the whole `.trafficmanager.net` zone is NOT trusted
+# — any Azure customer can register a name there — only the exact Teams service
+# host. `.botframework.com` is Microsoft-owned (subdomains not customer-issuable).
+_TRUSTED_SERVICE_HOSTS = frozenset({"smba.trafficmanager.net"})
+_TRUSTED_SERVICE_HOST_SUFFIXES = (".botframework.com",)
 
 # Teams delivers @-mentions with literal <at>Bot Name</at> markup in the text;
 # strip it before the prompt reaches the model / conversation history.
 _MENTION_RE = re.compile(r"<at>.*?</at>", re.IGNORECASE | re.DOTALL)
 
-# Teams message body cap is generous (~28KB); chunk well under it.
-_MAX_TEAMS_CHARS = 15000
+# Teams rejects a POST whose whole body exceeds ~28 KB (413 MessageSizeTooBig).
+# Budget outbound message text by UTF-8 bytes, well under that, leaving room for
+# the JSON envelope (from/recipient/conversation objects + escaping).
+_MAX_TEAMS_BYTES = 18000
 # Coalesce narration/thinking deltas: flush a buffered block once it grows past
 # this, so a very long block becomes a few messages rather than one giant one.
 _FLUSH_CHARS = 3500
@@ -89,12 +94,53 @@ def _is_trusted_service_url(url: str) -> bool:
         return False
     if not host:
         return False
+    if host in _TRUSTED_SERVICE_HOSTS:
+        return True
     if any(host.endswith(suffix) for suffix in _TRUSTED_SERVICE_HOST_SUFFIXES):
         return True
     # The local emulator (http://localhost:PORT) is only trusted in dev, i.e.
     # when inbound JWT validation is explicitly disabled.
     dev = os.environ.get("TEAMS_SKIP_JWT_VALIDATION", "").lower() in ("1", "true", "yes")
     return dev and host in ("localhost", "127.0.0.1")
+
+
+def _code_fence(text: str) -> str:
+    """A backtick fence longer than any backtick run inside ``text`` (min 3), so
+    embedding untrusted content in a fenced block can't be broken out of."""
+    longest = cur = 0
+    for ch in text:
+        if ch == "`":
+            cur += 1
+            longest = max(longest, cur)
+        else:
+            cur = 0
+    return "`" * max(3, longest + 1)
+
+
+def _split_for_teams(text: str, max_bytes: int = _MAX_TEAMS_BYTES) -> list[str]:
+    """Split ``text`` into chunks each within ``max_bytes`` UTF-8 bytes,
+    preferring a newline boundary so markdown spans aren't cut mid-token."""
+    out: list[str] = []
+    s = text
+    while s:
+        if len(s.encode("utf-8")) <= max_bytes:
+            out.append(s)
+            break
+        # Largest char prefix that fits the byte budget (binary search).
+        lo, hi = 1, len(s)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if len(s[:mid].encode("utf-8")) <= max_bytes:
+                lo = mid
+            else:
+                hi = mid - 1
+        cut = lo
+        nl = s.rfind("\n", int(cut * 0.7), cut)
+        if nl > 0:
+            cut = nl + 1
+        out.append(s[:cut])
+        s = s[cut:]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -312,11 +358,11 @@ class TeamsClient:
             return None
 
     async def send_message(self, ref: "ConversationRef", text: str) -> None:
-        """Send one or more message activities, chunked at the Teams length cap."""
+        """Send one or more message activities, chunked by UTF-8 byte budget on
+        newline boundaries so no chunk trips Teams' ~28 KB payload cap."""
         if not text:
             return
-        for i in range(0, len(text), _MAX_TEAMS_CHARS):
-            chunk = text[i : i + _MAX_TEAMS_CHARS]
+        for chunk in _split_for_teams(text):
             await self._post_activity(ref, {"type": "message", "text": chunk, "textFormat": "markdown"})
 
     async def send_typing(self, ref: "ConversationRef") -> None:
@@ -364,15 +410,22 @@ class TeamsProgressSink(ProgressSink):
         self._pending_buf: str = ""
         self._final_sent = False
         self._error_sent = False
+        # Track actual DELIVERY (not just attempt) so handle_activity can post a
+        # fallback when the sink's own send failed or the turn produced no final.
+        self.final_delivered = False
+        self.error_delivered = False
         self.final_text: str = ""
 
     # -- internal ------------------------------------------------------------
 
-    async def _post(self, text: str) -> None:
+    async def _post(self, text: str) -> bool:
+        """Send one message; return True only on confirmed delivery."""
         try:
             await self._client.send_message(self._ref, text)
+            return True
         except Exception:
             logger.exception("teams message send failed")
+            return False
 
     async def _flush_pending(self) -> None:
         buf = self._pending_buf.strip()
@@ -411,7 +464,10 @@ class TeamsProgressSink(ProgressSink):
         preview = _extract_args_preview(name or "tool", args, max_len=300)
         body = f"**Tool call:** {name or 'tool'}"
         if preview:
-            body += f"\n`{preview}`"
+            # Fence with a backtick run longer than any inside the preview, so a
+            # backtick in the args can't break out of the code span.
+            fence = _code_fence(preview)
+            body += f"\n{fence}\n{preview}\n{fence}"
         await self._post(body)
 
     async def on_tool_result(self, tool_use_id: str, content: str, is_error: bool) -> None:
@@ -420,7 +476,10 @@ class TeamsProgressSink(ProgressSink):
         if len(out) > self._RESULT_MAX:
             out = out[: self._RESULT_MAX] + "\n… (truncated)"
         label = "**Tool result (error):**" if is_error else "**Tool result:**"
-        await self._post(f"{label}\n```\n{out}\n```")
+        # Dynamic fence: tool output frequently contains ``` (e.g. reading a
+        # markdown file); a fixed fence would close early and break rendering.
+        fence = _code_fence(out)
+        await self._post(f"{label}\n{fence}\n{out}\n{fence}")
 
     async def on_final(self, text: str) -> None:
         if self._final_sent:
@@ -429,7 +488,7 @@ class TeamsProgressSink(ProgressSink):
         self.final_text = text or ""
         await self._flush_pending()
         if text:
-            await self._post(text)
+            self.final_delivered = await self._post(text)
 
     async def on_error(self, message: str, code=None) -> None:
         # Fire at most once, and never after a final answer already landed.
@@ -437,7 +496,7 @@ class TeamsProgressSink(ProgressSink):
             return
         self._error_sent = True
         await self._flush_pending()
-        await self._post(f"**Error:** {message}")
+        self.error_delivered = await self._post(f"**Error:** {message}")
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +532,24 @@ async def _call_completions(
 # Module-level singletons, initialised on first activity.
 _store: Optional[ConversationStore] = None
 _client: Optional[TeamsClient] = None
+# One lock per conversation so a single chat processes one turn at a time —
+# concurrent turns on the same conversation share a Claude --resume session and
+# a Redis event stream, which would collide and truncate progress.
+_conv_locks: dict[str, asyncio.Lock] = {}
+
+
+async def _typing_loop(client: "TeamsClient", ref: "ConversationRef", stop: asyncio.Event) -> None:
+    """Resend the typing indicator every few seconds until ``stop`` is set —
+    Teams' indicator fades in ~3s, so a longer turn otherwise looks hung."""
+    try:
+        while not stop.is_set():
+            await client.send_typing(ref)
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=4.0)
+            except asyncio.TimeoutError:
+                pass
+    except asyncio.CancelledError:
+        pass
 
 
 def _get_store() -> ConversationStore:
@@ -514,8 +591,16 @@ async def handle_activity(activity: dict) -> None:
     if activity.get("type") != "message":
         return  # ignore typing/conversationUpdate/etc. in v1
 
-    # v1 is 1:1 DMs only. Refuse channel/group conversations so tool/reasoning
-    # output is never disclosed to an unintended audience.
+    # v1 targets Teams 1:1 DMs. Refuse other Bot Framework channels (Direct
+    # Line / Web Chat sharing this bot registration) and any group/channel
+    # conversation, so tool/reasoning output can't leak to an unintended
+    # audience. Between them these cover the disclosure vectors: the channelId
+    # guard catches non-Teams channels (where conversationType may be absent),
+    # the conversationType guard catches Teams group/channel scopes.
+    channel_id = activity.get("channelId")
+    if channel_id and channel_id != "msteams":
+        logger.info("teams: ignoring non-msteams channel (%s)", channel_id)
+        return
     conv_type = (activity.get("conversation") or {}).get("conversationType")
     if conv_type and conv_type != "personal":
         logger.info("teams: ignoring non-personal conversation (%s) — v1 is 1:1 only", conv_type)
@@ -567,26 +652,43 @@ async def handle_activity(activity: dict) -> None:
         await client.send_message(ref, f"Visibility updated: {vis}")
         return
 
-    # Normal completion turn.
-    messages = store.append(conv_id, "user", clean_text)
-    from agenticore.capabilities import render_capabilities_prompt
+    # Serialize turns within one conversation — concurrent turns share a
+    # --resume session and Redis event stream and would collide.
+    lock = _conv_locks.setdefault(conv_id, asyncio.Lock())
+    if lock.locked():
+        await client.send_message(ref, "Still working on your previous message — I'll get to this once I reply.")
+        return
 
-    system_prompt = os.environ.get("TEAMS_SYSTEM_PROMPT", "")
-    caps = render_capabilities_prompt()
-    full_system = "\n\n".join(filter(None, [system_prompt, caps]))
-    api_messages = [{"role": "system", "content": full_system}] + messages if full_system else messages
+    async with lock:
+        # Normal completion turn.
+        messages = store.append(conv_id, "user", clean_text)
+        from agenticore.capabilities import render_capabilities_prompt
 
-    await client.send_typing(ref)
-    sink = TeamsProgressSink(client, ref)
-    try:
-        response = await _call_completions(api_messages, conv_id, sink=sink, stream_cfg=stream_cfg)
-        store.append(conv_id, "assistant", response)
-    except Exception as e:
-        logger.exception("teams completions call failed")
-        # The sink already surfaces agent-level errors via on_error; only post
-        # here for failures it never saw (so the user gets exactly one error).
-        if not (sink._error_sent or sink._final_sent):
-            try:
-                await client.send_message(ref, f"**Error:** {e}")
-            except Exception:
-                pass
+        system_prompt = os.environ.get("TEAMS_SYSTEM_PROMPT", "")
+        caps = render_capabilities_prompt()
+        full_system = "\n\n".join(filter(None, [system_prompt, caps]))
+        api_messages = [{"role": "system", "content": full_system}] + messages if full_system else messages
+
+        # Keep the typing indicator alive for the whole (possibly long) turn.
+        stop_typing = asyncio.Event()
+        typing_task = asyncio.create_task(_typing_loop(client, ref, stop_typing))
+        sink = TeamsProgressSink(client, ref)
+        try:
+            response = await _call_completions(api_messages, conv_id, sink=sink, stream_cfg=stream_cfg)
+            store.append(conv_id, "assistant", response)
+            # Guarantee the user sees a final: the sink may have produced no
+            # final (turn ended on a tool call) or its send may have failed.
+            if not sink.final_delivered:
+                await client.send_message(ref, response or "_(the agent returned no output)_")
+        except Exception as e:
+            logger.exception("teams completions call failed")
+            # Only post here if the user hasn't already received a final/error
+            # (tracked by confirmed delivery, not merely by attempt).
+            if not (sink.error_delivered or sink.final_delivered):
+                try:
+                    await client.send_message(ref, f"**Error:** {e}")
+                except Exception:
+                    logger.exception("teams error-fallback send failed")
+        finally:
+            stop_typing.set()
+            typing_task.cancel()

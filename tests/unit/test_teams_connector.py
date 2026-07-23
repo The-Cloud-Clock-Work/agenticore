@@ -7,6 +7,8 @@ network: the Bot Connector client is faked.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from agenticore.connectors import teams as tc
@@ -57,9 +59,11 @@ def sink():
 def _reset_singletons():
     tc._store = None
     tc._client = None
+    tc._conv_locks.clear()
     yield
     tc._store = None
     tc._client = None
+    tc._conv_locks.clear()
 
 
 # ----------------------------------------------------------------------
@@ -110,7 +114,7 @@ class TestSinkRendering:
         # A boundary event flushes the buffered thinking block as ONE message.
         await sink.on_tool_call("Bash", {"command": "ls /tmp"}, "t1")
         assert sink._client.sent[0] == "**Reasoning:**\nLet me check."
-        assert sink._client.sent[1] == "**Tool call:** Bash\n`ls /tmp`"
+        assert sink._client.sent[1] == "**Tool call:** Bash\n```\nls /tmp\n```"
 
     @pytest.mark.asyncio
     async def test_narration_posts_untitled(self, sink):
@@ -163,6 +167,21 @@ class TestSinkRendering:
         huge = "y" * (tc.TeamsProgressSink._RESULT_MAX + 500)
         await sink.on_tool_result("t1", huge, False)
         assert "… (truncated)" in sink._client.sent[0]
+
+    @pytest.mark.asyncio
+    async def test_tool_result_fences_backtick_content(self, sink):
+        # Content with its own ``` must not break the wrapping fence.
+        await sink.on_tool_result("t1", "```bash\necho hi\n```", False)
+        msg = sink._client.sent[0]
+        assert msg.startswith("**Tool result:**\n````\n")
+        assert msg.endswith("\n````")
+
+    @pytest.mark.asyncio
+    async def test_tool_call_fences_backtick_preview(self, sink):
+        # A ``` run in the preview forces a >=4-backtick fence, never a broken span.
+        await sink.on_tool_call("Bash", {"command": "echo ```x```"}, "t1")
+        msg = sink._client.sent[0]
+        assert "````" in msg
 
 
 # ----------------------------------------------------------------------
@@ -225,6 +244,7 @@ class TestHandleActivity:
         async def fake_call(messages, conv_id, *, sink, stream_cfg):
             captured["messages"] = messages
             captured["stream_cfg"] = stream_cfg
+            await asyncio.sleep(0)  # yield so the background typing task runs
             return "final answer"
 
         monkeypatch.setattr(tc, "_call_completions", fake_call)
@@ -234,12 +254,12 @@ class TestHandleActivity:
                 "type": "message",
                 "text": "do a thing",
                 "serviceUrl": "https://smba.trafficmanager.net/amer/",
-                "conversation": {"id": "c"},
+                "conversation": {"id": "c", "conversationType": "personal"},
                 "from": {"aadObjectId": "u"},
             }
         )
 
-        assert fake.typing == 1
+        assert fake.typing >= 1
         assert captured["stream_cfg"] == {"show_thinking": True}
         assert captured["messages"][-1] == {"role": "user", "content": "do a thing"}
 
@@ -263,6 +283,77 @@ class TestHandleActivity:
         )
         assert len(fake.sent) == 1
         assert fake.sent[0].startswith("Visibility updated:")
+
+    @pytest.mark.asyncio
+    async def test_non_msteams_channel_refused(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_OWNER_AAD_ID", raising=False)
+        fake = FakeClient()
+        monkeypatch.setattr(tc, "_get_client", lambda: fake)
+        await tc.handle_activity(
+            {
+                "type": "message",
+                "text": "hi",
+                "channelId": "webchat",
+                "serviceUrl": "https://smba.trafficmanager.net/amer/",
+                "conversation": {"id": "c"},
+                "from": {"aadObjectId": "u"},
+            }
+        )
+        assert fake.sent == []
+
+    @pytest.mark.asyncio
+    async def test_concurrent_turn_rejected(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_OWNER_AAD_ID", raising=False)
+        fake = FakeClient()
+        monkeypatch.setattr(tc, "_get_client", lambda: fake)
+        monkeypatch.setattr(
+            "agenticore.agent_mode.stream_config.get_for_request",
+            lambda a, t: (t, {}, []),
+        )
+        # Simulate an in-flight turn holding the conversation lock.
+        held = asyncio.Lock()
+        await held.acquire()
+        tc._conv_locks["c"] = held
+        try:
+            await tc.handle_activity(
+                {
+                    "type": "message",
+                    "text": "second message",
+                    "serviceUrl": "https://smba.trafficmanager.net/amer/",
+                    "conversation": {"id": "c", "conversationType": "personal"},
+                    "from": {"aadObjectId": "u"},
+                }
+            )
+            assert len(fake.sent) == 1
+            assert "Still working" in fake.sent[0]
+        finally:
+            held.release()
+
+    @pytest.mark.asyncio
+    async def test_empty_final_posts_fallback(self, monkeypatch):
+        monkeypatch.delenv("TEAMS_OWNER_AAD_ID", raising=False)
+        fake = FakeClient()
+        monkeypatch.setattr(tc, "_get_client", lambda: fake)
+        monkeypatch.setattr("agenticore.capabilities.render_capabilities_prompt", lambda: "")
+        monkeypatch.setattr(
+            "agenticore.agent_mode.stream_config.get_for_request",
+            lambda a, t: (t, {}, []),
+        )
+
+        async def fake_call(messages, conv_id, *, sink, stream_cfg):
+            return ""  # agent produced no final
+
+        monkeypatch.setattr(tc, "_call_completions", fake_call)
+        await tc.handle_activity(
+            {
+                "type": "message",
+                "text": "do a thing",
+                "serviceUrl": "https://smba.trafficmanager.net/amer/",
+                "conversation": {"id": "c", "conversationType": "personal"},
+                "from": {"aadObjectId": "u"},
+            }
+        )
+        assert any("no output" in m for m in fake.sent)
 
     @pytest.mark.asyncio
     async def test_untrusted_service_url_refused(self, monkeypatch):
@@ -334,14 +425,57 @@ class TestTrustedServiceUrl:
         assert tc._is_trusted_service_url("https://smba.trafficmanager.net/amer/") is True
         assert tc._is_trusted_service_url("https://x.botframework.com/") is True
 
+    def test_arbitrary_trafficmanager_subdomain_untrusted(self, monkeypatch):
+        # KEY: any Azure customer can register <name>.trafficmanager.net, so the
+        # whole zone must NOT be trusted — only the exact Teams service host.
+        monkeypatch.delenv("TEAMS_SKIP_JWT_VALIDATION", raising=False)
+        assert tc._is_trusted_service_url("https://attacker.trafficmanager.net/") is False
+        assert tc._is_trusted_service_url("https://evil.skype.com/") is False
+
     def test_attacker_host_untrusted(self, monkeypatch):
         monkeypatch.delenv("TEAMS_SKIP_JWT_VALIDATION", raising=False)
         assert tc._is_trusted_service_url("https://attacker.example/") is False
+        assert tc._is_trusted_service_url("https://smba.trafficmanager.net@attacker.example/") is False
         assert tc._is_trusted_service_url("") is False
         # localhost only trusted in dev (JWT validation disabled)
         assert tc._is_trusted_service_url("http://localhost:3978/") is False
         monkeypatch.setenv("TEAMS_SKIP_JWT_VALIDATION", "1")
         assert tc._is_trusted_service_url("http://localhost:3978/") is True
+
+
+class TestCodeFence:
+    def test_min_three_backticks(self):
+        assert tc._code_fence("plain text") == "```"
+
+    def test_longer_than_inner_run(self):
+        assert tc._code_fence("has ``` inside") == "````"
+        assert tc._code_fence("````") == "`````"
+
+    def test_ignores_non_consecutive(self):
+        assert tc._code_fence("`a`b`c`") == "```"
+
+
+class TestSplitForTeams:
+    def test_ascii_under_budget_single_chunk(self):
+        assert tc._split_for_teams("hello", max_bytes=100) == ["hello"]
+
+    def test_byte_budget_respected(self):
+        big = "a" * 40000
+        parts = tc._split_for_teams(big, max_bytes=18000)
+        assert all(len(p.encode("utf-8")) <= 18000 for p in parts)
+        assert "".join(parts) == big
+
+    def test_multibyte_never_exceeds_budget(self):
+        s = "😀" * 10000  # 4 bytes each in UTF-8
+        parts = tc._split_for_teams(s, max_bytes=18000)
+        assert all(len(p.encode("utf-8")) <= 18000 for p in parts)
+        assert "".join(parts) == s
+
+    def test_prefers_newline_boundary(self):
+        text = ("x" * 100 + "\n") * 200
+        parts = tc._split_for_teams(text, max_bytes=5000)
+        # every chunk but the last should end on a newline
+        assert all(p.endswith("\n") for p in parts[:-1])
 
 
 class TestAuthNeverRaises:

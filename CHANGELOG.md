@@ -28,16 +28,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   posted a durable "error" to the connector chat immediately before the retry's `on_final` landed.
   The terminal `on_error` is now withheld when `execute()` will retry the attempt
   (`_terminal_error_suppressed`), so a retried-then-successful turn shows only the answer.
+- **Teams rendering + delivery robustness.** Tool-call/tool-result messages now wrap content in a
+  dynamic backtick fence (longer than any run inside), so tool output that itself contains ```` ``` ````
+  (e.g. reading a markdown file) no longer breaks rendering. Outbound messages are chunked by UTF-8
+  byte budget on newline boundaries (not raw char index), so multibyte/long answers don't trip the
+  ~28 KB payload cap or split mid-span. The typing indicator is resent every ~4s for the duration of
+  a turn (it otherwise fades in ~3s). A turn that produces no final answer — or whose final send
+  fails — now posts a guaranteed fallback so the user is never left with silence (delivery is tracked
+  by confirmed send, not by attempt).
 
 ### Security
 
-- **Teams connector hardening.** The outbound Bot Framework bearer token is now sent only to
-  allowlisted service hosts (`*.botframework.com` / `*.trafficmanager.net` / `*.skype.com`),
-  closing a token-exfiltration/SSRF vector via a forged `serviceUrl`; `authenticate_request`
-  no longer raises on a JWKS-bootstrap failure (clean 401, not a 500 that downs the connector);
-  channel/group conversations are refused (1:1-only, so reasoning/tool output can't leak); the
-  public `/api/messages` body is bounded (256 KB) before parsing; and `<at>…</at>` mention markup
-  is stripped from inbound text.
+- **Teams connector hardening.** The outbound Bot Framework bearer token is sent only to the exact
+  Teams service host `smba.trafficmanager.net` or Microsoft-owned `*.botframework.com` — the whole
+  `*.trafficmanager.net` zone is NOT trusted (any Azure customer can register a name there), closing
+  a token-exfiltration/SSRF vector via a forged `serviceUrl`. `authenticate_request` no longer raises
+  on a JWKS-bootstrap failure (clean 401, not a 500 that downs the connector); non-`msteams` channels
+  and channel/group conversations are refused (1:1-only, so reasoning/tool output can't leak to an
+  unintended audience); turns are serialized per conversation (concurrent turns shared a `--resume`
+  session + Redis event stream and would collide); the public `/api/messages` body is bounded (256 KB)
+  and time-bounded (10 s, anti-slowloris) before parsing; and `<at>…</at>` mention markup is stripped
+  from inbound text.
 - **PyJWT bumped to `>=2.13.0`** (from `>=2.8` / pinned `2.11.0`) to fix
   [CVE-2026-48524](https://github.com/advisories/GHSA-fhv5-28vv-h8m8) — `PyJWKClient` made
   unbounded JWKS refetches on attacker-controlled unknown `kid` values, a DoS reachable on the
