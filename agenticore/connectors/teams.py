@@ -36,10 +36,11 @@ Teams token streaming (the streaminfo protocol) is a planned v2.
 import asyncio
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from agenticore.connectors.base import ProgressSink
 
@@ -53,6 +54,15 @@ _ENV_APP_CREDENTIAL = "TEAMS_APP_PASSWORD"
 _BF_TOKEN_SCOPE = "https://api.botframework.com/.default"
 _BF_ISSUER = "https://api.botframework.com"
 _BF_OPENID_METADATA = "https://login.botframework.com/v1/.well-known/openidconfiguration"
+
+# The outbound bearer token is only ever sent to these Bot Framework host
+# suffixes. A forged activity with an attacker-controlled serviceUrl therefore
+# cannot exfiltrate the bot's token to an arbitrary host (SSRF/token-theft).
+_TRUSTED_SERVICE_HOST_SUFFIXES = (".botframework.com", ".trafficmanager.net", ".skype.com")
+
+# Teams delivers @-mentions with literal <at>Bot Name</at> markup in the text;
+# strip it before the prompt reaches the model / conversation history.
+_MENTION_RE = re.compile(r"<at>.*?</at>", re.IGNORECASE | re.DOTALL)
 
 # Teams message body cap is generous (~28KB); chunk well under it.
 _MAX_TEAMS_CHARS = 15000
@@ -68,6 +78,23 @@ def is_enabled() -> bool:
 def _agent_id() -> str:
     """Teams-scoped stream_config agent id — independent of other transports."""
     return f"{os.environ.get('AGENTIHUB_AGENT', 'default')}:teams"
+
+
+def _is_trusted_service_url(url: str) -> bool:
+    """True only for known Bot Framework service hosts. Gates where the bot's
+    bearer token may be sent, so a forged serviceUrl can't exfiltrate it."""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    if any(host.endswith(suffix) for suffix in _TRUSTED_SERVICE_HOST_SUFFIXES):
+        return True
+    # The local emulator (http://localhost:PORT) is only trusted in dev, i.e.
+    # when inbound JWT validation is explicitly disabled.
+    dev = os.environ.get("TEAMS_SKIP_JWT_VALIDATION", "").lower() in ("1", "true", "yes")
+    return dev and host in ("localhost", "127.0.0.1")
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +229,16 @@ async def authenticate_request(auth_header: str, activity: dict) -> bool:
             return False
         return True
 
-    await _get_jwks_client()
-    return await asyncio.to_thread(_verify)
+    # The JWKS bootstrap can fail transiently (metadata endpoint down, DNS).
+    # Honour the "never raises" contract: any failure → unauthorized, so the
+    # caller returns a clean 401 rather than a 500, and one outage does not
+    # crash the connector for every inbound message.
+    try:
+        await _get_jwks_client()
+        return await asyncio.to_thread(_verify)
+    except Exception as e:
+        logger.warning("teams: auth check errored (treating as unauthorized): %s", e)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +363,7 @@ class TeamsProgressSink(ProgressSink):
         self._pending_kind: Optional[str] = None  # "narration" | "thinking"
         self._pending_buf: str = ""
         self._final_sent = False
+        self._error_sent = False
         self.final_text: str = ""
 
     # -- internal ------------------------------------------------------------
@@ -396,6 +432,10 @@ class TeamsProgressSink(ProgressSink):
             await self._post(text)
 
     async def on_error(self, message: str, code=None) -> None:
+        # Fire at most once, and never after a final answer already landed.
+        if self._error_sent or self._final_sent:
+            return
+        self._error_sent = True
         await self._flush_pending()
         await self._post(f"**Error:** {message}")
 
@@ -473,6 +513,14 @@ async def handle_activity(activity: dict) -> None:
     """Process one inbound Teams activity. Owner-filtered, 1:1 message turns."""
     if activity.get("type") != "message":
         return  # ignore typing/conversationUpdate/etc. in v1
+
+    # v1 is 1:1 DMs only. Refuse channel/group conversations so tool/reasoning
+    # output is never disclosed to an unintended audience.
+    conv_type = (activity.get("conversation") or {}).get("conversationType")
+    if conv_type and conv_type != "personal":
+        logger.info("teams: ignoring non-personal conversation (%s) — v1 is 1:1 only", conv_type)
+        return
+
     if not _is_owner(activity):
         logger.info("teams: ignoring message from non-owner")
         return
@@ -482,7 +530,12 @@ async def handle_activity(activity: dict) -> None:
         logger.warning("teams: activity missing serviceUrl/conversation id")
         return
 
-    text = (activity.get("text") or "").strip()
+    # Only ever send the bot's bearer token to a trusted Bot Framework host.
+    if not _is_trusted_service_url(ref.service_url):
+        logger.warning("teams: refusing untrusted serviceUrl: %s", ref.service_url)
+        return
+
+    text = _MENTION_RE.sub("", activity.get("text") or "").strip()
     if not text:
         return
 
@@ -530,7 +583,10 @@ async def handle_activity(activity: dict) -> None:
         store.append(conv_id, "assistant", response)
     except Exception as e:
         logger.exception("teams completions call failed")
-        try:
-            await client.send_message(ref, f"**Error:** {e}")
-        except Exception:
-            pass
+        # The sink already surfaces agent-level errors via on_error; only post
+        # here for failures it never saw (so the user gets exactly one error).
+        if not (sink._error_sent or sink._final_sent):
+            try:
+                await client.send_message(ref, f"**Error:** {e}")
+            except Exception:
+                pass

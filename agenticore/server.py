@@ -1106,8 +1106,20 @@ def _build_rest_app():
 
         async def post_teams_messages(request: Request):
             auth_header = request.headers.get("authorization", "")
+            # Bound the body BEFORE parsing — this endpoint is public and
+            # unauthenticated until the JWT check below, so cap memory first.
+            _TEAMS_MAX_BODY = 262144  # 256 KB — Teams activities are small
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in request.stream():
+                total += len(chunk)
+                if total > _TEAMS_MAX_BODY:
+                    return JSONResponse({"error": "payload too large"}, status_code=413)
+                chunks.append(chunk)
+            import json as _json
+
             try:
-                activity = await request.json()
+                activity = _json.loads(b"".join(chunks) or b"{}")
             except Exception:
                 return JSONResponse({"error": "invalid json"}, status_code=400)
             ok = await teams_connector.authenticate_request(auth_header, activity)
