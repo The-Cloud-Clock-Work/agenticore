@@ -1098,6 +1098,31 @@ def _build_rest_app():
             ]
         )
 
+    # Teams connector — inbound Bot Framework webhook. Teams is push-based, so
+    # (unlike Telegram's polling) it needs a route on the existing ASGI app.
+    from agenticore.connectors import teams as teams_connector
+
+    if teams_connector.is_enabled():
+
+        async def post_teams_messages(request: Request):
+            auth_header = request.headers.get("authorization", "")
+            try:
+                activity = await request.json()
+            except Exception:
+                return JSONResponse({"error": "invalid json"}, status_code=400)
+            ok = await teams_connector.authenticate_request(auth_header, activity)
+            if not ok:
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+            try:
+                await teams_connector.handle_activity(activity)
+            except Exception:
+                logger.exception("teams activity handling failed")
+            # Always 200 to the Connector service — errors are surfaced in-chat.
+            return JSONResponse({}, status_code=200)
+
+        routes.append(Route("/api/messages", post_teams_messages, methods=["POST"]))
+        logger.info("Teams connector route registered at /api/messages")
+
     return Starlette(routes=routes)
 
 
