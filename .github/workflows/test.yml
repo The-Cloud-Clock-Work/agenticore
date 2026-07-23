@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   lint:
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'anton' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -19,10 +19,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      # `python -m` throughout: on the self-hosted runner, pip's console scripts
-      # land outside PATH, so bare `ruff`/`pytest` exit 127 even though the
-      # install step succeeded. Going through the interpreter setup-python chose
-      # is runner-agnostic.
+      # `python -m` throughout so console-script PATH quirks never matter —
+      # runner-agnostic (kept from the self-hosted era; harmless on ubuntu).
       - name: Install ruff
         run: python -m pip install ruff
 
@@ -33,7 +31,7 @@ jobs:
         run: python -m ruff format --check agenticore/ tests/
 
   unit:
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'anton' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       matrix:
@@ -54,7 +52,7 @@ jobs:
   integration:
     needs: [unit, lint]
     if: github.ref == 'refs/heads/main'
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'anton' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
