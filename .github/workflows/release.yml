@@ -11,19 +11,60 @@ on:
 
 permissions:
   contents: write
-  actions: write
 
+# Inlined on ubuntu-latest (previously delegated to an org reusable workflow
+# that ran on the self-hosted `anton` runner). Bumps pyproject.toml, commits and
+# tags on main; the `v*` tag push then fans out to the publishers
+# (publish-pypi.yml, docker-publish.yml, helm-publish.yml, build.yml).
 jobs:
   release:
-    uses: The-Cloud-Clockwork/.github/.github/workflows/release-reusable.yml@main
-    with:
-      bump: ${{ inputs.bump }}
-      # Publishers fan out from the tag push — build.yml, docker-publish.yml,
-      # publish-pypi.yml, helm-publish.yml all listen on `tags: ["v*"]`. Empty
-      # downstream_workflows prevents the double-fire that previously triggered
-      # each publisher twice (once via tag push, once via dispatch).
-      # workflow_dispatch on each publisher is retained for manual reruns of a
-      # single failed publish, gated by the `release` environment.
-      downstream_workflows: ""
-    secrets:
-      RELEASE_TOKEN: ${{ secrets.ORG_GITHUB_TOKEN }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # Org token whose bypass allows the ruleset-protected push to main.
+          token: ${{ secrets.ORG_GITHUB_TOKEN }}
+
+      - name: Compute next version
+        id: ver
+        run: |
+          set -euo pipefail
+          cur="$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')"
+          IFS=. read -r major minor patch <<< "$cur"
+          case "${{ inputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          next="${major}.${minor}.${patch}"
+          echo "current=$cur" >> "$GITHUB_OUTPUT"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+          echo "Releasing $cur -> $next"
+
+      - name: Guard against existing tag
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/v${{ steps.ver.outputs.next }}" >/dev/null 2>&1; then
+            echo "::error::Tag v${{ steps.ver.outputs.next }} already exists"
+            exit 1
+          fi
+
+      - name: Bump pyproject version
+        run: |
+          set -euo pipefail
+          sed -i -E 's/^version = "[0-9]+\.[0-9]+\.[0-9]+"/version = "${{ steps.ver.outputs.next }}"/' pyproject.toml
+          grep -E '^version = ' pyproject.toml
+
+      - name: Commit, tag, push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          git commit -m "chore: release v${{ steps.ver.outputs.next }}"
+          git tag "v${{ steps.ver.outputs.next }}"
+          git push origin main
+          git push origin "refs/tags/v${{ steps.ver.outputs.next }}"
