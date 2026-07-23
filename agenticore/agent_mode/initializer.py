@@ -189,6 +189,17 @@ def _log_telegram_status() -> None:
         _log.info("Telegram: not configured (no TELEGRAM_BOT_TOKEN)")
 
 
+def _log_teams_status() -> None:
+    """Log Teams connector status. The inbound /api/messages route is registered
+    by the ASGI app when TEAMS_APP_ID + TEAMS_APP_PASSWORD are set."""
+    from agenticore.connectors.teams import is_enabled
+
+    if is_enabled():
+        _log.info("Teams connector: configured (route at /api/messages)")
+    else:
+        _log.info("Teams: not configured (no TEAMS_APP_ID/TEAMS_APP_PASSWORD)")
+
+
 def _bg_run_startup_scripts(package_dir: str) -> None:
     """Wrapper for background thread — catches all exceptions."""
     try:
@@ -449,6 +460,7 @@ def initialize_agent_mode() -> list[threading.Thread]:
 
     # Step 6: Telegram channel (already Popen/detached)
     _log_telegram_status()
+    _log_teams_status()
 
     _log.info("=== Agent Mode Ready (%.2fs) ===", time.monotonic() - t0)
     _log.info("  Package dir: %s", am.package_dir)

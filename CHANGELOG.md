@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Microsoft Teams connector** (`agenticore/connectors/teams.py`) — a third transport on the
+  shared `ProgressSink` pipeline, alongside Telegram and the SSE `/v1/chat/completions` path.
+  Teams is push-based, so `server.py` registers an inbound `POST /api/messages` route on the
+  existing ASGI app (no second listener) when `TEAMS_APP_ID` + `TEAMS_APP_PASSWORD` are set.
+  Teams has no native reasoning panel, so — gated by the per-agent `stream_config` under a
+  Teams-scoped agent id (`{AGENTIHUB_AGENT}:teams`) — thinking and tool activity render as
+  ordinary titled chat messages (`**Reasoning:**`, `**Tool call:**`, `**Tool result:**`).
+  Inbound Bot Framework JWT validation uses `PyJWT` + JWKS and the outbound token uses `httpx`
+  OAuth2 client-credentials, both already core deps — so the connector needs no optional extra
+  and no `botbuilder` SDK. v1 is 1:1 DMs, owner-filtered on `from.aadObjectId`; native token
+  streaming (the `streaminfo` protocol) is planned v2. See `docs/reference/teams-connector.md`.
+
 ## [1.8.0] - 2026-07-14
 
 ### Changed
